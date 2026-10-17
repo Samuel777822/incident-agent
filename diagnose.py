@@ -51,11 +51,11 @@ def call_model(client, prompt):
         model=MODEL,
         messages=[{"role": "user", "content": prompt}],
         temperature=0.2,
-        max_tokens=2000,
+        max_tokens=2500,
     )
     try:
         return client.chat.completions.create(
-            **kwargs, extra_body={"reasoning_effort": "high"}
+            **kwargs, extra_body={"reasoning_effort": "low"}
         )
     except Exception as err:
         err_msg = str(err).lower()
