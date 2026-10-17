@@ -76,7 +76,15 @@ def open_and_maybe_merge_pr(
     try:
         run_git(["push", "-u", auth_push_url, branch_name, "--force"], repo_folder)
     except Exception as exc:
-        return None, False
+        print(f"[PR Push Notice] Remote push to GitHub failed: {exc}. Falling back to local merge.")
+        if auto_merge:
+            try:
+                run_git(["checkout", base_branch], repo_folder)
+                run_git(["merge", "--no-ff", branch_name, "-m", f"Auto-merge fix for incident #{incident_id}"], repo_folder)
+                return f"local://merged/{branch_name}", True
+            except Exception as err:
+                return f"local://branch/{branch_name} (merge failed: {err})", False
+        return f"local://branch/{branch_name}", False
 
     # Create Pull Request via GitHub API
     pr_title = title or f"fix: auto-remediation for incident #{incident_id}"

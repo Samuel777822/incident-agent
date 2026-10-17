@@ -49,9 +49,30 @@ def ingest_logs_task(ctx: TaskContext, service: str = "shop-api", *args, **kwarg
     return {"service": service, "pending_incidents": pending}
 
 
+def _normalize_incident_id(val):
+    if isinstance(val, dict):
+        val = val.get("incident_id") or val.get("id")
+    if val is not None:
+        try:
+            return int(val)
+        except (ValueError, TypeError):
+            pass
+    conn = get_connection()
+    try:
+        row = conn.execute(
+            "SELECT id FROM incidents WHERE resolved_at IS NULL ORDER BY id DESC LIMIT 1"
+        ).fetchone()
+        if not row:
+            row = conn.execute("SELECT id FROM incidents ORDER BY id DESC LIMIT 1").fetchone()
+        return row[0] if row else 1
+    finally:
+        conn.close()
+
+
 @app.task(name="diagnose-incident")
-def diagnose_incident_task(ctx: TaskContext, incident_id: int) -> dict:
+def diagnose_incident_task(ctx: TaskContext, incident_id: int = None, *args, **kwargs) -> dict:
     """Task 2: Performs AI root-cause analysis, token-safe evidence gathering, and writes the 6-section report."""
+    incident_id = _normalize_incident_id(incident_id)
     print(f"[Render Workflow] Running diagnose_incident_task for incident #{incident_id}...")
     inc = get_incident(incident_id)
     if not inc:
@@ -83,8 +104,9 @@ def diagnose_incident_task(ctx: TaskContext, incident_id: int) -> dict:
 
 
 @app.task(name="remediate-incident")
-def remediate_incident_task(ctx: TaskContext, incident_id: int) -> dict:
+def remediate_incident_task(ctx: TaskContext, incident_id: int = None, *args, **kwargs) -> dict:
     """Task 3: Executes the test gate, targeted find-and-replace patching, branch creation, and PR/auto-merge."""
+    incident_id = _normalize_incident_id(incident_id)
     print(f"[Render Workflow] Running remediate_incident_task for incident #{incident_id}...")
     inc = get_incident(incident_id)
     if not inc:
