@@ -130,21 +130,28 @@ def full_pipeline_workflow(ctx: TaskContext, service: str = "shop-api", *args, *
     ingest_res = ingest_logs_task.func(ctx, service=service)
     pending = ingest_res.get("pending_incidents", [])
     
-    pipeline_results = []
-    for item in pending:
-        inc_id = item["id"]
-        diag_res = diagnose_incident_task.func(ctx, incident_id=inc_id)
-        repo_cfg = get_repo_config(service)
-        fix_res = None
-        if repo_cfg.get("mode") in ("pr", "auto"):
-            fix_res = remediate_incident_task.func(ctx, incident_id=inc_id)
-        pipeline_results.append({
-            "incident_id": inc_id,
-            "diagnosis": diag_res,
-            "remediation": fix_res
-        })
+    if not pending:
+        print(f"[Render Workflow] All quiet! No pending incidents waiting for diagnosis.")
+        return {"service": service, "processed": 0, "status": "all_quiet"}
+
+    # Process the first pending incident (1 incident per run to safely respect Groq 8k TPM limits)
+    target = pending[0]
+    inc_id = target["id"]
+    print(f"[Render Workflow] Processing pending Incident #{inc_id}...")
+    
+    diag_res = diagnose_incident_task.func(ctx, incident_id=inc_id)
+    repo_cfg = get_repo_config(service)
+    fix_res = None
+    if repo_cfg.get("mode") in ("pr", "auto"):
+        fix_res = remediate_incident_task.func(ctx, incident_id=inc_id)
         
-    return {"service": service, "processed": len(pipeline_results), "results": pipeline_results}
+    return {
+        "service": service,
+        "processed": 1,
+        "incident_id": inc_id,
+        "diagnosis": diag_res,
+        "remediation": fix_res,
+    }
 
 
 if __name__ == "__main__":

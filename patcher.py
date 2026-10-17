@@ -1,4 +1,4 @@
-﻿import json
+import json
 import os
 import re
 from pathlib import Path
@@ -49,16 +49,10 @@ def call_patch_model(client, prompt):
         model=MODEL,
         messages=[{"role": "user", "content": prompt}],
         temperature=0.1,
-        max_tokens=2000,
+        max_tokens=4000,
+        response_format={"type": "json_object"},
     )
-    try:
-        return client.chat.completions.create(
-            **kwargs, extra_body={"reasoning_effort": "high"}
-        )
-    except Exception as err:
-        if "reasoning" in str(err).lower():
-            return client.chat.completions.create(**kwargs)
-        raise
+    return client.chat.completions.create(**kwargs)
 
 
 def parse_patch_json(text):
