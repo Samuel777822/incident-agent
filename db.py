@@ -1,3 +1,4 @@
+import json
 import sqlite3
 import pathlib
 
@@ -30,7 +31,78 @@ def save_event(ts, level, service, message, traceback=None, signature=None):
     conn.close()
     return new_id
 
+def record_incident(signature, ts):
+    conn = get_connection()
+    row = conn.execute(
+        "SELECT id FROM incidents WHERE signature = ? AND resolved_at IS NULL",
+        (signature,),
+    ).fetchone()
+    if row:
+        conn.execute(
+            "UPDATE incidents SET occurrences = occurrences + 1, last_seen = ? WHERE id = ?",
+            (ts, row["id"]),
+        )
+        incident_id, is_new = row["id"], False
+    else:
+        cur = conn.execute(
+            "INSERT INTO incidents (signature, first_seen, last_seen) VALUES (?, ?, ?)",
+            (signature, ts, ts),
+        )
+        incident_id, is_new = cur.lastrowid, True
+    conn.commit()
+    conn.close()
+    return incident_id, is_new
 
+def get_incident(incident_id=None):
+    conn = get_connection()
+    try:
+        if incident_id is None:
+            row = conn.execute(
+                "SELECT * FROM incidents "
+                "WHERE resolved_at IS NULL AND status = 'diagnosing' "
+                "ORDER BY id LIMIT 1"
+            ).fetchone()
+        else:
+            row = conn.execute(
+                "SELECT * FROM incidents WHERE id = ?", (incident_id,)
+            ).fetchone()
+        return dict(row) if row else None
+    finally:
+        conn.close()
+
+
+def get_incident_events(incident_id, limit=20):
+    conn = get_connection()
+    try:
+        rows = conn.execute(
+            "SELECT id, ts, level, service, message, traceback, signature "
+            "FROM log_events WHERE incident_id = ? ORDER BY id LIMIT ?",
+            (incident_id, limit),
+        ).fetchall()
+        return [dict(r) for r in rows]
+    finally:
+        conn.close()
+
+def save_diagnosis(incident_id, d):
+    details = {
+        "evidence": d["evidence"],
+        "recommended_fix": d["recommended_fix"],
+        "still_present_in_current_code": d["still_present_in_current_code"],
+        "safe_to_auto_fix": d["safe_to_auto_fix"],
+    }
+    conn = get_connection()
+    try:
+        conn.execute(
+            "UPDATE incidents SET category = ?, confidence = ?, root_cause = ?, "
+            "explanation = ?, report = ?, status = 'diagnosed' WHERE id = ?",
+            (
+                d["category"], d["confidence"], d["root_cause"],
+                json.dumps(details, indent=2), d["report"], incident_id,
+            ),
+        )
+        conn.commit()
+    finally:
+        conn.close()
 if __name__ == "__main__":
     init_db()
     print("tables created")

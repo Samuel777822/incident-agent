@@ -1,0 +1,7 @@
+{
+  "shop-api": {
+    "url": "https://github.com/pranavvrao1-ai/shop-api",
+    "branch": "main",
+    "test_command": "pytest"
+  }
+}

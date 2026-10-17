@@ -222,3 +222,6 @@ __marimo__/
 incidents.db
 .idea/
 !fake.log
+.env
+.env.*
+!.env.example

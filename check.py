@@ -1,4 +1,10 @@
 from db import get_connection
 
-for r in get_connection().execute("SELECT id, level, signature FROM log_events"):
+conn = get_connection()
+
+for r in conn.execute(
+    "SELECT id, level, signature, incident_id FROM log_events"
+):
     print(dict(r))
+
+conn.close()
