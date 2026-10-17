@@ -225,3 +225,5 @@ incidents.db
 .env
 .env.*
 !.env.example
+workspaces/
+.env

@@ -33,7 +33,7 @@ Return ONLY one JSON object, with no text before or after it, using exactly thes
   "evidence": ["short quoted proof", "..."],
   "recommended_fix": "the smallest change, or 'no code change needed'",
   "safe_to_auto_fix": true | false,
-  "report": "plain-language report for a founder: what happened, where, why, what was checked, what to do next"
+  "report": "A 2-minute read structured in exactly these six sections, separated by blank lines:\n\n1. SUMMARY: One sentence — what broke, since when, and how many times.\n\n2. WHAT HAPPENED: Two or three plain sentences with no jargon. Explain it as you would to a non-technical founder.\n\n3. LIKELY CAUSE: State your confidence level, name the exact file and line number, and quote the commit if one is responsible.\n\n4. WHAT THE AGENT DID: State what action was taken (or why no action was taken).\n\n5. WHAT YOU NEED TO DO: Numbered steps in order. Each step must be a single, concrete, actionable instruction.\n\n6. WHAT I COULD NOT CHECK: List any blind spots — database state, third-party APIs, environment variables, deployment health."
 }"""
 
 

@@ -1,6 +1,7 @@
 import json
 import sqlite3
 import pathlib
+from datetime import datetime
 
 DB_PATH = "incidents.db"
 SCHEMA_PATH = pathlib.Path(__file__).parent / "schema.sql"
@@ -103,6 +104,65 @@ def save_diagnosis(incident_id, d):
         conn.commit()
     finally:
         conn.close()
+
+def save_fix(incident_id, branch, file_path, fixed_file, tests_passed):
+    conn = get_connection()
+    try:
+        cur = conn.execute(
+            "INSERT INTO fixes (incident_id, branch, file_path, fixed_file, tests_passed) "
+            "VALUES (?, ?, ?, ?, ?)",
+            (incident_id, branch, file_path, fixed_file, 1 if tests_passed else 0),
+        )
+        conn.commit()
+        return cur.lastrowid
+    finally:
+        conn.close()
+
+
+def get_fix_count(incident_id):
+    conn = get_connection()
+    try:
+        row = conn.execute(
+            "SELECT COUNT(*) FROM fixes WHERE incident_id = ?", (incident_id,)
+        ).fetchone()
+        return row[0] if row else 0
+    finally:
+        conn.close()
+
+
+def update_incident_status(incident_id, status, pr_url=None):
+    conn = get_connection()
+    try:
+        if status == "resolved":
+            now = datetime.now().isoformat(timespec="seconds")
+            conn.execute(
+                "UPDATE incidents SET status = ?, pr_url = COALESCE(?, pr_url), resolved_at = ? WHERE id = ?",
+                (status, pr_url, now, incident_id),
+            )
+        else:
+            conn.execute(
+                "UPDATE incidents SET status = ?, pr_url = COALESCE(?, pr_url) WHERE id = ?",
+                (status, pr_url, incident_id),
+            )
+        conn.commit()
+    finally:
+        conn.close()
+
+
+def resolve_incident(incident_id):
+    now = datetime.now().isoformat(timespec="seconds")
+    conn = get_connection()
+    try:
+        cur = conn.execute(
+            "UPDATE incidents SET status = 'resolved', resolved_at = ? "
+            "WHERE id = ? AND resolved_at IS NULL",
+            (now, incident_id),
+        )
+        conn.commit()
+        return cur.rowcount == 1
+    finally:
+        conn.close()
+
 if __name__ == "__main__":
     init_db()
     print("tables created")

@@ -11,4 +11,7 @@ def get_repo_config(service):
         raise ValueError(
             f"No repository configured for service '{service}'. Run add_repo.py first."
         )
+    cfg.setdefault("mode", "report")
+    cfg.setdefault("branch", "main")
+    cfg.setdefault("test_command", "pytest")
     return cfg
