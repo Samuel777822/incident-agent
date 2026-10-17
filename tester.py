@@ -1,4 +1,4 @@
-﻿import os
+import os
 import shutil
 import subprocess
 import sys
@@ -44,6 +44,8 @@ def run_tests(repo_folder, test_command="pytest", timeout=60):
             shell=True,
             capture_output=True,
             text=True,
+            encoding="utf-8",
+            errors="replace",
             timeout=timeout,
             env=env,
         )

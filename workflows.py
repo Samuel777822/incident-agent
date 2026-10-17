@@ -11,7 +11,7 @@ from typing import Any
 from render import TaskContext, Workflows
 
 from config import get_repo_config
-from db import get_connection, get_incident, get_incident_events, save_diagnosis
+from db import get_connection, get_incident, get_incident_events, save_diagnosis, resolve_incident
 from evidence import collect_repository
 from git_evidence import get_git_evidence
 from diagnose import diagnose_incident
@@ -71,15 +71,15 @@ def ingest_logs_task(ctx: TaskContext, service: str = "shop-api") -> dict:
     conn = get_connection()
     try:
         rows = conn.execute(
-            "SELECT id, signature, status, occurrences FROM incidents WHERE status = 'diagnosing' ORDER BY id ASC"
+            "SELECT id, signature, status, occurrences FROM incidents WHERE resolved_at IS NULL ORDER BY id ASC"
         ).fetchall()
         pending = [dict(r) for r in rows]
     finally:
         conn.close()
         
-    print(f"[Render Workflow] Ingestion complete. Found {len(pending)} pending incident(s).")
+    print(f"[Render Workflow] Ingestion complete. Found {len(pending)} unresolved incident(s).")
     for inc in pending:
-        print(f"  - Incident #{inc['id']}: {inc['signature']} (Occurrences: {inc['occurrences']})")
+        print(f"  - Incident #{inc['id']}: {inc['signature']} (Status: {inc['status']}, Occurrences: {inc['occurrences']})")
     print("=" * 70)
     
     return {
@@ -266,16 +266,33 @@ def full_pipeline_workflow(ctx: TaskContext, service: str = "shop-api") -> dict:
     print("=" * 70)
     
     ingest_res = ingest_logs_task.func(ctx, service=service)
-    pending = ingest_res.get("pending_incidents", [])
+    all_unresolved = ingest_res.get("pending_incidents", [])
     
-    if not pending:
-        msg = f"All quiet! No pending incidents found for service '{service}'."
+    # Only freshly-diagnosing incidents need to be processed end-to-end
+    pending = [i for i in all_unresolved if i["status"] == "diagnosing"]
+    
+    if not all_unresolved:
+        msg = f"All quiet! No unresolved incidents found for service '{service}'."
         print(f"[Render Workflow] {msg}")
         print("=" * 70)
         return {
             "status": "all_quiet",
             "service": service,
             "processed": 0,
+            "message": msg,
+        }
+
+    if not pending:
+        already = all_unresolved
+        summary = ", ".join(f"#{i['id']}({i['status']})" for i in already)
+        msg = f"No new incidents to process. {len(already)} existing unresolved: {summary}"
+        print(f"[Render Workflow] {msg}")
+        print("=" * 70)
+        return {
+            "status": "no_new_incidents",
+            "service": service,
+            "processed": 0,
+            "unresolved_count": len(already),
             "message": msg,
         }
 
@@ -312,8 +329,30 @@ def full_pipeline_workflow(ctx: TaskContext, service: str = "shop-api") -> dict:
     }
 
 
+@app.task(name="resolve-incident")
+def resolve_incident_task(ctx: TaskContext, incident_id: int = 0) -> dict:
+    """Task 4: Resolve a pending incident (such as one needing human urgency)."""
+    resolved_id = _normalize_incident_id(incident_id)
+    print("=" * 70)
+    print(f" [Render Workflow] RUNNING TASK: resolve-incident (incident_id: {resolved_id})")
+    print("=" * 70)
+    if resolved_id == 0:
+        msg = "No unresolved incident found in database."
+        print(f"[Render Workflow] {msg}")
+        return {"status": "error", "message": msg}
+    ok = resolve_incident(resolved_id)
+    msg = f"Incident #{resolved_id} marked as resolved." if ok else f"Incident #{resolved_id} not found or already resolved."
+    print(f"[Render Workflow] {msg}")
+    print("=" * 70)
+    return {"status": "success" if ok else "already_resolved", "incident_id": resolved_id, "message": msg}
+
+
 if __name__ == "__main__":
-    if "--run" in sys.argv:
+    import os
+    if os.environ.get("RENDER_SDK_MODE"):
+        print("[Render Workflows] Starting task worker server...")
+        app.start()
+    elif "--run" in sys.argv:
         svc = sys.argv[sys.argv.index("--run") + 1] if len(sys.argv) > sys.argv.index("--run") + 1 else "shop-api"
         full_pipeline_workflow.func(None, service=svc)
     elif "--task" in sys.argv:
@@ -324,8 +363,46 @@ if __name__ == "__main__":
             diagnose_incident_task.func(None, incident_id=0)
         elif t_name == "remediate-incident":
             remediate_incident_task.func(None, incident_id=0)
+        elif t_name == "resolve-incident":
+            resolve_incident_task.func(None, incident_id=0)
         elif t_name == "full-pipeline":
             full_pipeline_workflow.func(None, service="shop-api")
     else:
-        print("[Render Workflows] Starting task worker server...")
-        app.start()
+        # Local Interactive Run Menu
+        print("\n" + "=" * 65)
+        print("          AI On-Call Engineer - Workflows Run Menu          ")
+        print("=" * 65)
+        print("  1) Full Pipeline      (Ingest -> Diagnose -> Remediate)")
+        print("  2) Ingest Logs        (Pull latest logs from service)")
+        print("  3) Diagnose Incident  (Run Groq root-cause analysis)")
+        print("  4) Remediate Incident (Run tests, generate patch, auto-merge)")
+        print("  5) Resolve Incident   (Resolve pending human urgency incident)")
+        print("  0) Exit")
+        print("=" * 65)
+        try:
+            choice = input("Enter choice [1-5, 0]: ").strip()
+        except (EOFError, KeyboardInterrupt):
+            choice = "1"
+            print("Auto-selecting 1 (Full Pipeline)")
+
+        if choice == "1":
+            full_pipeline_workflow.func(None, service="shop-api")
+        elif choice == "2":
+            ingest_logs_task.func(None, service="shop-api")
+        elif choice == "3":
+            diagnose_incident_task.func(None, incident_id=0)
+        elif choice == "4":
+            remediate_incident_task.func(None, incident_id=0)
+        elif choice == "5":
+            try:
+                raw_id = input("Enter incident ID to resolve (default: latest unresolved): ").strip()
+                inc_id = int(raw_id) if raw_id.isdigit() else 0
+            except (EOFError, KeyboardInterrupt):
+                inc_id = 0
+            resolve_incident_task.func(None, incident_id=inc_id)
+        elif choice == "0":
+            print("Exiting.")
+        else:
+            print(f"Unknown choice '{choice}'. Running Full Pipeline...")
+            full_pipeline_workflow.func(None, service="shop-api")
+

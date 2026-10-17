@@ -3,7 +3,7 @@ import sqlite3
 import pathlib
 from datetime import datetime
 
-DB_PATH = "incidents.db"
+DB_PATH = pathlib.Path(__file__).parent / "incidents.db"
 SCHEMA_PATH = pathlib.Path(__file__).parent / "schema.sql"
 
 
@@ -94,10 +94,10 @@ def get_incident_events(incident_id, limit=20):
 
 def save_diagnosis(incident_id, d):
     details = {
-        "evidence": d["evidence"],
-        "recommended_fix": d["recommended_fix"],
-        "still_present_in_current_code": d["still_present_in_current_code"],
-        "safe_to_auto_fix": d["safe_to_auto_fix"],
+        "evidence": d.get("evidence", []),
+        "recommended_fix": d.get("recommended_fix", ""),
+        "still_present_in_current_code": d.get("still_present_in_current_code", "unknown"),
+        "safe_to_auto_fix": d.get("safe_to_auto_fix", False),
     }
     conn = get_connection()
     try:

@@ -4,7 +4,7 @@ services:
     runtime: python
     region: oregon
     buildCommand: pip install -r requirements.txt
-    startCommand: python workflows.py
+    startCommand: render-workflows workflows:app
     envVars:
       - key: GROQ_API_KEY
         sync: false

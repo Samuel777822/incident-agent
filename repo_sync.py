@@ -8,7 +8,7 @@ WORKSPACES = Path(__file__).parent / "workspaces"
 
 def run_git(args, cwd=None):
     result = subprocess.run(
-        ["git", *args], cwd=cwd, capture_output=True, text=True, timeout=120
+        ["git", *args], cwd=cwd, capture_output=True, text=True, encoding="utf-8", errors="replace", timeout=120
     )
     if result.returncode != 0:
         raise RuntimeError(f"git {args[0]} failed: {result.stderr.strip()}")

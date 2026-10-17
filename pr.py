@@ -19,7 +19,7 @@ def parse_github_owner_repo(repo_url):
 
 def run_git(args, cwd):
     proc = subprocess.run(
-        ["git", *args], cwd=str(cwd), capture_output=True, text=True
+        ["git", *args], cwd=str(cwd), capture_output=True, text=True, encoding="utf-8", errors="replace"
     )
     if proc.returncode != 0:
         raise RuntimeError(f"git {' '.join(args)} failed: {proc.stderr.strip()}")
