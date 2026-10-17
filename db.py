@@ -10,6 +10,14 @@ SCHEMA_PATH = pathlib.Path(__file__).parent / "schema.sql"
 def get_connection():
     conn = sqlite3.connect(DB_PATH)
     conn.row_factory = sqlite3.Row
+    try:
+        cur = conn.cursor()
+        cur.execute("SELECT name FROM sqlite_master WHERE type='table' AND name='incidents'")
+        if not cur.fetchone() and SCHEMA_PATH.exists():
+            cur.executescript(SCHEMA_PATH.read_text())
+            conn.commit()
+    except Exception:
+        pass
     return conn
 
 

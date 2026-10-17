@@ -19,8 +19,11 @@ def get_local_repo(service):
     cfg = get_repo_config(service)
     folder = WORKSPACES / service
     if (folder / ".git").is_dir():
-        run_git(["fetch", "origin", cfg["branch"]], cwd=folder)
-        run_git(["reset", "--hard", f"origin/{cfg['branch']}"], cwd=folder)
+        try:
+            run_git(["fetch", "origin", cfg["branch"]], cwd=folder)
+            run_git(["reset", "--hard", f"origin/{cfg['branch']}"], cwd=folder)
+        except Exception as e:
+            print(f"[RepoSync Warning] Remote fetch failed ({e}), using existing local repository.")
     else:
         WORKSPACES.mkdir(exist_ok=True)
         run_git(["clone", "--branch", cfg["branch"], cfg["url"], str(folder)])

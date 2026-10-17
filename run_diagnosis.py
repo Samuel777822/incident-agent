@@ -8,7 +8,7 @@ from diagnose import diagnose_incident
 from config import get_repo_config
 from autofix import attempt_autofix
 
-MAX_FILE_CHARS = 10_000   # ~2,500 tokens; keeps total prompt under Groq free-tier 8k TPM limit
+MAX_FILE_CHARS = 5_000   # ~1,250 tokens; strictly preserves headroom for Groq 8k TPM limit
 
 
 def _priority(path, traceback_files):

@@ -49,10 +49,18 @@ def call_patch_model(client, prompt):
         model=MODEL,
         messages=[{"role": "user", "content": prompt}],
         temperature=0.1,
-        max_tokens=4000,
+        max_tokens=1500,
         response_format={"type": "json_object"},
     )
-    return client.chat.completions.create(**kwargs)
+    try:
+        return client.chat.completions.create(**kwargs)
+    except Exception as err:
+        err_msg = str(err).lower()
+        if "413" in str(err) or "rate_limit" in err_msg or "tokens" in err_msg:
+            print("[Groq Notice] Rate limit/size threshold reached. Retrying patch with openai/gpt-oss-20b...")
+            kwargs["model"] = "openai/gpt-oss-20b"
+            return client.chat.completions.create(**kwargs)
+        raise
 
 
 def parse_patch_json(text):

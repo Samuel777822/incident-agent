@@ -51,14 +51,19 @@ def call_model(client, prompt):
         model=MODEL,
         messages=[{"role": "user", "content": prompt}],
         temperature=0.2,
-        max_tokens=4000,
+        max_tokens=2000,
     )
     try:
         return client.chat.completions.create(
             **kwargs, extra_body={"reasoning_effort": "high"}
         )
     except Exception as err:
-        if "reasoning" in str(err).lower():
+        err_msg = str(err).lower()
+        if "reasoning" in err_msg:
+            return client.chat.completions.create(**kwargs)
+        if "413" in str(err) or "rate_limit" in err_msg or "tokens" in err_msg:
+            print("[Groq Notice] Rate limit/size threshold reached. Retrying with openai/gpt-oss-20b...")
+            kwargs["model"] = "openai/gpt-oss-20b"
             return client.chat.completions.create(**kwargs)
         raise
 
