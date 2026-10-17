@@ -1,9 +1,8 @@
-﻿services:
+services:
   - type: workflow
     name: ai-oncall-engineer-workflow
     runtime: python
     region: oregon
-    plan: starter
     buildCommand: pip install -r requirements.txt
     startCommand: python workflows.py
     envVars:
