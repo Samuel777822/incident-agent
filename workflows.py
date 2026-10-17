@@ -15,9 +15,25 @@ from run_diagnosis import build_evidence_text
 app = Workflows()
 
 
+def _normalize_service_arg(service):
+    if isinstance(service, dict):
+        return service.get("service") or "shop-api"
+    if isinstance(service, str) and service.strip():
+        s = service.strip()
+        if s.startswith("{") and "service" in s:
+            try:
+                import json
+                return json.loads(s).get("service") or "shop-api"
+            except Exception:
+                pass
+        return s
+    return "shop-api"
+
+
 @app.task(name="ingest-logs")
-def ingest_logs_task(ctx: TaskContext, service: str = "shop-api") -> dict:
+def ingest_logs_task(ctx: TaskContext, service: str = "shop-api", *args, **kwargs) -> dict:
     """Task 1: Pulls the latest repository commit and ingests new log events into the database."""
+    service = _normalize_service_arg(service)
     print(f"[Render Workflow] Running ingest_logs_task for '{service}'...")
     sync_and_tail(service)
     
@@ -107,8 +123,9 @@ def remediate_incident_task(ctx: TaskContext, incident_id: int) -> dict:
 
 
 @app.task(name="full-pipeline")
-def full_pipeline_workflow(ctx: TaskContext, service: str = "shop-api") -> dict:
+def full_pipeline_workflow(ctx: TaskContext, service: str = "shop-api", *args, **kwargs) -> dict:
     """End-to-end Render Workflow: Ingest -> Diagnose -> Remediate"""
+    service = _normalize_service_arg(service)
     print(f"[Render Workflow] Orchestrating end-to-end incident pipeline for '{service}'...")
     ingest_res = ingest_logs_task.func(ctx, service=service)
     pending = ingest_res.get("pending_incidents", [])
