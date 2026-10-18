@@ -7,6 +7,7 @@ Continuously monitors services:
   3. Waits for enough evidence (5 errors, 30 seconds), then runs AI diagnosis,
      testing and the pull request.
   4. Marks incidents resolved once their pull request is merged.
+  5. Publishes the incident list to the live dashboard.
 """
 
 import sys
@@ -14,6 +15,7 @@ import time
 from datetime import datetime, timezone
 
 from db import get_connection
+from publish_incidents import publish_incidents
 from resolve_merged import resolve_merged_prs
 from run_diagnosis import run as run_diagnosis
 from sync_and_tail import sync_and_tail
@@ -43,7 +45,7 @@ def ready_for_diagnosis(inc_id):
     return (row["occurrences"] or 0) >= MIN_OCCURRENCES and age >= MIN_AGE_SECONDS
 
 
-def start_daemon(service: str = "shop-api", interval_seconds: int = 10):
+def start_daemon(service: str = "coffee-shop", interval_seconds: int = 10):
     print("=" * 60)
     print(f"  AI ON-CALL ENGINEER DAEMON: MONITORING '{service}' 24/7")
     print(f"  Polling interval: every {interval_seconds}s | Press Ctrl+C to stop")
@@ -56,6 +58,7 @@ def start_daemon(service: str = "shop-api", interval_seconds: int = 10):
         try:
             new_count, pending_ids = sync_and_tail(service)
             resolve_merged_prs()
+            publish_incidents(service)
             if pending_ids:
                 print(f"\n[DAEMON] Alert! Found {len(pending_ids)} incident(s) needing attention: {pending_ids}")
                 for inc_id in pending_ids:
@@ -68,6 +71,7 @@ def start_daemon(service: str = "shop-api", interval_seconds: int = 10):
                     last_attempt[inc_id] = time.time()
                     print(f"[DAEMON] Launching auto-remediation for Incident #{inc_id}...")
                     run_diagnosis(inc_id)
+                    publish_incidents(service)  # show the result on the dashboard right away
             else:
                 if iteration % 6 == 1:  # Print heartbeat roughly every minute
                     print(f"[DAEMON Heartbeat] Checked '{service}' at {time.strftime('%H:%M:%S')} - All quiet.")
@@ -81,6 +85,6 @@ def start_daemon(service: str = "shop-api", interval_seconds: int = 10):
 
 
 if __name__ == "__main__":
-    svc = sys.argv[1] if len(sys.argv) > 1 else "shop-api"
+    svc = sys.argv[1] if len(sys.argv) > 1 else "coffee-shop"
     interval = int(sys.argv[2]) if len(sys.argv) > 2 else 10
     start_daemon(svc, interval)

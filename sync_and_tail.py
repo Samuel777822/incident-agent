@@ -1,21 +1,32 @@
 """
 sync_and_tail.py - pull the latest code, ingest only NEW log lines, and
 return the incidents that are waiting for a diagnosis.
+
+If the repo config has "log_branch", the log is downloaded from that branch of the
+GitHub repo (the hosted app pushes it there). Otherwise it reads a local file.
 """
 
 import json
 import os
 import re
 import sys
+import urllib.error
+import urllib.request
 from pathlib import Path
+
+from dotenv import load_dotenv
 
 from config import get_repo_config
 from db import get_connection, init_db, record_incident, save_event
+from pr import parse_github_owner_repo
 from repo_sync import get_local_repo
+
+load_dotenv(Path(__file__).parent / ".env")
 
 FRAME = re.compile(r'File "([^"]+)", line (\d+)')
 LOG_RELATIVE_PATH = "logs/app.log"
 OFFSETS_FILE = Path(__file__).parent / "log_offsets.json"
+REMOTE_LOG_DIR = Path(__file__).parent / "workspaces" / "_logs"
 
 
 def signature(tb):
@@ -70,13 +81,48 @@ def _save_offsets(offsets):
     OFFSETS_FILE.write_text(json.dumps(offsets, indent=2), encoding="utf-8")
 
 
+def fetch_remote_log(service, cfg):
+    """Download logs/app.log from the log branch on GitHub into a local cache file."""
+    token = os.getenv("GITHUB_TOKEN")
+    owner, repo = parse_github_owner_repo(cfg.get("url", ""))
+    if not token or not owner:
+        print("[sync] GITHUB_TOKEN missing or repo url is not a GitHub url.")
+        return None
+    branch = cfg.get("log_branch", "logs")
+    path = cfg.get("log_file", LOG_RELATIVE_PATH)
+    local = REMOTE_LOG_DIR / f"{service}.log"
+    req = urllib.request.Request(
+        f"https://api.github.com/repos/{owner}/{repo}/contents/{path}?ref={branch}",
+        headers={
+            "Authorization": f"Bearer {token}",
+            "Accept": "application/vnd.github.raw+json",
+            "Cache-Control": "no-cache",
+            "User-Agent": "AI-OnCall-Engineer",
+        },
+    )
+    try:
+        with urllib.request.urlopen(req, timeout=20) as resp:
+            data = resp.read()
+    except urllib.error.HTTPError as err:
+        if err.code == 404:
+            return local if local.exists() else None  # the app has not shipped any log yet
+        print(f"[sync] could not download the log: HTTP {err.code}")
+        return local if local.exists() else None
+    except Exception as err:
+        print(f"[sync] could not download the log: {err}")
+        return local if local.exists() else None
+    REMOTE_LOG_DIR.mkdir(parents=True, exist_ok=True)
+    local.write_bytes(data)
+    return local
+
+
 def resolve_log_path(service, folder):
     # LOG_PATH_<SERVICE> in .env or the environment overrides repos.json
     env_name = "LOG_PATH_" + service.upper().replace("-", "_")
     configured = os.environ.get(env_name) or get_repo_config(service).get("log_path")
     if configured:
         return Path(configured)
-    return Path(folder) / LOG_RELATIVE_PATHH
+    return Path(folder) / LOG_RELATIVE_PATH
 
 
 def read_new_lines(log_path):
@@ -109,16 +155,20 @@ def read_new_lines(log_path):
     return lines
 
 
-def sync_and_tail(service: str = "shop-api"):
+def sync_and_tail(service: str = "coffee-shop"):
     folder = get_local_repo(service)
-    log_path = resolve_log_path(service, folder)
+    cfg = get_repo_config(service)
+    if cfg.get("log_branch"):
+        log_path = fetch_remote_log(service, cfg)
+    else:
+        log_path = resolve_log_path(service, folder)
     init_db()
 
     new_incidents = 0
-    if not log_path.exists():
-        print(f"Log file not found at: {log_path}")
+    if not log_path or not Path(log_path).exists():
+        print(f"No log yet for '{service}' (waiting for the app to ship errors).")
     else:
-        for line in read_new_lines(log_path):
+        for line in read_new_lines(Path(log_path)):
             incident_id, is_new = handle_line(line)
             if is_new and incident_id:
                 new_incidents += 1
@@ -136,6 +186,6 @@ def sync_and_tail(service: str = "shop-api"):
 
 
 if __name__ == "__main__":
-    svc = sys.argv[1] if len(sys.argv) > 1 else "shop-api"
+    svc = sys.argv[1] if len(sys.argv) > 1 else "coffee-shop"
     new_count, pending = sync_and_tail(svc)
     print(f"Done. New incidents: {new_count}, pending diagnosis: {pending}")

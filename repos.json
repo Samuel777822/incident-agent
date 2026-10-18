@@ -1,8 +1,11 @@
 {
-  "shop-api": {
-    "url": "https://github.com/pranavvrao1-ai/shop-api.git",
+  "coffee-shop": {
+    "url": "https://github.com/Samuel777822/cofee-shop.git",
     "branch": "master",
     "test_command": "pytest",
-    "mode": "pr",
-"log_path": "../shop-api/logs/app.log"  }
+    "mode": "auto",
+    "log_branch": "logs",
+    "log_file": "logs/app.log",
+    "app_url": "https://cofee-shop-q36h.onrender.com/"
+  }
 }
