@@ -85,8 +85,7 @@ The key must match the `service` field in the app's log lines.
 ```bash
 python workflows.py --run shop-api      # one full pass: ingest, diagnose, patch, test, PR
 python agent_daemon.py shop-api 10      # keep watching, check every 10 seconds
-python resolve.py <incident id>         # mark an incident resolved after its PR is merged
-```
+python resolve.py <incident id>         # manual alternative (the daemon resolves merged PRs by itself)```
 
 Run the agent with a Python environment that can also run the target repository's tests (for shop-api:
 fastapi, httpx and pytest), because the tests run with the same interpreter.
@@ -115,12 +114,10 @@ To reset a demo, stop the agent and delete `incidents.db` and `log_offsets.json`
 | `tester.py` | runs the test command with secrets removed |
 | `pr.py` | creates the branch, pushes it and opens the pull request |
 | `workflows.py`, `agent_daemon.py` | run the pipeline once or continuously |
-| `resolve.py`, `add_repo.py` | mark an incident resolved; register a service |
-
+| `resolve_merged.py` | marks an incident resolved automatically once its pull request is merged |
 ## Known limitations
 
-- An incident is created on the first error that has a signature. There is no "N errors in M seconds" threshold yet.
-- Marking an incident resolved after a merge is manual (`resolve.py`).
+An incident is created on the first error that has a signature. The daemon waits for at least 5 errors and 30 seconds before it diagnoses, but there is no sliding "N errors in M seconds" window.- A merge is detected by polling GitHub, so an incident is marked resolved a few seconds after the merge.
 - The agent reads the log from a file on the same machine as the agent.
 - A diagnosis uses roughly 9,000 Groq tokens, and the free tier has per-minute limits. If a call fails, the incident
   stays `diagnosing` and is retried by the daemon.
