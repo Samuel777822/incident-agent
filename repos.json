@@ -1,7 +1,7 @@
 {
   "shop-api": {
     "url": "https://github.com/pranavvrao1-ai/shop-api.git",
-    "branch": "main",
+    "branch": "master",
     "test_command": "pytest",
     "mode": "pr",
 "log_path": "../shop-api/logs/app.log"  }
