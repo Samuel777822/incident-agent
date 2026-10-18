@@ -11,6 +11,7 @@ import sys
 import time
 
 from sync_and_tail import sync_and_tail
+from resolve_merged import resolve_merged_prs
 from run_diagnosis import run as run_diagnosis
 
 
@@ -25,6 +26,7 @@ def start_daemon(service: str = "shop-api", interval_seconds: int = 10):
         iteration += 1
         try:
             new_count, pending_ids = sync_and_tail(service)
+            resolve_merged_prs()
             if pending_ids:
                 print(f"\n[DAEMON] Alert! Found {len(pending_ids)} incident(s) needing attention: {pending_ids}")
                 for inc_id in pending_ids:
