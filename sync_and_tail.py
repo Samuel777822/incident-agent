@@ -71,10 +71,12 @@ def _save_offsets(offsets):
 
 
 def resolve_log_path(service, folder):
-    configured = get_repo_config(service).get("log_path")
+    # LOG_PATH_<SERVICE> in .env or the environment overrides repos.json
+    env_name = "LOG_PATH_" + service.upper().replace("-", "_")
+    configured = os.environ.get(env_name) or get_repo_config(service).get("log_path")
     if configured:
         return Path(configured)
-    return Path(folder) / LOG_RELATIVE_PATH
+    return Path(folder) / LOG_RELATIVE_PATHH
 
 
 def read_new_lines(log_path):
