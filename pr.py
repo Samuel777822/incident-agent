@@ -5,42 +5,69 @@ import subprocess
 import urllib.error
 import urllib.request
 from pathlib import Path
+
 from dotenv import load_dotenv
 
 load_dotenv(Path(__file__).parent / ".env")
 
+GIT_IDENTITY = {
+    "GIT_AUTHOR_NAME": "AI On-Call Engineer",
+    "GIT_AUTHOR_EMAIL": "oncall-agent@users.noreply.github.com",
+    "GIT_COMMITTER_NAME": "AI On-Call Engineer",
+    "GIT_COMMITTER_EMAIL": "oncall-agent@users.noreply.github.com",
+    "GIT_TERMINAL_PROMPT": "0",
+}
+
 
 def parse_github_owner_repo(repo_url):
-    m = re.search(r"github\.com[/:]([^/]+)/([^/\.]+)", repo_url)
+    m = re.search(r"github\.com[/:]([^/]+)/([^/]+?)(?:\.git)?/?$", repo_url or "")
     if m:
         return m.group(1), m.group(2)
     return None, None
 
 
 def run_git(args, cwd):
+    env = {**os.environ, **GIT_IDENTITY}
     proc = subprocess.run(
-        ["git", *args], cwd=str(cwd), capture_output=True, text=True, encoding="utf-8", errors="replace"
+        ["git", *args], cwd=str(cwd), capture_output=True, text=True, env=env
     )
     if proc.returncode != 0:
-        raise RuntimeError(f"git {' '.join(args)} failed: {proc.stderr.strip()}")
+        text = f"git {args[0]} failed: {proc.stderr.strip()}"
+        token = os.getenv("GITHUB_TOKEN")
+        if token:
+            text = text.replace(token, "***")
+        raise RuntimeError(text)
     return proc.stdout.strip()
 
 
 def create_fix_branch(repo_folder, incident_id, base_branch="main"):
     branch_name = f"fix/incident-{incident_id}"
-    # Check if branch exists, if so delete or checkout
-    try:
-        run_git(["checkout", base_branch], repo_folder)
-        run_git(["checkout", "-B", branch_name], repo_folder)
-    except Exception as exc:
-        raise RuntimeError(f"Failed to create fix branch {branch_name}: {exc}")
+    run_git(["checkout", base_branch], repo_folder)
+    run_git(["reset", "--hard", f"origin/{base_branch}"], repo_folder)
+    run_git(["checkout", "-B", branch_name], repo_folder)
     return branch_name
 
 
 def commit_fix(repo_folder, file_path, incident_id, explanation):
     run_git(["add", file_path], repo_folder)
-    commit_msg = f"fix: resolve incident #{incident_id}\n\n{explanation}"
-    run_git(["commit", "-m", commit_msg], repo_folder)
+    run_git(
+        ["commit", "-m", f"fix: resolve incident #{incident_id}\n\n{explanation}"],
+        repo_folder,
+    )
+
+
+def _github(url, token, payload, method):
+    headers = {
+        "Authorization": f"Bearer {token}",
+        "Accept": "application/vnd.github+json",
+        "User-Agent": "AI-OnCall-Engineer",
+        "Content-Type": "application/json",
+    }
+    req = urllib.request.Request(
+        url, data=json.dumps(payload).encode("utf-8"), headers=headers, method=method
+    )
+    with urllib.request.urlopen(req, timeout=30) as resp:
+        return json.loads(resp.read().decode("utf-8"))
 
 
 def open_and_maybe_merge_pr(
@@ -55,85 +82,55 @@ def open_and_maybe_merge_pr(
 ):
     token = os.getenv("GITHUB_TOKEN")
     owner, repo_name = parse_github_owner_repo(repo_url)
-
-    # Local fallback if no GitHub token or not a GitHub URL
     if not token or not owner or not repo_name:
-        if auto_merge:
-            try:
-                run_git(["checkout", base_branch], repo_folder)
-                run_git(["merge", "--no-ff", branch_name, "-m", f"Auto-merge fix for incident #{incident_id}"], repo_folder)
-                try:
-                    run_git(["push", "origin", base_branch], repo_folder)
-                except Exception:
-                    pass
-                return f"local://merged/{branch_name}", True
-            except Exception as err:
-                return f"local://branch/{branch_name} (merge failed: {err})", False
-        return f"local://branch/{branch_name} (set GITHUB_TOKEN in .env to open GitHub PR)", False
+        print("[PR] GITHUB_TOKEN is missing or the repo URL is not a GitHub URL. No PR opened.")
+        return None, False
 
-    # Push branch using authenticated URL
-    auth_push_url = f"https://x-access-token:{token}@github.com/{owner}/{repo_name}.git"
+    push_url = f"https://x-access-token:{token}@github.com/{owner}/{repo_name}.git"
     try:
-        run_git(["push", "-u", auth_push_url, branch_name, "--force"], repo_folder)
+        run_git(["push", push_url, f"{branch_name}:{branch_name}", "--force"], repo_folder)
     except Exception as exc:
-        print(f"[PR Push Notice] Remote push to GitHub failed: {exc}. Falling back to local merge.")
-        if auto_merge:
-            try:
-                run_git(["checkout", base_branch], repo_folder)
-                run_git(["merge", "--no-ff", branch_name, "-m", f"Auto-merge fix for incident #{incident_id}"], repo_folder)
-                return f"local://merged/{branch_name}", True
-            except Exception as err:
-                return f"local://branch/{branch_name} (merge failed: {err})", False
-        return f"local://branch/{branch_name}", False
+        print(f"[PR] Push to GitHub failed: {exc}. No PR opened.")
+        return None, False
 
-    # Create Pull Request via GitHub API
-    pr_title = title or f"fix: auto-remediation for incident #{incident_id}"
-    pr_body = body or f"Automated fix generated by AI On-Call Engineer for incident #{incident_id}."
-
-    req_data = json.dumps({
-        "title": pr_title,
-        "head": branch_name,
-        "base": base_branch,
-        "body": pr_body,
-    }).encode("utf-8")
-
-    api_url = f"https://api.github.com/repos/{owner}/{repo_name}/pulls"
-    headers = {
-        "Authorization": f"Bearer {token}",
-        "Accept": "application/vnd.github+json",
-        "User-Agent": "AI-OnCall-Engineer",
-        "Content-Type": "application/json",
-    }
-
+    api = f"https://api.github.com/repos/{owner}/{repo_name}"
     try:
-        req = urllib.request.Request(api_url, data=req_data, headers=headers, method="POST")
-        with urllib.request.urlopen(req) as resp:
-            pr_info = json.loads(resp.read().decode("utf-8"))
-            pr_url = pr_info.get("html_url")
-            pr_number = pr_info.get("number")
+        pr = _github(
+            f"{api}/pulls",
+            token,
+            {
+                "title": title or f"fix: incident #{incident_id}",
+                "head": branch_name,
+                "base": base_branch,
+                "body": body or f"Automated fix for incident #{incident_id}.",
+            },
+            "POST",
+        )
     except urllib.error.HTTPError as err:
-        err_msg = err.read().decode("utf-8")
-        # If PR already exists
-        if "A pull request already exists" in err_msg:
-            pr_url = f"https://github.com/{owner}/{repo_name}/pulls"
-            return pr_url, False
-        raise RuntimeError(f"GitHub PR creation failed ({err.code}): {err_msg}")
+        text = err.read().decode("utf-8", errors="replace")
+        if "A pull request already exists" in text:
+            print("[PR] A pull request for this branch already exists.")
+            return f"https://github.com/{owner}/{repo_name}/pulls", False
+        print(f"[PR] GitHub refused the pull request ({err.code}): {text[:300]}")
+        return None, False
+    except Exception as exc:
+        print(f"[PR] Could not reach GitHub: {exc}")
+        return None, False
 
-    # Auto-merge if requested
+    pr_url, number = pr.get("html_url"), pr.get("number")
     merged = False
-    if auto_merge and pr_number:
-        merge_url = f"https://api.github.com/repos/{owner}/{repo_name}/pulls/{pr_number}/merge"
-        merge_data = json.dumps({
-            "commit_title": f"Merge pull request #{pr_number} (Auto-fix incident #{incident_id})",
-            "merge_method": "squash",
-        }).encode("utf-8")
+    if auto_merge and number:
         try:
-            m_req = urllib.request.Request(merge_url, data=merge_data, headers=headers, method="PUT")
-            with urllib.request.urlopen(m_req) as m_resp:
-                res = json.loads(m_resp.read().decode("utf-8"))
-                merged = res.get("merged", False)
-        except Exception as m_err:
-            print(f"Auto-merge request failed: {m_err}")
-            merged = False
-
+            res = _github(
+                f"{api}/pulls/{number}/merge",
+                token,
+                {
+                    "commit_title": f"Merge pull request #{number} (auto-fix incident #{incident_id})",
+                    "merge_method": "squash",
+                },
+                "PUT",
+            )
+            merged = bool(res.get("merged"))
+        except Exception as exc:
+            print(f"[PR] Auto-merge failed: {exc}. The PR stays open for a human.")
     return pr_url, merged

@@ -1,42 +1,22 @@
 import os
-import shutil
 import subprocess
 import sys
-from pathlib import Path
+
+SECRET_VARS = ("GITHUB_TOKEN", "GROQ_API_KEY", "RENDER_API_KEY")
 
 
-def get_test_environment(repo_folder):
+def get_test_environment():
     env = os.environ.copy()
-    repo_path = Path(repo_folder).resolve()
-
-    # Search for virtualenv Scripts directory
-    venv_candidates = [
-        repo_path / ".venv" / "Scripts",
-        repo_path.parent / ".venv" / "Scripts",
-        Path(__file__).parent / ".venv" / "Scripts",
-        Path(r"C:\Users\admin\Downloads\test\.venv\Scripts"),
-    ]
-
-    for venv_scripts in venv_candidates:
-        if venv_scripts.is_dir():
-            env["PATH"] = str(venv_scripts) + os.pathsep + env.get("PATH", "")
-            env["VIRTUAL_ENV"] = str(venv_scripts.parent)
-            break
-
+    for name in SECRET_VARS:
+        env.pop(name, None)
+    env["PYTHONDONTWRITEBYTECODE"] = "1"
     return env
 
 
-def run_tests(repo_folder, test_command="pytest", timeout=60):
-    env = get_test_environment(repo_folder)
-    
-    # If test_command is "pytest", check if pytest is on path, else fallback to python -m pytest
-    cmd = test_command
-    if test_command.strip() == "pytest":
-        pytest_exe = shutil.which("pytest", path=env.get("PATH"))
-        if not pytest_exe:
-            python_exe = shutil.which("python", path=env.get("PATH")) or sys.executable
-            cmd = f'"{python_exe}" -m pytest'
-
+def run_tests(repo_folder, test_command="pytest", timeout=120):
+    cmd = (test_command or "pytest").strip()
+    if cmd == "pytest":
+        cmd = f'"{sys.executable}" -m pytest -q'
     try:
         proc = subprocess.run(
             cmd,
@@ -44,14 +24,11 @@ def run_tests(repo_folder, test_command="pytest", timeout=60):
             shell=True,
             capture_output=True,
             text=True,
-            encoding="utf-8",
-            errors="replace",
             timeout=timeout,
-            env=env,
+            env=get_test_environment(),
         )
-        passed = (proc.returncode == 0)
         output = proc.stdout + ("\n" + proc.stderr if proc.stderr else "")
-        return passed, output.strip(), proc.returncode
+        return proc.returncode == 0, output.strip(), proc.returncode
     except subprocess.TimeoutExpired:
         return False, f"Test command timed out after {timeout} seconds", -1
     except Exception as exc:
