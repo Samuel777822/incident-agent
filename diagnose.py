@@ -23,6 +23,7 @@ Required checks:
 2. Support every claim with a quoted line from a file, a traceback line, or a commit id. Do not use "a test exists" as proof of the cause.
 3. The recommended fix must be the smallest change that removes the cause. Mention optional improvements only inside the report, labelled OPTIONAL.
 4. If the cause is data, configuration, credentials, a database or an outside service, say so and do not propose a code change.
+5. Set "safe_to_auto_fix" to true when ALL of these hold: category is code_bug, still_present_in_current_code is "yes", confidence is "high", and the fix is a small edit (under 20 lines) to one non-test Python file. Otherwise set it to false.
 
 Return ONLY one JSON object, with no text before or after it, using exactly these keys:
 {
