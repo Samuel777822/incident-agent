@@ -9,6 +9,7 @@ EXCLUDED_DIRS = {
     "node_modules",
     "dist",
     "build",
+    "demo_tools",
 }
 
 EXCLUDED_FILES = {

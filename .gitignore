@@ -227,3 +227,4 @@ incidents.db
 !.env.example
 workspaces/
 .env
+log_offsets.json

@@ -1,46 +1,80 @@
+import os
+import re
 import sys
 
+from autofix import attempt_autofix
+from config import get_repo_config
 from db import get_incident, get_incident_events, save_diagnosis
-from repo_sync import get_local_repo
+from diagnose import diagnose_incident
 from evidence import collect_repository
 from git_evidence import get_git_evidence
-from diagnose import diagnose_incident
-from config import get_repo_config
-from autofix import attempt_autofix
+from repo_sync import get_local_repo
 
-MAX_FILE_CHARS = 5_000   # ~1,250 tokens; strictly preserves headroom for Groq 8k TPM limit
+# Groq's free tier allows about 8,000 tokens per minute for gpt-oss-120b.
+# These caps keep one diagnosis under that. Lower them if you see rate-limit errors.
+MAX_FILE_CHARS = 5_000            # budget for all other files together
+MAX_TRACEBACK_FILE_CHARS = 4_000  # cap for each file named in the traceback
+MANIFESTS = {"requirements.txt", "pyproject.toml", "setup.py", "setup.cfg"}
+FRAME_RE = re.compile(r'File "([^"]+)", line (\d+)')
 
 
-def _priority(path, traceback_files):
-    """Lower number = higher priority = included first."""
+def _traceback_frames(traceback):
+    frames = []
+    for path, line in FRAME_RE.findall(traceback or ""):
+        if "site-packages" in path:
+            continue
+        frames.append((os.path.basename(path.replace("\\", "/")), int(line)))
+    return frames
+
+
+def _window(text, line_no, max_chars):
+    """Return the whole file, or a window of lines around the failing line."""
+    if len(text) <= max_chars:
+        return text
+    lines = text.splitlines()
+    lo = hi = max(0, min(line_no - 1, len(lines) - 1))
+    size = len(lines[lo]) + 1
+    while True:
+        grew = False
+        if lo > 0 and size + len(lines[lo - 1]) + 1 <= max_chars:
+            lo -= 1
+            size += len(lines[lo]) + 1
+            grew = True
+        if hi < len(lines) - 1 and size + len(lines[hi + 1]) + 1 <= max_chars:
+            hi += 1
+            size += len(lines[hi]) + 1
+            grew = True
+        if not grew:
+            break
+    note = f"# ... file truncated: showing lines {lo + 1}-{hi + 1} of {len(lines)} ...\n"
+    return note + "\n".join(lines[lo : hi + 1])
+
+
+def _priority(path):
     name = path.lower()
-    if path in traceback_files:
-        return 0                          # file mentioned in the traceback
     if "test" in name:
-        return 1                          # test files
-    if name in ("requirements.txt", "pyproject.toml", "setup.py", "setup.cfg"):
-        return 2                          # dependency manifests
-    return 3                              # everything else
+        return 1
+    if name.split("/")[-1] in MANIFESTS:
+        return 2
+    return 3
 
 
 def build_evidence_text(files, git_text, traceback=""):
-    # Extract filenames mentioned in the traceback so we can prioritise them.
-    import re, os
-    frame_re = re.compile(r'File "([^"]+)"')
-    traceback_files = {
-        os.path.basename(p)
-        for p in frame_re.findall(traceback or "")
-        if "site-packages" not in p
-    }
-
-    ordered = sorted(
-        files,
-        key=lambda p: (_priority(p, traceback_files), len(files[p]))
-    )
+    # Files named in the traceback always come first and are never dropped.
+    failing = {}
+    for name, line_no in _traceback_frames(traceback):
+        for path in files:
+            if path.split("/")[-1] == name and path not in failing:
+                failing[path] = line_no
 
     parts = ["===== CURRENT REPOSITORY FILES (latest commit on the branch) ====="]
+    for path, line_no in failing.items():
+        shown = _window(files[path], line_no, MAX_TRACEBACK_FILE_CHARS)
+        parts.append(f"===== FILE: {path} (named in the traceback) =====\n{shown}\n")
+
     used, skipped = 0, []
-    for path in ordered:
+    others = [p for p in files if p not in failing]
+    for path in sorted(others, key=lambda p: (_priority(p), len(files[p]))):
         block = f"===== FILE: {path} =====\n{files[path]}\n"
         if used + len(block) > MAX_FILE_CHARS:
             skipped.append(path)
@@ -51,6 +85,13 @@ def build_evidence_text(files, git_text, traceback=""):
         parts.append("(Files left out because of the size limit: " + ", ".join(skipped) + ")")
     parts.append("===== GIT HISTORY =====\n" + git_text)
     return "\n".join(parts), skipped
+
+
+def gather_evidence(folder, traceback):
+    files = collect_repository(folder)
+    git_text = get_git_evidence(folder, commits=5, per_commit_chars=900)
+    text, skipped = build_evidence_text(files, git_text, traceback)
+    return text, files, skipped
 
 
 def run(incident_id=None):
@@ -67,8 +108,7 @@ def run(incident_id=None):
     print(f"Incident {inc['id']} | service: {service} | seen {inc['occurrences']} times")
 
     folder = get_local_repo(service)
-    files = collect_repository(folder)
-    evidence_text, skipped = build_evidence_text(files, get_git_evidence(folder), first["traceback"])
+    evidence_text, files, skipped = gather_evidence(folder, first["traceback"])
     print(f"Files: {len(files)} collected, {len(skipped)} left out | evidence: {len(evidence_text)} characters")
 
     try:
@@ -99,7 +139,7 @@ def run(incident_id=None):
             files_text=evidence_text,
         )
     else:
-        print(f"\n[Mode: '{mode}'] Diagnosis complete. Report recorded. (Set 'mode': 'pr' or 'auto' in repos.json to enable auto-fix)")
+        print(f"\n[Mode: '{mode}'] Diagnosis complete. Report recorded. (Set 'mode' to 'pr' or 'auto' in repos.json to enable auto-fix)")
 
 
 if __name__ == "__main__":
