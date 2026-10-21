@@ -680,8 +680,8 @@ def _page_ingest(request):
     project = _authorized_ingest_project(request)
     if not project:
         return _json_response({"error": "Invalid ingest key."}, "401 Unauthorized")
-    if project["paused"]:
-        return _json_response({"accepted": False, "reason": "paused"}, "202 Accepted")
+    if project["paused"] or not portal_db.user_has_active_access(project["user_id"]):
+        return _json_response({"accepted": False, "reason": "access_not_active"}, "202 Accepted")
     if not portal_db.allow_ingest(project["id"]):
         return _json_response({"error": "Ingest rate limit exceeded."}, "429 Too Many Requests")
     data = request.form
@@ -717,6 +717,8 @@ def _page_heartbeat(request):
     project = _authorized_ingest_project(request)
     if not project:
         return _json_response({"error": "Invalid ingest key."}, "401 Unauthorized")
+    if project["paused"] or not portal_db.user_has_active_access(project["user_id"]):
+        return _json_response({"status": "access_not_active"}, "403 Forbidden")
     if not portal_db.allow_ingest(project["id"], maximum=60):
         return _json_response({"error": "Heartbeat rate limit exceeded."}, "429 Too Many Requests")
     portal_db.set_project_connected(project["id"])
