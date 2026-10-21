@@ -129,10 +129,17 @@ class ThreadingWSGIServer(ThreadingMixIn, WSGIServer):
     daemon_threads = True
 
 
+def _is_admin(request: Request) -> bool:
+    configured = os.getenv("ADMIN_EMAIL", "").strip().lower()
+    return bool(request.session and configured and request.session.get("email", "").lower() == configured)
+
+
 def _layout(title: str, body: str, request: Request | None = None) -> str:
     signed_in = bool(request and request.session)
-    links = ('<a href="/dashboard">Dashboard</a><a href="/billing">Billing</a><form method="post" action="/logout" style="display:inline">'
+    links = ('<a href="/dashboard">Dashboard</a><a href="/billing">Access</a><form method="post" action="/logout" style="display:inline">'
              f'<input type="hidden" name="csrf" value="{_csrf(request)}"><button class="button" type="submit">Sign out</button></form>') if signed_in else '<a href="/login">Sign in</a><a class="button" href="/signup">Create account</a>'
+    if signed_in and _is_admin(request):
+        links = '<a href="/admin">Admin</a>' + links
     return f"""<!doctype html><html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><meta name="description" content="AI incident response for Python apps"><title>{_escape(title)} · {APP_NAME}</title><style>{CSS}</style></head><body><header class="wrap nav"><a class="brand" href="/"><span class="brand-mark">A</span>{APP_NAME}</a><nav class="navlinks">{links}</nav></header><main class="wrap">{body}</main><footer class="wrap footer">Agent Daemon · Your changes stay reviewable and reversible.</footer></body></html>"""
 
 
@@ -177,6 +184,14 @@ def _require_session(request: Request):
         return _redirect("/login")
     return None
 
+def _require_access(request: Request):
+    gate = _require_access(request)
+    if gate:
+        return gate
+    if _is_admin(request) or portal_db.user_has_active_access(request.session["user_id"]):
+        return None
+    return _redirect("/billing")
+
 
 def _new_session(user_id: str):
     csrf = secrets.token_urlsafe(32)
@@ -211,13 +226,13 @@ def _form(title: str, intro: str, fields: str, action: str, submit: str, csrf: s
 def _page_home(request):
     if request.session:
         return _redirect("/dashboard")
-    body = """<section class="hero"><div class="eyebrow">Incident response for Python services</div><h1>When production breaks, get to the cause faster.</h1><p>Agent Daemon groups recurring error logs and explains likely causes in a project-scoped incident report.</p><div class="actions"><a class="button primary" href="/signup">Start with a project</a><a class="button" href="/login">Sign in</a></div></section><section class="grid"><article class="card"><h3>See what happened</h3><p class="muted">Turn repeated error logs into incidents with a clear timeline and diagnosis.</p></article><article class="card"><h3>Keep your code in your control</h3><p class="muted">The hosted diagnosis worker reads repository files as evidence. It does not run your code or tests or change your repository.</p></article><article class="card"><h3>Keep control</h3><p class="muted">Pause monitoring or remove the project and its stored data from your dashboard.</p></article></section>"""
+    body = """<section class="hero"><div class="eyebrow">Incident response for Python services</div><h1>When production breaks, get to the cause faster.</h1><p>Agent Daemon groups recurring error logs and explains likely causes in a project-scoped incident report. Create an account to request access; projects unlock after trial approval or payment confirmation.</p><div class="actions"><a class="button primary" href="/signup">Create account</a><a class="button" href="/login">Sign in</a></div></section><section class="grid"><article class="card"><h3>See what happened</h3><p class="muted">Turn repeated error logs into incidents with a clear timeline and diagnosis.</p></article><article class="card"><h3>Keep your code in your control</h3><p class="muted">The hosted diagnosis worker reads repository files as evidence. It does not run your code or tests or change your repository.</p></article><article class="card"><h3>Keep control</h3><p class="muted">Pause monitoring or remove the project and its stored data from your dashboard.</p></article></section>"""
     return _response(body, request)
 
 
 def _page_signup(request):
     if request.method == "GET":
-        body = _form("Create your account", "Use an email and a strong password to start.",
+        body = _form("Create your account", "Sign up to request a trial or plan. Project access is enabled by our admin after approval.",
           "<div class='field'><label>Email</label><input name='email' type='email' autocomplete='email' required maxlength='254'></div><div class='field'><label>Password</label><input name='password' type='password' autocomplete='new-password' minlength='12' required><small>Use at least 12 characters.</small></div>",
           "/signup", "<button class='button primary' type='submit'>Create account</button>", _csrf(request))
         return _response(body, request)
@@ -250,16 +265,69 @@ def _page_login(request):
     rate_key = "login:" + hashlib.sha256((request.remote + "\0" + email).encode()).hexdigest()
     if not portal_db.check_login_rate_limit(rate_key):
         return _response("<div class='alert'>Too many sign-in attempts. Try again in a few minutes.</div>", request, "429 Too Many Requests")
+    configured_admin = os.getenv("ADMIN_EMAIL", "").strip().lower()
+    admin_password = os.getenv("ADMIN_PASSWORD", "")
+    submitted_password = request.form.get("password", "")
+    if configured_admin and email == configured_admin:
+        if not admin_password or not hmac.compare_digest(submitted_password, admin_password):
+            return _response("<div class='alert'>Email or password is incorrect.</div>", request, "401 Unauthorized")
+        user = portal_db.get_user_by_email(email)
+        user_id = user["id"] if user else portal_db.create_user(email, _password_hash(admin_password))
+        return _redirect("/dashboard", _new_session(user_id))
     user = portal_db.get_user_by_email(email)
-    if not user or not _password_matches(request.form.get("password", ""), user["password_hash"]):
+    if not user or not _password_matches(submitted_password, user["password_hash"]):
         return _response("<div class='alert'>Email or password is incorrect.</div>", request, "401 Unauthorized")
     return _redirect("/dashboard", _new_session(user["id"]))
+
+
+def _page_admin(request):
+    if not request.session:
+        return _redirect("/login")
+    if not _is_admin(request):
+        return _response("<h1>Not found</h1>", request, "404 Not Found")
+    if request.method == "POST":
+        if not _csrf_valid(request):
+            return _response("<div class='alert'>This form expired. Refresh and try again.</div>", request, "403 Forbidden")
+        user_id = request.form.get("user_id", "")
+        action = request.form.get("action", "")
+        if action == "revoke":
+            portal_db.admin_revoke_access(user_id)
+            return _redirect("/admin?updated=1")
+        grant_type = request.form.get("grant_type", "")
+        try:
+            days = int(request.form.get("days", ""))
+        except ValueError:
+            days = 0
+        if grant_type not in ("trial", "paid") or not 1 <= days <= 3650:
+            return _response("<div class='alert'>Choose trial or paid access and enter 1–3650 days.</div>", request, "400 Bad Request")
+        try:
+            until = portal_db.admin_grant_access(user_id, days, grant_type, request.session["email"])
+        except ValueError as exc:
+            return _response(f"<div class='alert'>{_escape(exc)}</div>", request, "400 Bad Request")
+        return _redirect("/admin?updated=1")
+    rows = []
+    now = _now().isoformat(timespec="seconds")
+    for user in portal_db.admin_list_users():
+        if user["email"].lower() == os.getenv("ADMIN_EMAIL", "").strip().lower():
+            continue
+        until = user.get("active_until") or ""
+        active = bool(until and until > now)
+        state = f"Access active through {_escape(until)} · {_escape(user.get('grant_type') or 'approved')}" if active else "Awaiting approval or access expired"
+        csrf = _escape(_csrf(request))
+        rows.append(f"""<tr><td>{_escape(user['email'])}<br><small class='muted'>Joined {_escape(user['created_at'])}</small></td><td>{state}</td><td>
+<form method='post' action='/admin' style='min-width:250px'><input type='hidden' name='csrf' value='{csrf}'><input type='hidden' name='user_id' value='{_escape(user['id'])}'><div class='field'><label>Grant access</label><select name='grant_type'><option value='trial'>Trial</option><option value='paid'>Paid plan</option></select><input name='days' type='number' min='1' max='3650' value='14' required aria-label='Days of access'></div><button class='button primary' name='action' value='grant' type='submit'>Approve access</button></form>
+<form method='post' action='/admin' style='margin-top:8px'><input type='hidden' name='csrf' value='{csrf}'><input type='hidden' name='user_id' value='{_escape(user['id'])}'><button class='button danger' name='action' value='revoke' type='submit'>Revoke access</button></form></td></tr>""")
+    table = ("<table class='table'><thead><tr><th>Account</th><th>Permission</th><th>Admin action</th></tr></thead><tbody>" + "".join(rows) + "</tbody></table>") if rows else "<div class='empty'>No customer accounts yet.</div>"
+    info = "<div class='alert'>Grant Paid only after payment is confirmed. Grant Trial only after approving the requested trial. Revoking access pauses the customer’s projects.</div>"
+    if request.query.get("updated") == ["1"]:
+        info = "<div class='pill green'>Access list updated.</div>" + info
+    return _response(f"<section class='section'><div class='eyebrow'>Administration</div><h1>Account permissions</h1><p class='muted'>Approve or revoke access for registered customers. Every grant is tied to an expiry date.</p>{info}{table}</section>", request)
 
 
 def _page_dashboard(request):
     if request.method != "GET":
         return _response("Method not allowed", request, "405 Method Not Allowed")
-    gate = _require_session(request)
+    gate = _require_access(request)
     if gate:
         return gate
     projects = portal_db.list_projects(request.session["user_id"])
@@ -298,7 +366,7 @@ def _decrypt_token(ciphertext: str) -> str:
 
 
 def _page_new_project(request):
-    gate = _require_session(request)
+    gate = _require_access(request)
     if gate:
         return gate
     if request.method == "GET":
@@ -347,7 +415,7 @@ def _page_new_project(request):
 
 
 def _page_project(request, project_id):
-    gate = _require_session(request)
+    gate = _require_access(request)
     if gate:
         return gate
     project = portal_db.get_project(project_id, request.session["user_id"])
@@ -377,7 +445,7 @@ def _page_project(request, project_id):
 
 
 def _page_install_monitoring(request, project_id):
-    gate = _require_session(request)
+    gate = _require_access(request)
     if gate:
         return gate
     if request.method != "POST" or not _csrf_valid(request):
@@ -400,7 +468,7 @@ def _page_install_monitoring(request, project_id):
 
 
 def _page_rotate_ingest_key(request, project_id):
-    gate = _require_session(request)
+    gate = _require_access(request)
     if gate:
         return gate
     if request.method != "POST" or not _csrf_valid(request):
@@ -418,7 +486,7 @@ def _page_rotate_ingest_key(request, project_id):
 
 
 def _page_delete_project(request, project_id):
-    gate = _require_session(request)
+    gate = _require_access(request)
     if gate:
         return gate
     if request.method != "POST" or not _csrf_valid(request):
@@ -432,7 +500,7 @@ def _page_delete_project(request, project_id):
 
 
 def _page_incident(request, project_id, incident_id):
-    gate = _require_session(request)
+    gate = _require_access(request)
     if gate:
         return gate
     project = portal_db.get_project(project_id, request.session["user_id"])
@@ -492,25 +560,18 @@ def _page_billing(request):
         return gate
     active_until = portal_db.get_subscription_active_until(request.session["user_id"])
     active = bool(active_until and active_until > _now().isoformat(timespec="seconds"))
-    amount = os.getenv("RAZORPAY_AMOUNT_PAISE", "")
-    try:
-        _razorpay_settings()
-        checkout_ready = True
-    except RuntimeError as exc:
-        checkout_ready = False
-        config_message = str(exc)
-    info = f"<div class='alert'>Subscription active through {_escape(active_until)}.</div>" if active else "<p class='muted'>A successful payment activates monitoring for one year. Checkout is limited to Razorpay test mode.</p>"
-    if checkout_ready:
-        info += f"<form method='post' action='/billing/order'><input type='hidden' name='csrf' value='{_escape(_csrf(request))}'><button class='button primary' type='submit'>Pay ₹{int(amount) / 100:.2f} in test mode</button></form>"
+    if active:
+        info = f"<div class='alert'>Your access is active through {_escape(active_until)}. Contact us if you need to renew.</div>"
     else:
-        info += f"<div class='alert'>Checkout is not configured: {_escape(config_message)}</div>"
-    if request.query.get("success") == ["1"]:
-        info = "<div class='alert'>Payment verified. Your subscription is active.</div>" + info
-    body = f"<section class='section'><p><a href='/dashboard'>← Dashboard</a></p><div class='eyebrow'>Billing</div><h1>Subscription</h1>{info}</section>"
+        info = """<p class='muted'>To request a trial, call us and we’ll explain the available plans. After payment, our admin will activate your account. You can connect a project once access is approved.</p>
+<div class='actions'><a class='button primary' href='tel:7975291636'>Call 7975291636</a><a class='button' href='tel:9341565937'>Call 9341565937</a></div>
+<p class='muted'>Access is assigned to your account by an administrator after trial approval or payment confirmation.</p>"""
+    body = f"<section class='section'><div class='eyebrow'>Account access</div><h1>{'Access active' if active else 'Request a trial or plan'}</h1>{info}</section>"
     return _response(body, request)
 
 
 def _page_create_order(request):
+    return _response("<div class='alert'>Online checkout is currently disabled. Contact us for plans; access is activated by an administrator after payment confirmation.</div>", request, "410 Gone")
     gate = _require_session(request)
     if gate:
         return gate
@@ -554,6 +615,7 @@ document.getElementById('pay').addEventListener('click',()=>new Razorpay(options
 
 
 def _page_verify_payment(request):
+    return Response(json.dumps({"error": "Online checkout is disabled; access is activated by an administrator after payment confirmation."}), "410 Gone", [("Content-Type", "application/json")])
     if request.method != "POST" or not request.session:
         return Response(json.dumps({"error": "Sign in is required."}), "401 Unauthorized", [("Content-Type", "application/json")])
     if not _csrf_valid(request):
@@ -675,7 +737,8 @@ def _razorpay_webhook(request):
         event = json.loads(request.raw_body.decode("utf-8"))
         payment = event["payload"]["payment"]["entity"]
         if event.get("event") == "payment.captured" and payment.get("status") == "captured" and payment.get("currency") == "INR":
-            portal_db.complete_payment_order(str(payment["order_id"]), str(payment["id"]), int(payment["amount"]))
+            # Payments are reviewed by the administrator before account access is granted.
+            pass
     except (KeyError, TypeError, ValueError, UnicodeDecodeError, json.JSONDecodeError):
         return Response(b"invalid event", "400 Bad Request", [("Content-Type", "text/plain")])
     return Response(b"ok", "200 OK", [("Content-Type", "text/plain"), ("Cache-Control", "no-store")])
@@ -697,6 +760,8 @@ def _dispatch(request: Request) -> Response:
         return _page_signup(request) if request.path == "/signup" else _page_login(request)
     if request.path == "/logout":
         return _page_logout(request)
+    if request.path == "/admin":
+        return _page_admin(request)
     if request.path == "/dashboard":
         return _page_dashboard(request)
     if request.path == "/billing":
