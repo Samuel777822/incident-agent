@@ -1,5 +1,5 @@
 # Container entry point for the Agent Daemon web application
-FROM python:3.11-slim
+FROM python:3.13-slim
 
 # CA certificates are needed for the GitHub and Groq HTTPS APIs.
 RUN apt-get update && apt-get install -y --no-install-recommends \
@@ -20,6 +20,6 @@ ENV PYTHONUNBUFFERED=1
 ENV PYTHONDONTWRITEBYTECODE=1
 ENV HOST=0.0.0.0
 
-# Run the active hosted application, not a hard-coded sample customer daemon.
-CMD ["python", "web_app.py"]
+# Run a production WSGI server. Render injects PORT at runtime.
+CMD ["sh", "-c", "exec gunicorn --preload --bind 0.0.0.0:${PORT:-10000} --workers ${WEB_CONCURRENCY:-2} --threads ${GUNICORN_THREADS:-4} --timeout 120 wsgi:application"]
 

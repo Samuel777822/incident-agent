@@ -737,6 +737,12 @@ def application(environ, start_response):
         response = Response(_escape(exc), "400 Bad Request", [("Content-Type", "text/plain; charset=utf-8")])
     except RuntimeError as exc:
         response = Response(_escape(exc), "503 Service Unavailable", [("Content-Type", "text/plain; charset=utf-8"), ("Cache-Control", "no-store")])
+    if os.getenv("APP_ENV", "development").lower() == "production":
+        response.headers.extend([
+            ("Strict-Transport-Security", "max-age=31536000; includeSubDomains"),
+            ("X-Frame-Options", "DENY"),
+            ("Permissions-Policy", "camera=(), microphone=(), geolocation=()"),
+        ])
     start_response(response.status, response.headers)
     return [response.body]
 

@@ -23,8 +23,9 @@ Set these values before production startup:
 | `RAZORPAY_WEBHOOK_SECRET` | Secret for the captured-payment webhook |
 | `RAZORPAY_AMOUNT_PAISE` | Product owner's test subscription amount |
 
-Run locally with `python web_app.py`. The project creation page requires explicit monitoring-install consent and a
-GitHub token. The **Open monitoring PR** action creates a branch and pull request containing an opt-in Python helper
+Run locally with `python web_app.py`. For production, use the Gunicorn entry point in `wsgi.py`; the Dockerfile
+starts it with multiple worker threads and validates the required session secret and database at startup. The project
+creation page requires explicit monitoring-install consent, AI processing consent, and a GitHub token. The **Open monitoring PR** action creates a branch and pull request containing an opt-in Python helper
 and setup notes. The PR contains no credentials. After reviewing and merging it, configure `INCIDENT_AGENT_INGEST_URL`
 and `INCIDENT_AGENT_INGEST_KEY` in the customer's deployment environment. The ingest key is shown once; only its
 hash is stored by the portal.
@@ -49,6 +50,19 @@ diagnosis report and does not yet create a patch or pull request. The defaults c
 Deploy the portal, this worker, and PostgreSQL as separate services. Do not mount a persistent local database or
 store customer source on the worker. Keep `SESSION_SECRET`, `TOKEN_ENCRYPTION_KEY`, `DATABASE_URL`, and
 `GROQ_API_KEY` in the hosting provider's secret environment settings.
+
+## Render deployment
+
+The root `render.yaml` defines the web service, a continuously running worker, a private paid Postgres database,
+and separate secret groups. Connect the repository to Render and create a Blueprint from this file. Render will
+prompt for `GROQ_API_KEY` and Razorpay **test-mode** credentials; it generates the session and token-encryption
+secrets. Verify the generated `TOKEN_ENCRYPTION_KEY` is a valid Fernet key before onboarding customers. Keep
+`RAZORPAY_MODE=test` until live billing has been deliberately configured and reviewed. Paid Postgres is specified
+so database recovery is available; on Render's Hobby workspace, its documented recovery window is three days.
+
+The deployed app is still a supervised pilot, not a fully production-ready autonomous repair product: hosted fixes,
+GitHub CI checks and merge controls, post-merge health monitoring and rollback, and heartbeat alerts still need to
+be completed. Do not enable repair or auto-merge until those controls are implemented and exercised against test repos.
 
 ## Existing single-repository daemon
 
