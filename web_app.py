@@ -430,12 +430,20 @@ def _page_admin(request):
         if action in ("approve_payment_month", "approve_payment_year", "reject_payment"):
             payment_id = request.form.get("payment_id", "")
             decision = "rejected" if action == "reject_payment" else "approved"
+            if decision == "approved":
+                candidate = next((item for item in portal_db.admin_list_manual_payments() if item["id"] == payment_id and item["status"] == "pending"), None)
+                expected_plan = "monthly" if action == "approve_payment_month" else "yearly"
+                expected_amount = 100 if expected_plan == "monthly" else 1000
+                if not candidate:
+                    return _response("<div class='alert'>This payment request was already reviewed or no longer exists.</div>", request, "409 Conflict")
+                if candidate["plan"] != expected_plan or candidate["amount"] != expected_amount:
+                    return _response("<div class='alert'>The selected access duration does not match the submitted payment plan.</div>", request, "400 Bad Request")
             payment = portal_db.admin_review_manual_payment(payment_id, decision, request.session["email"])
             if not payment:
                 return _response("<div class='alert'>This payment request was already reviewed or no longer exists.</div>", request, "409 Conflict")
             import notifications
             if decision == "approved":
-                days = 30 if action == "approve_payment_month" else 365
+                days = 30 if payment["plan"] == "monthly" else 365
                 portal_db.admin_grant_access(payment["user_id"], days, "paid", request.session["email"])
                 subject = "Agent Daemon subscription activated"
                 message = f"Your payment was verified by an administrator. Your paid access has been activated for {days} days. Sign in: https://incident-agent-portal.onrender.com"
@@ -489,9 +497,11 @@ def _page_admin(request):
         active = bool(until and until > now)
         state = f"Access active through {_escape(until)} · {_escape(user.get('grant_type') or 'approved')}" if active else "Awaiting approval or access expired"
         csrf = _escape(_csrf(request))
-        rows.append(f"""<tr><td>{_escape(user['email'])}<br><small class='muted'>Joined {_escape(user['created_at'])}</small></td><td>{state}</td><td>
-<form method='post' action='/admin' style='min-width:250px'><input type='hidden' name='csrf' value='{csrf}'><input type='hidden' name='user_id' value='{_escape(user['id'])}'><div class='field'><label>Grant access</label><select name='grant_type'><option value='trial'>Trial</option><option value='paid'>Paid plan</option></select><input name='days' type='number' min='1' max='3650' value='14' required aria-label='Days of access'></div><button class='button primary' name='action' value='grant' type='submit'>Approve access</button></form>
-<form method='post' action='/admin' style='margin-top:8px'><input type='hidden' name='csrf' value='{csrf}'><input type='hidden' name='user_id' value='{_escape(user['id'])}'><button class='button danger' name='action' value='revoke' type='submit'>Revoke access</button></form></td></tr>""")
+        if active:
+            action_cell = f"""<p class='pill green'>Access active</p><form method='post' action='/admin' style='margin-top:8px'><input type='hidden' name='csrf' value='{csrf}'><input type='hidden' name='user_id' value='{_escape(user['id'])}'><button class='button danger' name='action' value='revoke' type='submit'>Revoke access</button></form>"""
+        else:
+            action_cell = f"""<form method='post' action='/admin' style='min-width:250px'><input type='hidden' name='csrf' value='{csrf}'><input type='hidden' name='user_id' value='{_escape(user['id'])}'><div class='field'><label>Grant access</label><select name='grant_type'><option value='trial'>Trial</option><option value='paid'>Paid plan</option></select><input name='days' type='number' min='1' max='3650' value='1' required aria-label='Days of access'></div><button class='button primary' name='action' value='grant' type='submit'>Grant access</button></form>"""
+        rows.append(f"""<tr><td>{_escape(user['email'])}<br><small class='muted'>Joined {_escape(user['created_at'])}</small></td><td>{state}</td><td>{action_cell}</td></tr>""")
     table = ("<table class='table'><thead><tr><th>Account</th><th>Permission</th><th>Admin action</th></tr></thead><tbody>" + "".join(rows) + "</tbody></table>") if rows else "<div class='empty'>No customer accounts yet.</div>"
     info = "<div class='alert'>Grant Paid only after payment is confirmed. Grant Trial only after approving the requested trial. Revoking access pauses the customer’s projects.</div>"
     if request.query.get("updated") == ["1"]:
@@ -833,10 +843,11 @@ def _page_manual_payment(request):
         plan = "monthly"
     amount = 100 if plan == "monthly" else 1000
     upi_uri = "upi://pay?pa=7975291636%40ptsbi&pn=Pranav%20V%20Rao&am=" + str(amount) + "&cu=INR"
-    qr_src = "https://quickchart.io/qr?size=280&margin=2&text=" + urlencode({"text": upi_uri})[5:]
-    body = f"""<section class='card form-card'><div class='eyebrow'>Manual UPI payment</div><h1>Pay ₹{amount}</h1><p class='muted'>Plan: {'30 days' if plan == 'monthly' else '365 days'}. Scan with a UPI app and confirm the recipient and amount before paying.</p>
-<div style='text-align:center;background:#fff;padding:16px;border-radius:14px;margin:20px 0'><img src='{_escape(qr_src)}' alt='UPI payment QR code' width='280' height='280' style='max-width:100%;height:auto'><p style='color:#222;margin:8px 0 0'>7975291636@ptsbi</p></div>
-<form method='post' action='/billing/pay'><input type='hidden' name='csrf' value='{_escape(_csrf(request))}'><input type='hidden' name='plan' value='{plan}'><input type='hidden' name='amount' value='{amount}'><div class='field'><label>UPI transaction/reference ID</label><input name='transaction_ref' maxlength='120' required placeholder='Enter UPI reference number'><small>Find this in your UPI app after payment. Submitting details does not activate access automatically.</small></div><button class='button primary' type='submit'>I have paid — submit for verification</button></form></section>"""
+    qr_src = "https://quickchart.io/qr?size=300&margin=2&text=" + urlencode({"text": upi_uri})[5:]
+    body = f"""<section class='card form-card'><div class='eyebrow'>Manual UPI payment</div><h1>Pay ₹{amount}</h1><p class='muted'>Plan: {'30 days' if plan == 'monthly' else '365 days'}. Use the button to open a compatible UPI app, or scan the QR code on another device. Confirm the recipient and amount before approving the payment.</p>
+<div style='text-align:center;background:#fff;padding:16px;border-radius:14px;margin:20px 0'><a href='{_escape(upi_uri)}' aria-label='Open payment in a UPI app' style='display:block'><img src='{_escape(qr_src)}' alt='UPI payment QR code for ₹{amount}' width='300' height='300' style='display:block;max-width:100%;height:auto;margin:auto'></a><p style='color:#222;margin:8px 0 0'>7975291636@ptsbi</p><a class='button primary' style='margin-top:12px' href='{_escape(upi_uri)}'>Open UPI app and pay ₹{amount}</a></div>
+<p class='alert'>After completing the payment in your UPI app, return here and enter the transaction reference from the successful transaction. This site cannot independently detect a static QR payment; an administrator must verify it before activating access.</p>
+<form method='post' action='/billing/pay'><input type='hidden' name='csrf' value='{_escape(_csrf(request))}'><input type='hidden' name='plan' value='{plan}'><input type='hidden' name='amount' value='{amount}'><div class='field'><label>UPI transaction/reference ID</label><input name='transaction_ref' maxlength='120' required placeholder='Enter reference from successful payment' autocomplete='off'><small>Do not submit until your UPI app shows the payment as successful. Access is not granted on this form submission.</small></div><button class='button primary' type='submit'>Submit payment for verification</button></form><p class='muted'>An administrator will review your payment, usually within 1–2 hours. Access remains pending until approval.</p></section>"""
     return _response(body, request)
 
 
