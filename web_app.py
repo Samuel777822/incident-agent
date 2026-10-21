@@ -331,10 +331,18 @@ def _page_admin(request):
         except ValueError as exc:
             return _response(f"<div class='alert'>{_escape(exc)}</div>", request, "400 Bad Request")
         return _redirect("/admin?updated=1")
+    csrf = _escape(_csrf(request))
+    trial_rows = []
+    for trial in portal_db.admin_list_trial_requests():
+        actions = ""
+        if trial["status"] == "pending":
+            actions = f"<form method='post' action='/admin' class='actions'><input type='hidden' name='csrf' value='{csrf}'><input type='hidden' name='request_id' value='{_escape(trial['id'])}'><button class='button primary' name='action' value='approve_trial' type='submit'>Approve 1-day trial</button><button class='button danger' name='action' value='reject_trial' type='submit'>Reject</button></form>"
+        trial_rows.append(f"<tr><td>{_escape(trial['email'])}</td><td>{_escape(trial['status'])}</td><td>{_escape(trial['requested_at'])}</td><td>{actions}</td></tr>")
+    trial_table = ("<div class='table-wrap'><table class='table'><thead><tr><th>Customer</th><th>Status</th><th>Requested</th><th>Decision</th></tr></thead><tbody>" + "".join(trial_rows) + "</tbody></table></div>") if trial_rows else "<div class='empty'>No trial requests yet.</div>"
     rows = []
     now = _now().isoformat(timespec="seconds")
     for user in portal_db.admin_list_users():
-        if user["email"].lower() == os.getenv("ADMIN_EMAIL", "").strip().lower():
+        if user["email"].lower() in _admin_emails():
             continue
         until = user.get("active_until") or ""
         active = bool(until and until > now)
@@ -347,7 +355,7 @@ def _page_admin(request):
     info = "<div class='alert'>Grant Paid only after payment is confirmed. Grant Trial only after approving the requested trial. Revoking access pauses the customer’s projects.</div>"
     if request.query.get("updated") == ["1"]:
         info = "<div class='pill green'>Access list updated.</div>" + info
-    return _response(f"<section class='section'><div class='eyebrow'>Administration</div><h1>Account permissions</h1><p class='muted'>Approve or revoke access for registered customers. Every grant is tied to an expiry date.</p>{info}{table}</section>", request)
+    return _response(f"<section class='section'><div class='eyebrow'>Administrator workspace</div><h1>Operations overview</h1><p class='muted'>Signed in as {_escape(request.session['email'])}.</p><h2>Trial requests</h2>{trial_table}<h2>Customer access</h2>{info}{table}</section>", request)
 
 
 def _page_trial_request(request):
