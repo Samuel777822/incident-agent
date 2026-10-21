@@ -20,9 +20,10 @@ def _start():
     port = env.get("PORT", "10000")
     workers = env.get("WEB_CONCURRENCY", "1")
     threads = env.get("GUNICORN_THREADS", "4")
-    return {
-        "incident-worker": subprocess.Popen([sys.executable, "portal_worker.py"], env=env),
-        "web": subprocess.Popen([
+    children = {}
+    if env.get("PORTAL_RUN_WORKER", "1").strip() != "0":
+        children["incident-worker"] = subprocess.Popen([sys.executable, "portal_worker.py"], env=env)
+    children["web"] = subprocess.Popen([
             "gunicorn", "--preload", "--bind", f"0.0.0.0:{port}",
             "--workers", workers, "--threads", threads, "--timeout", "120",
             "wsgi:application",
