@@ -601,21 +601,27 @@ def _page_incident(request, project_id, incident_id):
     return _response(body, request)
 
 
-def _razorpay_settings():
+def _razorpay_settings(plan: str = "yearly"):
+    if plan not in ("monthly", "yearly"):
+        raise RuntimeError("Unknown subscription plan")
     key_id = os.getenv("RAZORPAY_KEY_ID", "").strip()
     secret = os.getenv("RAZORPAY_KEY_SECRET", "").strip()
     mode = os.getenv("RAZORPAY_MODE", "test").strip().lower()
-    amount = os.getenv("RAZORPAY_AMOUNT_PAISE", "").strip()
-    if mode != "test" or not key_id.startswith("rzp_test_"):
-        raise RuntimeError("Only Razorpay test mode is enabled in this build")
-    if not secret or not amount:
-        raise RuntimeError("Configure Razorpay test keys and RAZORPAY_AMOUNT_PAISE before checkout")
+    if mode == "test" and not key_id.startswith("rzp_test_"):
+        raise RuntimeError("Configure a Razorpay test key beginning with rzp_test_")
+    if mode == "live" and not key_id.startswith("rzp_live_"):
+        raise RuntimeError("Live mode requires a Razorpay live key beginning with rzp_live_")
+    if mode not in ("test", "live") or not secret:
+        raise RuntimeError("Configure Razorpay mode and key credentials")
+    legacy = os.getenv("RAZORPAY_AMOUNT_PAISE", "").strip()
+    name = "RAZORPAY_MONTHLY_AMOUNT_PAISE" if plan == "monthly" else "RAZORPAY_YEARLY_AMOUNT_PAISE"
+    amount = os.getenv(name, "").strip() or (legacy if plan == "yearly" and legacy else ("10000" if plan == "monthly" else "100000"))
     try:
         amount_paise = int(amount)
     except ValueError as exc:
-        raise RuntimeError("RAZORPAY_AMOUNT_PAISE must be a positive integer") from exc
+        raise RuntimeError("Subscription amount must be a positive integer in paise") from exc
     if amount_paise < 100:
-        raise RuntimeError("RAZORPAY_AMOUNT_PAISE must be at least 100 paise")
+        raise RuntimeError("Subscription amount must be at least 100 paise")
     return key_id, secret, amount_paise
 
 
@@ -661,7 +667,6 @@ def _page_billing(request):
     return _response(body, request)
 
 def _page_create_order(request):
-    return _response("<div class='alert'>Online checkout is currently disabled. Contact us for plans; access is activated by an administrator after payment confirmation.</div>", request, "410 Gone")
     gate = _require_session(request)
     if gate:
         return gate
@@ -669,8 +674,11 @@ def _page_create_order(request):
         return _response("Method not allowed", request, "405 Method Not Allowed")
     if not _csrf_valid(request):
         return _response("<div class='alert'>This form expired. Refresh and try again.</div>", request, "403 Forbidden")
+    plan = str(request.form.get("plan", "yearly"))
+    if plan not in ("monthly", "yearly"):
+        return _response("<div class='alert'>Choose a valid subscription plan.</div>", request, "400 Bad Request")
     try:
-        key_id, secret, amount = _razorpay_settings()
+        key_id, secret, amount = _razorpay_settings(plan)
     except RuntimeError as exc:
         return _response(f"<div class='alert'>{_escape(exc)}</div>", request, "503 Service Unavailable")
     user_id = request.session["user_id"]
@@ -688,14 +696,14 @@ def _page_create_order(request):
     order_id = str(order.get("id", ""))
     if not re.fullmatch(r"order_[A-Za-z0-9]+", order_id) or order.get("amount") != amount:
         return _response("<div class='alert'>Razorpay returned an invalid order. No payment was started.</div>", request, "502 Bad Gateway")
-    portal_db.create_payment_order(user_id, order_id, amount)
+    portal_db.create_payment_order(user_id, order_id, amount, plan)
     csrf = json.dumps(_csrf(request)).replace("</", "<\\/")
     key = json.dumps(key_id)
     order_value = json.dumps(order_id)
     nonce = secrets.token_urlsafe(18)
     body = f"""<section class='card form-card'><h1>Complete test payment</h1><p class='muted'>Razorpay test checkout will open. No live charge is possible in this build.</p><button class='button primary' id='pay' type='button'>Open secure checkout</button><p id='result' class='muted'></p></section>
 <script src='https://checkout.razorpay.com/v1/checkout.js'></script><script nonce='{nonce}'>
-const options={{key:{key},amount:{amount},currency:'INR',name:'Agent Daemon',description:'One-year pilot subscription',order_id:{order_value},handler:async function(r){{const response=await fetch('/billing/verify',{{method:'POST',headers:{{'Content-Type':'application/json'}},credentials:'same-origin',body:JSON.stringify({{csrf:{csrf},order_id:r.razorpay_order_id,payment_id:r.razorpay_payment_id,signature:r.razorpay_signature}})}});const data=await response.json();if(response.ok)location.href='/billing?success=1';else document.getElementById('result').textContent=data.error||'Payment verification failed.';}},modal:{{ondismiss:function(){{document.getElementById('result').textContent='Checkout closed. No subscription was activated.';}}}}}};
+const options={{key:{key},amount:{amount},currency:'INR',name:'Agent Daemon',description:{json.dumps(plan)},order_id:{order_value},handler:async function(r){{const response=await fetch('/billing/verify',{{method:'POST',headers:{{'Content-Type':'application/json'}},credentials:'same-origin',body:JSON.stringify({{csrf:{csrf},order_id:r.razorpay_order_id,payment_id:r.razorpay_payment_id,signature:r.razorpay_signature}})}});const data=await response.json();if(response.ok)location.href='/billing?success=1';else document.getElementById('result').textContent=data.error||'Payment verification failed.';}},modal:{{ondismiss:function(){{document.getElementById('result').textContent='Checkout closed. No subscription was activated.';}}}}}};
 document.getElementById('pay').addEventListener('click',()=>new Razorpay(options).open());
 </script>"""
     headers = [("Content-Type", "text/html; charset=utf-8"), ("Cache-Control", "no-store"),
@@ -705,7 +713,6 @@ document.getElementById('pay').addEventListener('click',()=>new Razorpay(options
 
 
 def _page_verify_payment(request):
-    return Response(json.dumps({"error": "Online checkout is disabled; access is activated by an administrator after payment confirmation."}), "410 Gone", [("Content-Type", "application/json")])
     if request.method != "POST" or not request.session:
         return Response(json.dumps({"error": "Sign in is required."}), "401 Unauthorized", [("Content-Type", "application/json")])
     if not _csrf_valid(request):
