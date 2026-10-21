@@ -245,21 +245,21 @@ def create_user(email: str, password_hash: str) -> str:
 def get_or_create_google_user(email: str, google_sub: str, email_verified: bool) -> dict:
     email = email.lower().strip()
     if not email or not google_sub or not email_verified:
-        raise ValueError("A verified Google identity is required")
+        raise ValueError('A verified Google identity is required')
+    # Use Google subject as stable internal ID, avoiding a schema migration.
     conn = get_connection()
     try:
-        row = _execute(conn, "SELECT * FROM users WHERE id=?", (google_sub,)).fetchone()
+        row = _execute(conn, 'SELECT * FROM users WHERE id=?', (google_sub,)).fetchone()
         if row:
-            if row["email"].lower() != email:
-                raise ValueError("This Google account's email changed. Contact support to update the account safely.")
+            if row['email'].lower() != email:
+                raise ValueError('This Google account email changed. Contact support to update it safely.')
             return dict(row)
-        by_email = _execute(conn, "SELECT * FROM users WHERE email=?", (email,)).fetchone()
+        by_email = _execute(conn, 'SELECT * FROM users WHERE email=?', (email,)).fetchone()
         if by_email:
-            raise ValueError("An account with this email already exists. Sign in with its current method; account linking must be completed after email verification.")
-        _execute(conn, "INSERT INTO users(id,email,password_hash,created_at) VALUES(?,?,?,?)",
-                 (google_sub, email, "", _now()))
+            raise ValueError('An account with this email already exists. Sign in using its current method; account linking must be completed separately.')
+        _execute(conn, 'INSERT INTO users(id,email,password_hash,created_at) VALUES(?,?,?,?)', (google_sub, email, '', _now()))
         conn.commit()
-        return dict(_execute(conn, "SELECT * FROM users WHERE id=?", (google_sub,)).fetchone())
+        return dict(_execute(conn, 'SELECT * FROM users WHERE id=?', (google_sub,)).fetchone())
     finally:
         conn.close()
 
@@ -271,7 +271,7 @@ def get_user_by_google_sub(google_sub: str):
 def get_user_by_email(email: str):
     conn = get_connection()
     try:
-        row = _execute(conn, "SELECT * FROM users WHERE email = ?", (email.lower().strip(),)).fetchone()
+        row = _execute(conn, 'SELECT * FROM users WHERE email = ?', (email.lower().strip(),)).fetchone()
         return dict(row) if row else None
     finally:
         conn.close()
