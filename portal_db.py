@@ -141,6 +141,20 @@ CREATE INDEX IF NOT EXISTS idx_incidents_project_seen ON incidents(project_id, l
 CREATE INDEX IF NOT EXISTS idx_log_events_project_time ON log_events(project_id, timestamp);
 CREATE INDEX IF NOT EXISTS idx_incident_jobs_ready ON incident_jobs(status, available_at, locked_until);
 CREATE INDEX IF NOT EXISTS idx_audit_project_time ON audit_log(project_id, created_at);
+
+CREATE TABLE IF NOT EXISTS manual_payments (
+  id TEXT PRIMARY KEY,
+  user_id TEXT NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+  amount INTEGER NOT NULL,
+  plan TEXT NOT NULL,
+  transaction_ref TEXT NOT NULL,
+  status TEXT NOT NULL DEFAULT 'pending',
+  created_at TEXT NOT NULL,
+  reviewed_at TEXT NOT NULL DEFAULT '',
+  reviewed_by TEXT NOT NULL DEFAULT ''
+);
+CREATE INDEX IF NOT EXISTS idx_manual_payments_status ON manual_payments(status, created_at);
+
 CREATE TABLE IF NOT EXISTS trial_requests (
   id TEXT PRIMARY KEY,
   user_id TEXT NOT NULL REFERENCES users(id) ON DELETE CASCADE,
@@ -848,6 +862,61 @@ def admin_revoke_access(user_id: str) -> bool:
     finally:
         conn.close()
 
+
+
+
+def create_manual_payment_request(user_id: str, amount: int, plan: str, transaction_ref: str) -> dict:
+    """Record a customer's claimed UPI payment for manual administrator verification."""
+    if amount not in (100, 1000) or plan not in ("monthly", "yearly"):
+        raise ValueError("Choose a valid plan and amount.")
+    if (plan, amount) not in (("monthly", 100), ("yearly", 1000)):
+        raise ValueError("The amount does not match the selected plan.")
+    transaction_ref = transaction_ref.strip()
+    if not transaction_ref or len(transaction_ref) > 120:
+        raise ValueError("Enter the UPI transaction/reference ID.")
+    conn = get_connection()
+    try:
+        row = _execute(conn, """SELECT * FROM manual_payments
+            WHERE user_id=? AND transaction_ref=?""", (user_id, transaction_ref)).fetchone()
+        if row:
+            return dict(row)
+        payment_id = _id()
+        _execute(conn, """INSERT INTO manual_payments
+            (id,user_id,amount,plan,transaction_ref,status,created_at)
+            VALUES(?,?,?,?,?,'pending',?)""",
+            (payment_id,user_id,amount,plan,transaction_ref,_now()))
+        conn.commit()
+        return dict(_execute(conn, "SELECT * FROM manual_payments WHERE id=?", (payment_id,)).fetchone())
+    finally:
+        conn.close()
+
+
+def admin_list_manual_payments():
+    conn = get_connection()
+    try:
+        rows = _execute(conn, """SELECT p.*,u.email FROM manual_payments p
+            JOIN users u ON u.id=p.user_id ORDER BY
+            CASE WHEN p.status='pending' THEN 0 ELSE 1 END, p.created_at DESC""").fetchall()
+        return [dict(row) for row in rows]
+    finally:
+        conn.close()
+
+
+def admin_review_manual_payment(payment_id: str, decision: str, reviewed_by: str):
+    if decision not in ("approved", "rejected"):
+        raise ValueError("Invalid payment decision.")
+    conn = get_connection()
+    try:
+        row = _execute(conn, "SELECT * FROM manual_payments WHERE id=? AND status='pending'", (payment_id,)).fetchone()
+        if not row:
+            return None
+        _execute(conn, """UPDATE manual_payments SET status=?,reviewed_at=?,reviewed_by=?
+            WHERE id=? AND status='pending'""", (decision,_now(),reviewed_by,payment_id))
+        conn.commit()
+        updated = _execute(conn, "SELECT * FROM manual_payments WHERE id=?", (payment_id,)).fetchone()
+        return dict(updated) if updated else None
+    finally:
+        conn.close()
 
 
 def create_trial_request(user_id: str) -> dict:

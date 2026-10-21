@@ -426,6 +426,24 @@ def _page_admin(request):
             message = (f"Your one-day trial is approved and expires at {until}. Sign in to connect your project: https://incident-agent-portal.onrender.com" if decision == "approved" else "Your trial request was not approved at this time.")
             sent = notifications.notify_customer(trial["email"], subject, message)
             return _redirect("/admin?updated=1&email=" + ("sent" if sent else "not-configured"))
+
+        if action in ("approve_payment_month", "approve_payment_year", "reject_payment"):
+            payment_id = request.form.get("payment_id", "")
+            decision = "rejected" if action == "reject_payment" else "approved"
+            payment = portal_db.admin_review_manual_payment(payment_id, decision, request.session["email"])
+            if not payment:
+                return _response("<div class='alert'>This payment request was already reviewed or no longer exists.</div>", request, "409 Conflict")
+            import notifications
+            if decision == "approved":
+                days = 30 if action == "approve_payment_month" else 365
+                portal_db.admin_grant_access(payment["user_id"], days, "paid", request.session["email"])
+                subject = "Agent Daemon subscription activated"
+                message = f"Your payment was verified by an administrator. Your paid access has been activated for {days} days. Sign in: https://incident-agent-portal.onrender.com"
+            else:
+                subject = "Agent Daemon payment needs attention"
+                message = "Your payment submission was not approved. Please contact support with your UPI transaction reference if you believe this is a mistake."
+            customer_sent = notifications.notify_customer(payment["email"], subject, message)
+            return _redirect("/admin?updated=1&payment_email=" + ("sent" if customer_sent else "not-configured"))
         if action == "revoke":
             portal_db.admin_revoke_access(user_id)
             return _redirect("/admin?updated=1")
@@ -449,6 +467,19 @@ def _page_admin(request):
             actions = f"<form method='post' action='/admin' class='actions'><input type='hidden' name='csrf' value='{csrf}'><input type='hidden' name='request_id' value='{_escape(trial['id'])}'><button class='button primary' name='action' value='approve_trial' type='submit'>Approve 1-day trial</button><button class='button danger' name='action' value='reject_trial' type='submit'>Reject</button></form>"
         trial_rows.append(f"<tr><td>{_escape(trial['email'])}</td><td>{_escape(trial['status'])}</td><td>{_escape(trial['requested_at'])}</td><td>{actions}</td></tr>")
     trial_table = ("<div class='table-wrap'><table class='table'><thead><tr><th>Customer</th><th>Status</th><th>Requested</th><th>Decision</th></tr></thead><tbody>" + "".join(trial_rows) + "</tbody></table></div>") if trial_rows else "<div class='empty'>No trial requests yet.</div>"
+
+    payment_rows = []
+    for payment in portal_db.admin_list_manual_payments():
+        actions = ""
+        if payment["status"] == "pending":
+            actions = f"""<form method='post' action='/admin' class='actions'>
+<input type='hidden' name='csrf' value='{csrf}'><input type='hidden' name='payment_id' value='{_escape(payment['id'])}'>
+<button class='button primary' name='action' value='approve_payment_month' type='submit'>Grant 1 Month</button>
+<button class='button primary' name='action' value='approve_payment_year' type='submit'>Grant 1 Year</button>
+<button class='button danger' name='action' value='reject_payment' type='submit'>Reject</button></form>"""
+        payment_rows.append(f"<tr><td>{_escape(payment['email'])}</td><td>₹{_escape(payment['amount'])} · {_escape(payment['plan'])}</td><td>{_escape(payment['transaction_ref'])}</td><td>{_escape(payment['status'])}<br><small>{_escape(payment['created_at'])}</small></td><td>{actions}</td></tr>")
+    payment_table = ("<div class='table-wrap'><table class='table'><thead><tr><th>Customer</th><th>Claimed amount/plan</th><th>UPI reference</th><th>Status</th><th>Action</th></tr></thead><tbody>" + "".join(payment_rows) + "</tbody></table></div>") if payment_rows else "<div class='empty'>No payment submissions yet.</div>"
+
     rows = []
     now = _now().isoformat(timespec="seconds")
     for user in portal_db.admin_list_users():
@@ -465,7 +496,7 @@ def _page_admin(request):
     info = "<div class='alert'>Grant Paid only after payment is confirmed. Grant Trial only after approving the requested trial. Revoking access pauses the customer’s projects.</div>"
     if request.query.get("updated") == ["1"]:
         info = "<div class='pill green'>Access list updated.</div>" + info
-    return _response(f"<section class='section'><div class='eyebrow'>Administrator workspace</div><h1>Operations overview</h1><p class='muted'>Signed in as {_escape(request.session['email'])}.</p><h2>Trial requests</h2>{trial_table}<h2>Customer access</h2>{info}{table}</section>", request)
+    return _response(f"<section class='section'><div class='eyebrow'>Administrator workspace</div><h1>Operations overview</h1><p class='muted'>Signed in as {_escape(request.session['email'])}.</p><h2>Trial requests</h2>{trial_table}<h2>UPI payment submissions</h2><p class='muted'>Verify each payment in your bank/UPI app before granting access.</p>{payment_table}<h2>Customer access</h2>{info}{table}</section>", request)
 
 
 def _page_trial_request(request):
@@ -769,11 +800,45 @@ def _page_billing(request):
             trial = f"<form method='post' action='/billing/trial-request'><input type='hidden' name='csrf' value='{_escape(_csrf(request))}'><button class='button' type='submit'>Request a free 1-day trial</button></form>"
         info = f"""{trial}
 <div class='grid'>
-<article class='card'><div class='eyebrow'>Monthly</div><h2>₹100 <small class='muted'>/ month</small></h2><p class='muted'>30 days of access.</p><form method='post' action='/billing/order'><input type='hidden' name='csrf' value='{_escape(_csrf(request))}'><input type='hidden' name='plan' value='monthly'><button class='button primary' type='submit'>Choose monthly</button></form></article>
-<article class='card'><div class='eyebrow'>Yearly</div><h2>₹1,000 <small class='muted'>/ year</small></h2><p class='muted'>365 days of access.</p><form method='post' action='/billing/order'><input type='hidden' name='csrf' value='{_escape(_csrf(request))}'><input type='hidden' name='plan' value='yearly'><button class='button primary' type='submit'>Choose yearly</button></form></article>
-</div><p class='muted'>Checkout requires valid Razorpay credentials configured on the server. Access is activated only after payment is verified server-side.</p>"""
+<article class='card'><div class='eyebrow'>Monthly</div><h2>₹100 <small class='muted'>/ month</small></h2><p class='muted'>30 days of access.</p><a class='button primary' href='/billing/pay?plan=monthly'>Pay by UPI QR</a></article>
+<article class='card'><div class='eyebrow'>Yearly</div><h2>₹1,000 <small class='muted'>/ year</small></h2><p class='muted'>365 days of access.</p><a class='button primary' href='/billing/pay?plan=yearly'>Pay by UPI QR</a></article>
+</div><p class='muted'>Pay using any UPI app, then submit your transaction reference. Access starts only after an administrator verifies the payment.</p>"""
     body = f"<section class='section'><div class='eyebrow'>Account access</div><h1>{'Your subscription' if active else 'Choose your access'}</h1>{success}{info}</section>"
     return _response(body, request)
+
+
+def _page_manual_payment(request):
+    gate = _require_session(request)
+    if gate:
+        return gate
+    if request.method == "POST":
+        if not _csrf_valid(request):
+            return _response("<div class='alert'>This form expired. Refresh and try again.</div>", request, "403 Forbidden")
+        plan = str(request.form.get("plan", ""))
+        amount_raw = str(request.form.get("amount", ""))
+        txn = str(request.form.get("transaction_ref", "")).strip()
+        try:
+            amount = int(amount_raw)
+            payment = portal_db.create_manual_payment_request(request.session["user_id"], amount, plan, txn)
+        except (ValueError, TypeError) as exc:
+            return _response(f"<div class='alert'>{_escape(str(exc))}</div>", request, "400 Bad Request")
+        import notifications
+        results = notifications.notify_admins("URGENT: UPI payment submitted",
+            f"Customer: {request.session['email']}\\nClaimed amount: INR {amount}\\nPlan: {plan}\\nUPI transaction reference: {txn}\\nStatus: pending manual verification\\nReview: https://incident-agent-portal.onrender.com/admin")
+        sent = bool(results) and all(results.values())
+        notice = "Payment details submitted. Both administrators were notified by email." if sent else "Payment details saved, but email delivery is not confirmed. Please wait for administrator review."
+        return _response(f"<section class='card form-card'><h1>Payment submitted</h1><p>{_escape(notice)}</p><p class='muted'>Status: pending verification. Do not pay again unless an administrator asks you to.</p><a class='button primary' href='/billing'>Back to subscription</a></section>", request)
+    plan = request.query.get("plan", ["monthly"])[0]
+    if plan not in ("monthly", "yearly"):
+        plan = "monthly"
+    amount = 100 if plan == "monthly" else 1000
+    upi_uri = "upi://pay?pa=7975291636%40ptsbi&pn=Pranav%20V%20Rao&am=" + str(amount) + "&cu=INR"
+    qr_src = "https://quickchart.io/qr?size=280&margin=2&text=" + urlencode({"text": upi_uri})[5:]
+    body = f"""<section class='card form-card'><div class='eyebrow'>Manual UPI payment</div><h1>Pay ₹{amount}</h1><p class='muted'>Plan: {'30 days' if plan == 'monthly' else '365 days'}. Scan with a UPI app and confirm the recipient and amount before paying.</p>
+<div style='text-align:center;background:#fff;padding:16px;border-radius:14px;margin:20px 0'><img src='{_escape(qr_src)}' alt='UPI payment QR code' width='280' height='280' style='max-width:100%;height:auto'><p style='color:#222;margin:8px 0 0'>7975291636@ptsbi</p></div>
+<form method='post' action='/billing/pay'><input type='hidden' name='csrf' value='{_escape(_csrf(request))}'><input type='hidden' name='plan' value='{plan}'><input type='hidden' name='amount' value='{amount}'><div class='field'><label>UPI transaction/reference ID</label><input name='transaction_ref' maxlength='120' required placeholder='Enter UPI reference number'><small>Find this in your UPI app after payment. Submitting details does not activate access automatically.</small></div><button class='button primary' type='submit'>I have paid — submit for verification</button></form></section>"""
+    return _response(body, request)
+
 
 def _page_create_order(request):
     gate = _require_session(request)
@@ -982,6 +1047,8 @@ def _dispatch(request: Request) -> Response:
         return _page_billing(request)
     if request.path == "/billing/trial-request":
         return _page_trial_request(request)
+    if request.path == "/billing/pay":
+        return _page_manual_payment(request)
     if request.path == "/billing/order":
         return _page_create_order(request)
     if request.path == "/billing/verify":
