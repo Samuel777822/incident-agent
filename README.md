@@ -55,6 +55,28 @@ the paid Blueprint does. Free Render services sleep after inactivity, so the wor
 web service is awake. Keep `SESSION_SECRET`, `TOKEN_ENCRYPTION_KEY`, `DATABASE_URL`, `GROQ_API_KEY`,
 `ADMIN_EMAIL`, and `ADMIN_PASSWORD` in the hosting provider's secret environment settings.
 
+## Google sign-in and administrator routing
+
+Set the following secret environment variables on the portal service:
+- `GOOGLE_CLIENT_ID`
+- `GOOGLE_CLIENT_SECRET`
+- `GOOGLE_REDIRECT_URI=https://incident-agent-portal.onrender.com/auth/google/callback`
+
+Create a Google OAuth 2.0 **Web application** client in Google Cloud Console. Add the exact callback URI above to **Authorized redirect URIs**. The app validates the returned identity, audience, issuer, verified email, and the state cookie. Google passwords are never requested by this app.
+
+Set `ADMIN_EMAILS=naveenachandra371@gmail.com,pranavvrao1@gmail.com` in Render. Google sign-in for those exact verified email addresses is automatically recognized as administrator access; other verified Google accounts enter the normal customer flow. Keep password fallback disabled when using two admin addresses; remove both per-admin password environment variables after both Google accounts have been successfully verified. Do not delete fallback secrets until Google OAuth has been tested on the production domain and both administrators can sign in.
+
+## Email delivery
+
+Trial-request and decision messages use SMTP. For a provider such as Resend, create a verified sending domain/address and an SMTP/API credential, then configure:
+- `SMTP_HOST`
+- `SMTP_PORT`
+- `SMTP_USERNAME`
+- `SMTP_PASSWORD`
+- `EMAIL_FROM`
+
+The current mail sender uses STARTTLS (port 587 style). Use a STARTTLS-compatible host/port, or update the mail transport before configuring a provider that requires implicit TLS on port 465. The application must report delivery only if the SMTP server accepts the message; test messages in both administrator inboxes and check logs before relying on alerts.
+
 ## Render deployment
 
 The root `render.yaml` defines the web service, a continuously running worker, a private paid Postgres database,
