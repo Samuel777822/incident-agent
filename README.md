@@ -42,14 +42,20 @@ Run one worker process separately from the web service with `python portal_worke
 polls PostgreSQL for incidents that have at least five events over 30 seconds, whose project is not paused, whose
 subscription is active, and whose owner consented to AI diagnosis. It uses the GitHub REST API to read a bounded
 set of source files and recent commit summaries; it does not clone repositories or run customer code or tests.
-Temporary job failures are retried up to three times and are written to the project audit log. The worker stores a
-diagnosis report and does not yet create a patch or pull request. The defaults can be adjusted with
-`WORKER_POLL_SECONDS`, `WORKER_MIN_OCCURRENCES`, `WORKER_MIN_AGE_SECONDS`, `WORKER_LEASE_SECONDS`, and
-`WORKER_MAX_ATTEMPTS`.
+Temporary job failures are retried up to three times and are written to the project audit log.
+Report mode stores diagnosis only. Pull request and Auto modes require separate explicit remediation consent and
+only attempt a small, high-confidence Python source edit. The worker never executes customer code or tests. It opens
+a reviewable fix PR and saves its diff in the incident view. Auto mode merges only an open PR whose unchanged head
+has at least one completed GitHub check/status and all checks it can read succeeded. Missing, failed, pending, or
+unavailable checks leave the PR open. The defaults can be adjusted with `WORKER_POLL_SECONDS`,
+`WORKER_MIN_OCCURRENCES`, `WORKER_MIN_AGE_SECONDS`, `WORKER_LEASE_SECONDS`, `WORKER_MAX_ATTEMPTS`, and
+`AUTO_MERGE_POLL_SECONDS`.
 
-Deploy the portal, this worker, and PostgreSQL as separate services. Do not mount a persistent local database or
-store customer source on the worker. Keep `SESSION_SECRET`, `TOKEN_ENCRYPTION_KEY`, `DATABASE_URL`, and
-`GROQ_API_KEY` in the hosting provider's secret environment settings.
+The Docker web service starts a small supervisor that runs Gunicorn and the incident worker together, which supports
+Render's free web-service plan. Configure `PORTAL_RUN_WORKER=0` only when deploying a separate worker service, as
+the paid Blueprint does. Free Render services sleep after inactivity, so the worker only processes jobs while the
+web service is awake. Keep `SESSION_SECRET`, `TOKEN_ENCRYPTION_KEY`, `DATABASE_URL`, `GROQ_API_KEY`, and any
+Razorpay test credentials in the hosting provider's secret environment settings.
 
 ## Render deployment
 
@@ -60,9 +66,10 @@ secrets. Verify the generated `TOKEN_ENCRYPTION_KEY` is a valid Fernet key befor
 `RAZORPAY_MODE=test` until live billing has been deliberately configured and reviewed. Paid Postgres is specified
 so database recovery is available; on Render's Hobby workspace, its documented recovery window is three days.
 
-The deployed app is still a supervised pilot, not a fully production-ready autonomous repair product: hosted fixes,
-GitHub CI checks and merge controls, post-merge health monitoring and rollback, and heartbeat alerts still need to
-be completed. Do not enable repair or auto-merge until those controls are implemented and exercised against test repos.
+The hosted repair path is a supervised pilot. Post-merge health monitoring, automatic rollback, and heartbeat alerts
+remain unimplemented. Start with Pull request mode and review its changes. Auto mode is CI-gated and must be enabled
+only for repositories with working GitHub checks. Do not treat a passing CI check as proof that a production deployment
+is healthy.
 
 ## Existing single-repository daemon
 

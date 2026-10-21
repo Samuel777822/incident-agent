@@ -50,6 +50,8 @@ services:
     envVars:
       - fromGroup: incident-agent-core
       - fromGroup: incident-agent-web-secrets
+      - key: PORTAL_RUN_WORKER
+        value: "0"
 
   - type: worker
     name: incident-agent-worker

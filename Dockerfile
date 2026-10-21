@@ -21,5 +21,5 @@ ENV PYTHONDONTWRITEBYTECODE=1
 ENV HOST=0.0.0.0
 
 # Run a production WSGI server. Render injects PORT at runtime.
-CMD ["sh", "-c", "exec gunicorn --preload --bind 0.0.0.0:${PORT:-10000} --workers ${WEB_CONCURRENCY:-2} --threads ${GUNICORN_THREADS:-4} --timeout 120 wsgi:application"]
+CMD ["python", "run_portal.py"]
 

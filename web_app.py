@@ -306,10 +306,11 @@ def _page_new_project(request):
 <div class='field'><label>GitHub repository</label><input name='repo' required placeholder='owner/repository'><small>Use a fine-grained token limited to this repository.</small></div>
 <div class='field'><label>GitHub token</label><input name='github_token' type='password' autocomplete='off' required><small>Stored encrypted. It is never displayed after saving.</small></div>
 <div class='field'><label>Default branch</label><input name='branch' value='main' required maxlength='100'></div>
-<div class='field'><label>Agent mode</label><select name='mode'><option value='report' selected>Report only</option><option value='pr' disabled>Pull request (not available yet)</option><option value='auto' disabled>Auto (not available yet)</option></select><small>Hosted diagnosis is currently report-only. Fix PRs and automatic merges are not enabled.</small></div>
+<div class='field'><label>Agent mode</label><select name='mode'><option value='report' selected>Report only</option><option value='pr'>Pull request</option><option value='auto'>Auto (merge only after passing CI)</option></select><small>Pull request mode opens a reviewable PR. Auto mode also merges only after GitHub reports at least one completed passing check and no failing or pending checks. With no checks, the PR stays open.</small></div>
 <div class='field'><label>App URL (optional)</label><input name='app_url' type='url' placeholder='https://app.example.com'></div>
 <div class='field'><label class='checkbox'><input name='allow_install' type='checkbox' value='yes' required><span>I authorize Agent Daemon to add its monitoring code to this repository through a reviewable pull request.</span></label></div>
-<div class='field'><label class='checkbox'><input name='allow_ai_processing' type='checkbox' value='yes' required><span>I understand that selected error logs, tracebacks, and relevant repository source files will be sent to Groq for AI diagnosis.</span></label></div>"""
+<div class='field'><label class='checkbox'><input name='allow_ai_processing' type='checkbox' value='yes' required><span>I understand that selected error logs, tracebacks, and relevant repository source files will be sent to Groq for AI diagnosis.</span></label></div>
+<div class='field'><label class='checkbox'><input name='allow_remediation' type='checkbox' value='yes'><span>For Pull request or Auto mode, I authorize small, high-confidence Python fixes as pull requests. The agent will not run my code or tests. Auto mode may merge only after all GitHub checks it can see pass; no checks, failed checks, or unavailable checks leave the PR open.</span></label></div>"""
         body = _form("Connect a project", "We only monitor after you authorize the installation.", fields,
                      "/projects/new", "<button class='button primary' type='submit'>Save project</button>", _csrf(request))
         return _response(body, request)
@@ -319,11 +320,13 @@ def _page_new_project(request):
         return _response("<div class='alert'>Authorize monitoring installation and AI diagnosis data processing before continuing.</div>", request, "400 Bad Request")
     repo_match = REPO_RE.fullmatch(request.form.get("repo", "").strip())
     token = request.form.get("github_token", "").strip()
-    mode = request.form.get("mode", "pr")
+    mode = request.form.get("mode", "report")
     name = request.form.get("name", "").strip()
     branch = request.form.get("branch", "main").strip()
-    if not repo_match or not token or not name or not branch or mode != "report":
+    if not repo_match or not token or not name or not branch or mode not in ("report", "pr", "auto"):
         return _response("<div class='alert'>Check the repository, token, project name, branch, and mode.</div>", request, "400 Bad Request")
+    if mode in ("pr", "auto") and request.form.get("allow_remediation") != "yes":
+        return _response("<div class='alert'>Authorize pull request remediation before selecting Pull request or Auto mode.</div>", request, "400 Bad Request")
     try:
         ciphertext = _encrypt_token(token)
     except RuntimeError as exc:
@@ -337,8 +340,10 @@ def _page_new_project(request):
         app_url=request.form.get("app_url", "").strip(), ai_consent_at=portal_db._now())
     portal_db.audit(project_id, "project_connected", {"repo": f"{owner}/{repo}", "mode": mode})
     portal_db.audit(project_id, "ai_diagnosis_consent", {"scope": "selected logs, tracebacks, and repository source sent to Groq"})
+    if mode in ("pr", "auto"):
+        portal_db.audit(project_id, "remediation_consent", {"mode": mode, "auto_merge_requires_passing_github_checks": mode == "auto"})
     notice = f"<div class='alert'>Save this ingest key now. It is shown once: <code>{_escape(ingest_key)}</code></div>"
-    return _response(notice + f"<section class='card'><h1>Project saved</h1><p class='muted'>The monitoring installer is the next step. Your project is pending until the pull request is merged and its first heartbeat arrives.</p><a class='button primary' href='/projects/{_escape(project_id)}'>View project</a></section>", request, "201 Created")
+    return _response(notice + f"<section class='card'><h1>Project saved</h1><p class='muted'>The monitoring installer is the next step. Your project is pending until the monitoring pull request is merged and its first heartbeat arrives.</p><a class='button primary' href='/projects/{_escape(project_id)}'>View project</a></section>", request, "201 Created")
 
 
 def _page_project(request, project_id):
@@ -367,7 +372,7 @@ def _page_project(request, project_id):
     paused = bool(project["paused"])
     button = ("Resume agent" if paused else "Pause agent")
     install_card = (f"<article class='card'><h3>Monitoring pull request</h3><p class='muted'>Review the opt-in helper and merge it when ready.</p><a class='button primary' href='{_escape(project['install_pr_url'])}'>View installation PR</a></article>" if project.get("install_pr_url") else f"<article class='card'><h3>Install monitoring</h3><p class='muted'>Open a pull request with the opt-in Python error reporting helper. Secrets are not added to the repository.</p><form method='post' action='/projects/{_escape(project_id)}/install'><input type='hidden' name='csrf' value='{_escape(_csrf(request))}'><button class='button primary' type='submit'>Open monitoring PR</button></form></article>")
-    body = f"<section class='section'><p><a href='/dashboard'>← Projects</a></p><div class='row'><div><div class='eyebrow'>Project</div><h1>{_escape(project['name'])}</h1><p class='muted'><a href='https://github.com/{_escape(project['repo_owner'])}/{_escape(project['repo_name'])}'>{_escape(project['repo_owner'])}/{_escape(project['repo_name'])}</a> · {_escape(project['branch'])}</p></div><form method='post'><input type='hidden' name='csrf' value='{_escape(_csrf(request))}'><input type='hidden' name='paused' value='{'no' if paused else 'yes'}'><button class='button {'primary' if paused else 'danger'}' type='submit'>{button}</button></form></div><div class='stats'><span class='pill {'amber' if paused else 'green'}'>{'Paused' if paused else _escape(project['status'].replace('_',' ').title())}</span><span class='pill'>Mode · {_escape(project['mode'])}</span></div><h2>Incident history</h2>{table}<section class='grid'>{install_card}<article class='card'><h3>Ingest key</h3><p class='muted'>Rotate the project key if it is exposed. The new key appears once.</p><form method='post' action='/projects/{_escape(project_id)}/rotate-key'><input type='hidden' name='csrf' value='{_escape(_csrf(request))}'><button class='button' type='submit'>Rotate key</button></form></article><article class='card'><h3>Delete project data</h3><p class='muted'>Remove this project, its incidents, logs, fixes, and stored GitHub token.</p><form method='post' action='/projects/{_escape(project_id)}/delete'><input type='hidden' name='csrf' value='{_escape(_csrf(request))}'><div class='field'><label>Type DELETE to confirm</label><input name='confirm' required autocomplete='off'></div><button class='button danger' type='submit'>Delete project</button></form></article></section></section>"
+    body = f"<section class='section'><p><a href='/dashboard'>← Projects</a></p><div class='row'><div><div class='eyebrow'>Project</div><h1>{_escape(project['name'])}</h1><p class='muted'><a href='https://github.com/{_escape(project['repo_owner'])}/{_escape(project['repo_name'])}'>{_escape(project['repo_owner'])}/{_escape(project['repo_name'])}</a> · {_escape(project['branch'])} · {_escape(project['mode']).title()} mode</p></div><form method='post'><input type='hidden' name='csrf' value='{_escape(_csrf(request))}'><input type='hidden' name='paused' value='{'no' if paused else 'yes'}'><button class='button {'primary' if paused else 'danger'}' type='submit'>{button}</button></form></div><div class='stats'><span class='pill {'amber' if paused else 'green'}'>{'Paused' if paused else _escape(project['status'].replace('_',' ').title())}</span><span class='pill'>Mode · {_escape(project['mode'])}</span></div><h2>Incident history</h2>{table}<section class='grid'>{install_card}<article class='card'><h3>Ingest key</h3><p class='muted'>Rotate the project key if it is exposed. The new key appears once.</p><form method='post' action='/projects/{_escape(project_id)}/rotate-key'><input type='hidden' name='csrf' value='{_escape(_csrf(request))}'><button class='button' type='submit'>Rotate key</button></form></article><article class='card'><h3>Delete project data</h3><p class='muted'>Remove this project, its incidents, logs, fixes, and stored GitHub token.</p><form method='post' action='/projects/{_escape(project_id)}/delete'><input type='hidden' name='csrf' value='{_escape(_csrf(request))}'><div class='field'><label>Type DELETE to confirm</label><input name='confirm' required autocomplete='off'></div><button class='button danger' type='submit'>Delete project</button></form></article></section></section>"
     return _response(body, request)
 
 
@@ -443,7 +448,9 @@ def _page_incident(request, project_id, incident_id):
     if not incident:
         return _response("<h1>Incident not found</h1>", request, "404 Not Found")
     diff = "".join(f"<article class='card'><div class='row'><strong>{_escape(f['file_path'])}</strong><span class='pill'>{_escape(f['ci_result'])}</span></div><pre style='overflow:auto;white-space:pre-wrap;color:#c7d2e4'>{_escape(f['diff'])}</pre></article>" for f in fixes) or "<div class='empty'>No proposed fix has been saved yet.</div>"
-    body = f"<section class='section'><p><a href='/projects/{_escape(project_id)}'>← {_escape(project['name'])}</a></p><div class='eyebrow'>Incident</div><h1>{_escape(incident['signature'])}</h1><div class='stats'><span class='pill'>{_escape(incident['status'])}</span><span class='pill'>Occurrences · {_escape(incident['occurrences'])}</span><span class='pill'>CI · {_escape(incident['ci_status'])}</span></div><article class='card'><h2>What happened</h2><p>{_escape(incident['root_cause']) or 'Diagnosis is pending.'}</p><p class='muted'>{_escape(incident['report'])}</p></article><h2>Proposed changes</h2>{diff}</section>"
+    pr_link = (f"<p><a class='button primary' href='{_escape(incident['pr_url'])}' target='_blank' rel='noopener'>Open fix pull request</a></p>"
+               if incident.get("pr_url") else "")
+    body = f"<section class='section'><p><a href='/projects/{_escape(project_id)}'>← {_escape(project['name'])}</a></p><div class='eyebrow'>Incident</div><h1>{_escape(incident['signature'])}</h1><div class='stats'><span class='pill'>{_escape(incident['status'])}</span><span class='pill'>Occurrences · {_escape(incident['occurrences'])}</span><span class='pill'>CI · {_escape(incident['ci_status'])}</span></div>{pr_link}<article class='card'><h2>What happened</h2><p>{_escape(incident['root_cause']) or 'Diagnosis is pending.'}</p><p class='muted' style='white-space:pre-wrap'>{_escape(incident['report'])}</p></article><h2>Proposed changes</h2>{diff}</section>"
     return _response(body, request)
 
 
