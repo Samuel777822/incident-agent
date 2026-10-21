@@ -155,3 +155,54 @@ def test_payment_only_activates_after_captured_status(web_env, monkeypatch):
     assert status == "200 OK"
     assert json.loads(body)["status"] == "active"
     assert web_app.portal_db.get_project(project_id, user_id)["active_until"]
+
+
+def test_google_oauth_not_configured_fails_closed(web_env, monkeypatch):
+    monkeypatch.delenv("GOOGLE_CLIENT_ID", raising=False)
+    monkeypatch.delenv("GOOGLE_CLIENT_SECRET", raising=False)
+    monkeypatch.delenv("GOOGLE_REDIRECT_URI", raising=False)
+
+    status, _, body = _request("/auth/google")
+
+    assert status == "503 Service Unavailable"
+    assert "Google sign-in is not configured yet" in body
+
+
+def test_google_login_url_has_openid_and_state():
+    url = web_app._google_login_url("random-state-123", "client-id.apps.googleusercontent.com",
+                                    "https://incident-agent-portal.onrender.com/auth/google/callback")
+    from urllib.parse import parse_qs, urlsplit
+    parsed = urlsplit(url)
+    params = parse_qs(parsed.query)
+    assert parsed.netloc == "accounts.google.com"
+    assert params["client_id"] == ["client-id.apps.googleusercontent.com"]
+    assert params["state"] == ["random-state-123"]
+    assert params["response_type"] == ["code"]
+    assert "openid" in params["scope"][0].split()
+    assert params["redirect_uri"] == ["https://incident-agent-portal.onrender.com/auth/google/callback"]
+
+
+def test_google_verified_identity_requires_signed_state_cookie(web_env, monkeypatch):
+    monkeypatch.setenv("GOOGLE_CLIENT_ID", "client-id.apps.googleusercontent.com")
+    monkeypatch.setenv("GOOGLE_CLIENT_SECRET", "test-secret")
+    monkeypatch.setenv("GOOGLE_REDIRECT_URI", "https://incident-agent-portal.onrender.com/auth/google/callback")
+    _, _, body = _request("/login")
+    assert "Continue with Google" in body
+    state = "state-token"
+    _, headers = (None, None)
+    signed = web_app._signed_cookie(state)
+    jar = f"{web_app.SESSION_COOKIE}=; agent_google_state={signed}"
+    environ = {}
+    request = type("GoogleRequest", (), {"cookies": {"agent_google_state": signed}})()
+    with pytest.raises(ValueError, match="expired or could not be validated"):
+        web_app._verified_google_identity("authorization-code", "different-state", request)
+
+
+def test_google_user_is_created_and_reused_by_stable_subject(web_env):
+    user1 = web_app.portal_db.get_or_create_google_user("google@example.com", "google-sub-123", True)
+    user2 = web_app.portal_db.get_or_create_google_user("google@example.com", "google-sub-123", True)
+    assert user1["id"] == user2["id"]
+    assert user2["google_sub"] == "google-sub-123"
+    assert user2["email_verified"] in (1, True)
+    with pytest.raises(ValueError, match="verified Google identity"):
+        web_app.portal_db.get_or_create_google_user("unverified@example.com", "google-sub-456", False)
