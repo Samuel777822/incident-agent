@@ -430,16 +430,20 @@ def _page_admin(request):
         if action in ("approve_payment_month", "approve_payment_year", "reject_payment"):
             payment_id = request.form.get("payment_id", "")
             decision = "rejected" if action == "reject_payment" else "approved"
+            if decision == "approved":
+                candidate = next((item for item in portal_db.admin_list_manual_payments() if item["id"] == payment_id and item["status"] == "pending"), None)
+                expected_plan = "monthly" if action == "approve_payment_month" else "yearly"
+                expected_amount = 100 if expected_plan == "monthly" else 1000
+                if not candidate:
+                    return _response("<div class='alert'>This payment request was already reviewed or no longer exists.</div>", request, "409 Conflict")
+                if candidate["plan"] != expected_plan or candidate["amount"] != expected_amount:
+                    return _response("<div class='alert'>The selected access duration does not match the submitted payment plan.</div>", request, "400 Bad Request")
             payment = portal_db.admin_review_manual_payment(payment_id, decision, request.session["email"])
             if not payment:
                 return _response("<div class='alert'>This payment request was already reviewed or no longer exists.</div>", request, "409 Conflict")
             import notifications
             if decision == "approved":
-                expected_plan = "monthly" if action == "approve_payment_month" else "yearly"
-                if payment["plan"] != expected_plan or payment["amount"] != (100 if expected_plan == "monthly" else 1000):
-                    portal_db.admin_review_manual_payment(payment_id, "rejected", request.session["email"])
-                    return _response("<div class='alert'>The selected access duration does not match the submitted payment plan. Refresh and review the payment record.</div>", request, "400 Bad Request")
-                days = 30 if expected_plan == "monthly" else 365
+                days = 30 if payment["plan"] == "monthly" else 365
                 portal_db.admin_grant_access(payment["user_id"], days, "paid", request.session["email"])
                 subject = "Agent Daemon subscription activated"
                 message = f"Your payment was verified by an administrator. Your paid access has been activated for {days} days. Sign in: https://incident-agent-portal.onrender.com"
