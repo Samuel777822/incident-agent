@@ -18,7 +18,7 @@ from cryptography.fernet import Fernet, InvalidToken
 import httpx
 
 import portal_db
-from diagnose import ConfigurationError, diagnose_incident
+from diagnose import diagnose_incident
 from run_diagnosis import build_evidence_text
 from portal_remediation import submit_fix_pr, process_auto_merges
 
@@ -183,7 +183,7 @@ def process_one() -> bool:
                 safe_message = str(exc) if isinstance(exc, WorkerError) else exc.__class__.__name__
                 portal_db.mark_remediation_needs_human(incident_id, project_id, safe_message)
                 LOG.warning("Fix PR deferred for incident %s (%s)", incident_id, safe_message)
-    except ConfigurationError as exc:
+    except ValueError as exc:
         portal_db.fail_diagnosis(incident_id, project_id, str(exc))
         LOG.error("Diagnosis configuration issue for incident %s: %s", incident_id, exc)
     except Exception as exc:
