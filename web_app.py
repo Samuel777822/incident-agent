@@ -185,7 +185,7 @@ def _require_session(request: Request):
     return None
 
 def _require_access(request: Request):
-    gate = _require_access(request)
+    gate = _require_session(request)
     if gate:
         return gate
     if _is_admin(request) or portal_db.user_has_active_access(request.session["user_id"]):
@@ -269,7 +269,7 @@ def _page_login(request):
     admin_password = os.getenv("ADMIN_PASSWORD", "")
     submitted_password = request.form.get("password", "")
     if configured_admin and email == configured_admin:
-        if not admin_password or not hmac.compare_digest(submitted_password, admin_password):
+        if len(admin_password) < 12 or not hmac.compare_digest(submitted_password, admin_password):
             return _response("<div class='alert'>Email or password is incorrect.</div>", request, "401 Unauthorized")
         user = portal_db.get_user_by_email(email)
         user_id = user["id"] if user else portal_db.create_user(email, _password_hash(admin_password))
