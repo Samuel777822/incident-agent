@@ -582,6 +582,67 @@ def fail_diagnosis(incident_id: str, project_id: str, error: str, *, retry_delay
         conn.close()
 
 
+def record_remediation(incident_id: str, project_id: str, *, branch: str, file_path: str,
+                       diff: str, pr_url: str, pr_number: int, ci_status: str = "pending") -> None:
+    """Persist a reviewable fix diff and its GitHub pull request."""
+    conn = get_connection()
+    now = _now()
+    try:
+        _execute(conn, "INSERT INTO fixes(id,incident_id,branch,file_path,diff,ci_result,created_at) VALUES(?,?,?,?,?,?,?)",
+                 (_id(), incident_id, branch, file_path, diff[:50000], ci_status, now))
+        _execute(conn, """UPDATE incidents SET status='pr_opened',pr_url=?,pr_number=?,ci_status=?
+                          WHERE id=? AND project_id=?""",
+                 (pr_url, pr_number, ci_status, incident_id, project_id))
+        _execute(conn, "INSERT INTO audit_log(id,project_id,action,detail,created_at) VALUES(?,?,?,?,?)",
+                 (_id(), project_id, "fix_pr_opened", json.dumps({"incident_id":incident_id,"pr_url":pr_url},sort_keys=True), now))
+        conn.commit()
+    except Exception:
+        conn.rollback()
+        raise
+    finally:
+        conn.close()
+
+
+def list_auto_prs(limit: int = 20):
+    """List auto-mode PRs that still need a CI check or merge attempt."""
+    conn = get_connection()
+    try:
+        rows = _execute(conn, """SELECT i.id AS incident_id,i.project_id,i.pr_number,i.ci_status,
+                    p.repo_owner,p.repo_name,p.github_token_ciphertext
+          FROM incidents i JOIN projects p ON p.id=i.project_id
+          WHERE p.mode='auto' AND p.paused=0 AND i.status='pr_opened'
+            AND i.pr_number IS NOT NULL AND i.ci_status IN ('pending','unknown','unavailable','success')
+          ORDER BY i.created_at ASC LIMIT ?""", (max(1,min(int(limit),100)),)).fetchall()
+        return [dict(row) for row in rows]
+    finally:
+        conn.close()
+
+
+def update_portal_pr_status(incident_id: str, ci_status: str, *, merged: bool = False) -> None:
+    """Update CI state; resolve an incident only after GitHub confirms a merge."""
+    allowed = {"pending","success","failed","no_checks","merged","unavailable"}
+    if ci_status not in allowed:
+        raise ValueError("Invalid CI status")
+    conn = get_connection()
+    now = _now()
+    try:
+        if merged:
+            _execute(conn, "UPDATE incidents SET ci_status='merged',status='resolved',resolved_at=? WHERE id=?",
+                     (now,incident_id))
+            _execute(conn, "UPDATE fixes SET ci_result='merged',merged_at=? WHERE incident_id=?",
+                     (now,incident_id))
+        else:
+            _execute(conn, "UPDATE incidents SET ci_status=? WHERE id=?", (ci_status,incident_id))
+            _execute(conn, "UPDATE fixes SET ci_result=? WHERE incident_id=? AND merged_at IS NULL",
+                     (ci_status,incident_id))
+        conn.commit()
+    except Exception:
+        conn.rollback()
+        raise
+    finally:
+        conn.close()
+
+
 def audit(project_id: str, action: str, detail: dict | None = None) -> None:
     conn = get_connection()
     try:
