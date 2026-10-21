@@ -26,6 +26,7 @@ from urllib.request import Request as UrlRequest, urlopen
 from wsgiref.simple_server import WSGIServer, make_server
 
 import httpx
+from urllib.parse import urlencode
 
 import portal_db
 from monitoring_installer import GitHubInstallError, open_monitoring_pr, validate_repository_access
@@ -160,29 +161,20 @@ def _google_oauth_settings() -> tuple[str, str, str]:
 
 
 def _google_login_url(state: str, client_id: str, redirect_uri: str) -> str:
-    params = {
-        "client_id": client_id,
-        "redirect_uri": redirect_uri,
-        "response_type": "code",
-        "scope": "openid email profile",
-        "state": state,
-        "prompt": "select_account",
-    }
+    params = {"client_id": client_id, "redirect_uri": redirect_uri, "response_type": "code",
+              "scope": "openid email profile", "state": state, "prompt": "select_account"}
     return "https://accounts.google.com/o/oauth2/v2/auth?" + urlencode(params)
 
 
 def _verified_google_identity(code: str, state: str, request: Request) -> dict:
-    expected_state = request.cookies.get("agent_google_state", "")
+    expected_state = _verify_cookie(request.cookies.get("agent_google_state", ""))
     if not state or not expected_state or not hmac.compare_digest(state, expected_state):
         raise ValueError("Google sign-in expired or could not be validated. Please try again.")
     client_id, client_secret, redirect_uri = _google_oauth_settings()
     try:
         token_response = httpx.post("https://oauth2.googleapis.com/token", data={
-            "code": code,
-            "client_id": client_id,
-            "client_secret": client_secret,
-            "redirect_uri": redirect_uri,
-            "grant_type": "authorization_code",
+            "code": code, "client_id": client_id, "client_secret": client_secret,
+            "redirect_uri": redirect_uri, "grant_type": "authorization_code",
         }, timeout=10, follow_redirects=False)
         if token_response.status_code != 200:
             raise ValueError("Google could not complete sign-in. Please try again.")
@@ -195,18 +187,15 @@ def _verified_google_identity(code: str, state: str, request: Request) -> dict:
         if claims_response.status_code != 200:
             raise ValueError("Google identity could not be verified. Please try again.")
         claims = claims_response.json()
-    except (httpx.HTTPError, ValueError):
-        raise ValueError("Google sign-in service could not be reached or verified. Please try again.") from None
-    except (KeyError, TypeError):
-        raise ValueError("Google returned an invalid sign-in response.") from None
+    except httpx.HTTPError:
+        raise ValueError("Google sign-in service could not be reached. Please try again.") from None
     if (claims.get("aud") != client_id or claims.get("iss") not in ("accounts.google.com", "https://accounts.google.com")
-            or not claims.get("sub") or not claims.get("email_verified")):
+            or not claims.get("sub") or claims.get("email_verified") not in (True, "true")):
         raise ValueError("Google account verification failed. Use a verified Google account.")
     email = claims.get("email")
     if not isinstance(email, str) or not EMAIL_RE.fullmatch(email):
         raise ValueError("Google did not provide a valid email address.")
-    return {"email": email.lower().strip(), "google_sub": str(claims["sub"]),
-            "email_verified": True}
+    return {"email": email.lower().strip(), "google_sub": str(claims["sub"]), "email_verified": True}
 
 
 def _google_begin(request: Request):
@@ -216,8 +205,7 @@ def _google_begin(request: Request):
         return _response(f"<div class='alert'>{_escape(exc)}</div>", request, "503 Service Unavailable")
     state = secrets.token_urlsafe(32)
     state_cookie = _cookie("agent_google_state", _signed_cookie(state), max_age=600, http_only=True)
-    response = _redirect(_google_login_url(state, client_id, redirect_uri), [state_cookie])
-    return response
+    return _redirect(_google_login_url(state, client_id, redirect_uri), [state_cookie])
 
 
 def _google_callback(request: Request):
@@ -226,18 +214,20 @@ def _google_callback(request: Request):
     error = request.query.get("error", [""])[0]
     code = request.query.get("code", [""])[0]
     state = request.query.get("state", [""])[0]
+    clear_state = _cookie("agent_google_state", "", max_age=0, http_only=True)
     if error:
-        return _redirect("/login", [("Set-Cookie", _cookie("agent_google_state", "", max_age=0, http_only=True)[1])])
+        return _redirect("/login", [clear_state])
     if not code:
-        return _response("<div class='alert'>Google did not return an authorization code.</div>", request, "400 Bad Request")
+        return _response("<div class='alert'>Google did not return an authorization code.</div>", request, "400 Bad Request",
+                         headers=[clear_state])
     try:
         identity = _verified_google_identity(code, state, request)
         user = portal_db.get_or_create_google_user(identity["email"], identity["google_sub"], identity["email_verified"])
     except (ValueError, RuntimeError) as exc:
         return _response(f"<div class='alert'>{_escape(exc)}</div>", request, "400 Bad Request",
-                         headers=[("Set-Cookie", _cookie("agent_google_state", "", max_age=0, http_only=True)[1])])
+                         headers=[clear_state])
     session_headers = _new_session(user["id"])
-    session_headers.append(("Set-Cookie", _cookie("agent_google_state", "", max_age=0, http_only=True)[1]))
+    session_headers.append(clear_state)
     return _redirect("/dashboard", session_headers)
 
 
