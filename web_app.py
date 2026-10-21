@@ -129,9 +129,20 @@ class ThreadingWSGIServer(ThreadingMixIn, WSGIServer):
     daemon_threads = True
 
 
+def _admin_emails() -> set[str]:
+    raw = os.getenv("ADMIN_EMAILS", "") or os.getenv("ADMIN_EMAIL", "")
+    return {item.strip().lower() for item in raw.split(",") if item.strip()}
+
+def _admin_password_env(email: str) -> str:
+    key = "ADMIN_PASSWORD_" + re.sub(r"[^A-Z0-9]", "_", email.upper())
+    specific = os.getenv(key, "")
+    if specific:
+        return specific
+    admins = _admin_emails()
+    return os.getenv("ADMIN_PASSWORD", "") if len(admins) == 1 and email in admins else ""
+
 def _is_admin(request: Request) -> bool:
-    configured = os.getenv("ADMIN_EMAIL", "").strip().lower()
-    return bool(request.session and configured and request.session.get("email", "").lower() == configured)
+    return bool(request.session and request.session.get("email", "").lower() in _admin_emails())
 
 
 def _layout(title: str, body: str, request: Request | None = None) -> str:
@@ -244,6 +255,8 @@ def _page_signup(request):
         return _response("<div class='alert'>Too many attempts. Try again in a few minutes.</div>", request, "429 Too Many Requests")
     if not EMAIL_RE.fullmatch(email) or len(password) < 12 or len(password) > 1024:
         return _response("<div class='alert'>Enter a valid email and a password with at least 12 characters.</div>", request, "400 Bad Request")
+    if email in _admin_emails():
+        return _response("<div class='alert'>This address is reserved for an administrator. Use administrator sign-in credentials.</div>", request, "403 Forbidden")
     try:
         user_id = portal_db.create_user(email, _password_hash(password))
     except Exception as exc:
@@ -265,12 +278,11 @@ def _page_login(request):
     rate_key = "login:" + hashlib.sha256((request.remote + "\0" + email).encode()).hexdigest()
     if not portal_db.check_login_rate_limit(rate_key):
         return _response("<div class='alert'>Too many sign-in attempts. Try again in a few minutes.</div>", request, "429 Too Many Requests")
-    configured_admin = os.getenv("ADMIN_EMAIL", "").strip().lower()
-    admin_password = os.getenv("ADMIN_PASSWORD", "")
     submitted_password = request.form.get("password", "")
-    if configured_admin and email == configured_admin:
+    if email in _admin_emails():
+        admin_password = _admin_password_env(email)
         if len(admin_password) < 12 or not hmac.compare_digest(submitted_password, admin_password):
-            return _response("<div class='alert'>Email or password is incorrect.</div>", request, "401 Unauthorized")
+            return _response("<div class='alert'>Administrator credentials are not configured or are incorrect.</div>", request, "401 Unauthorized")
         user = portal_db.get_user_by_email(email)
         user_id = user["id"] if user else portal_db.create_user(email, _password_hash(admin_password))
         return _redirect("/dashboard", _new_session(user_id))
