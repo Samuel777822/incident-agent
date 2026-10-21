@@ -189,9 +189,6 @@ def test_google_verified_identity_requires_signed_state_cookie(web_env, monkeypa
     _, _, body = _request("/login")
     assert "Continue with Google" in body
     state = "state-token"
-    _, headers = (None, None)
-    signed = web_app._signed_cookie(state)
-    jar = f"{web_app.SESSION_COOKIE}=; agent_google_state={signed}"
     environ = {}
     request = type("GoogleRequest", (), {"cookies": {"agent_google_state": signed}})()
     with pytest.raises(ValueError, match="expired or could not be validated"):
