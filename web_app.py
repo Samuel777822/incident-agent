@@ -362,6 +362,12 @@ def _page_signup(request):
         return _response("<div class='alert'>This address is reserved for an administrator. Use administrator sign-in credentials.</div>", request, "403 Forbidden")
     try:
         user_id = portal_db.create_user(email, _password_hash(password))
+        conn = portal_db.get_connection()
+        try:
+            portal_db._execute(conn, "UPDATE users SET email_verified=0 WHERE id=?", (user_id,))
+            conn.commit()
+        finally:
+            conn.close()
     except Exception as exc:
         if "unique" in str(exc).lower() or "duplicate" in str(exc).lower():
             return _response("<div class='alert'>An account with that email already exists. Sign in instead.</div>", request, "409 Conflict")
