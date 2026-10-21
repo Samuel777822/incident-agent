@@ -105,7 +105,8 @@ class Handler(BaseHTTPRequestHandler):
         self.send_header("X-Content-Type-Options", "nosniff")
         self.send_header("Referrer-Policy", "no-referrer")
         self.end_headers()
-        self.wfile.write(body)
+        if not getattr(self, "_head_only", False):
+            self.wfile.write(body)
 
     def _authorized(self) -> bool:
         supplied = self.headers.get("X-Admin-Key", "")
@@ -149,6 +150,10 @@ class Handler(BaseHTTPRequestHandler):
 
     def do_POST(self) -> None:
         self._send(405, {"error": "method not allowed"})
+
+    def do_HEAD(self) -> None:
+        self._head_only = True
+        self.do_GET()
 
 
 def main() -> None:
