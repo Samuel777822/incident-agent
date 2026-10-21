@@ -1,8 +1,8 @@
 """Tenant-aware diagnosis worker for portal incidents.
 
-The worker reads repository files as evidence only. It never imports customer
-modules, executes customer commands, runs customer tests, or creates patches.
-Run as a separate process from the web server: ``python portal_worker.py``.
+The worker reads repository files as evidence, may create a constrained fix PR,
+and merges only auto-mode PRs with passing GitHub checks. It never executes
+customer code or tests. Run with the portal service supervisor.
 """
 
 from __future__ import annotations
@@ -20,6 +20,7 @@ import httpx
 import portal_db
 from diagnose import ConfigurationError, diagnose_incident
 from run_diagnosis import build_evidence_text
+from portal_remediation import submit_fix_pr, process_auto_merges
 
 LOG = logging.getLogger("portal_worker")
 _STOP = False
@@ -45,7 +46,7 @@ def _decrypt_token(ciphertext: str) -> str:
         raise WorkerError("Saved GitHub credential could not be decrypted") from None
 
 
-def _repository_evidence(project: dict, traceback: str) -> str:
+def _repository_evidence(project: dict, traceback: str) -> tuple[str, dict[str, str]]:
     """Read a bounded set of source files and commit summaries through GitHub's API."""
     owner = str(project.get("repo_owner", ""))
     repo = str(project.get("repo_name", ""))
@@ -133,7 +134,7 @@ def _repository_evidence(project: dict, traceback: str) -> str:
 
     git_text = "RECENT COMMITS (newest first):\n" + ("\n".join(commits) if commits else "No commit history available.")
     evidence, _skipped = build_evidence_text(source_files, git_text, traceback)
-    return evidence
+    return evidence, source_files
 
 
 def process_one() -> bool:
@@ -153,14 +154,35 @@ def process_one() -> bool:
         return True
 
     try:
-        evidence = _repository_evidence(incident, event.get("traceback", ""))
+        evidence, source_files = _repository_evidence(incident, event.get("traceback", ""))
         result = diagnose_incident(event.get("message", ""), event.get("traceback", ""), evidence)
-        # No patch generation or test execution is invoked by this worker.
-        result["report"] = (str(result.get("report", "")).rstrip()
-                            + "\n\nHosted diagnosis only: no repository files were changed and no customer tests were run.")
         if not portal_db.complete_diagnosis(incident_id, project_id, result):
             raise WorkerError("Incident was no longer owned by this worker")
         LOG.info("Diagnosis completed for incident %s", incident_id)
+        if incident.get("mode") in ("pr", "auto"):
+            if not (result.get("category") == "code_bug"
+                    and result.get("confidence") == "high"
+                    and result.get("still_present_in_current_code") == "yes"
+                    and result.get("safe_to_auto_fix") is True):
+                portal_db.mark_remediation_needs_human(
+                    incident_id, project_id,
+                    "The issue did not meet the strict high-confidence, small Python code-fix safety checks.")
+                return True
+            try:
+                work_item = {**incident, "message": event.get("message", ""),
+                             "traceback": event.get("traceback", ""), "incident_id": incident_id}
+                pr = submit_fix_pr(incident, work_item, result, evidence, source_files)
+                if not pr.get("url") or not pr.get("number"):
+                    raise WorkerError("GitHub did not return a pull request link")
+                portal_db.record_remediation(
+                    incident_id, project_id, branch=pr["branch"], file_path=pr["path"],
+                    diff=pr["diff"], pr_url=pr["url"], pr_number=int(pr["number"]),
+                    ci_status=pr.get("ci_status", "pending"))
+                LOG.info("Fix PR opened for incident %s", incident_id)
+            except Exception as exc:
+                safe_message = str(exc) if isinstance(exc, WorkerError) else exc.__class__.__name__
+                portal_db.mark_remediation_needs_human(incident_id, project_id, safe_message)
+                LOG.warning("Fix PR deferred for incident %s (%s)", incident_id, safe_message)
     except ConfigurationError as exc:
         portal_db.fail_diagnosis(incident_id, project_id, str(exc))
         LOG.error("Diagnosis configuration issue for incident %s: %s", incident_id, exc)
@@ -179,15 +201,23 @@ def main() -> None:
     if hasattr(signal, "SIGTERM"):
         signal.signal(signal.SIGTERM, _stop)
     poll_seconds = max(1, int(os.getenv("WORKER_POLL_SECONDS", "5")))
-    LOG.info("Portal diagnosis worker started")
+    LOG.info("Portal incident worker started")
+    next_merge_poll = 0.0
     while not _STOP:
         try:
             worked = process_one()
         except Exception:
             LOG.exception("Worker loop failed")
             worked = False
+        now = time.monotonic()
+        if now >= next_merge_poll and not _STOP:
+            try:
+                process_auto_merges()
+            except Exception:
+                LOG.exception("Auto-merge check failed")
+            next_merge_poll = now + max(15, int(os.getenv("AUTO_MERGE_POLL_SECONDS", "30")))
         if not worked and not _STOP:
-            time.sleep(poll_seconds)
+            time.sleep(min(poll_seconds, 5))
     LOG.info("Portal diagnosis worker stopped")
 
 
