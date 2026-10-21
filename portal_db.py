@@ -260,7 +260,12 @@ def get_or_create_google_user(email: str, google_sub: str, email_verified: bool)
 
 
 def get_user_by_google_sub(google_sub: str):
-    return get_user_by_email(google_sub)
+    conn = get_connection()
+    try:
+        row = _execute(conn, "SELECT * FROM users WHERE id = ?", (google_sub,)).fetchone()
+        return dict(row) if row else None
+    finally:
+        conn.close()
 
 
 def get_user_by_email(email: str):
