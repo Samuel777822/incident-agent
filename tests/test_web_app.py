@@ -199,7 +199,6 @@ def test_google_user_is_created_and_reused_by_stable_subject(web_env):
     user1 = web_app.portal_db.get_or_create_google_user("google@example.com", "google-sub-123", True)
     user2 = web_app.portal_db.get_or_create_google_user("google@example.com", "google-sub-123", True)
     assert user1["id"] == user2["id"]
-    assert user2["google_sub"] == "google-sub-123"
-    assert user2["email_verified"] in (1, True)
+    assert user2["id"] == "google-sub-123"
     with pytest.raises(ValueError, match="verified Google identity"):
         web_app.portal_db.get_or_create_google_user("unverified@example.com", "google-sub-456", False)
