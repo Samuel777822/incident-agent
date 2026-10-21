@@ -26,7 +26,7 @@ from urllib.request import Request as UrlRequest, urlopen
 from wsgiref.simple_server import WSGIServer, make_server
 
 import portal_db
-from monitoring_installer import GitHubInstallError, open_monitoring_pr
+from monitoring_installer import GitHubInstallError, open_monitoring_pr, validate_repository_access
 
 APP_NAME = "Agent Daemon"
 SESSION_COOKIE = "agent_session"
@@ -400,6 +400,10 @@ def _page_new_project(request):
     except RuntimeError as exc:
         return _response(f"<div class='alert'>{_escape(exc)}. Set it before connecting projects.</div>", request, "503 Service Unavailable")
     owner, repo = repo_match.group(1), repo_match.group(2)
+    try:
+        validate_repository_access(owner=owner, repo=repo.removesuffix(".git"), token=token)
+    except GitHubInstallError as exc:
+        return _response(f"<div class='alert'>{_escape(exc)}</div>", request, "400 Bad Request")
     ingest_key = secrets.token_urlsafe(32)
     ingest_hash = hashlib.sha256(ingest_key.encode()).hexdigest()
     project_id = portal_db.create_project(request.session["user_id"], name=name,
@@ -440,7 +444,7 @@ def _page_project(request, project_id):
     paused = bool(project["paused"])
     button = ("Resume agent" if paused else "Pause agent")
     install_card = (f"<article class='card'><h3>Monitoring pull request</h3><p class='muted'>Review the opt-in helper and merge it when ready.</p><a class='button primary' href='{_escape(project['install_pr_url'])}'>View installation PR</a></article>" if project.get("install_pr_url") else f"<article class='card'><h3>Install monitoring</h3><p class='muted'>Open a pull request with the opt-in Python error reporting helper. Secrets are not added to the repository.</p><form method='post' action='/projects/{_escape(project_id)}/install'><input type='hidden' name='csrf' value='{_escape(_csrf(request))}'><button class='button primary' type='submit'>Open monitoring PR</button></form></article>")
-    body = f"<section class='section'><p><a href='/dashboard'>← Projects</a></p><div class='row'><div><div class='eyebrow'>Project</div><h1>{_escape(project['name'])}</h1><p class='muted'><a href='https://github.com/{_escape(project['repo_owner'])}/{_escape(project['repo_name'])}'>{_escape(project['repo_owner'])}/{_escape(project['repo_name'])}</a> · {_escape(project['branch'])} · {_escape(project['mode']).title()} mode</p></div><form method='post'><input type='hidden' name='csrf' value='{_escape(_csrf(request))}'><input type='hidden' name='paused' value='{'no' if paused else 'yes'}'><button class='button {'primary' if paused else 'danger'}' type='submit'>{button}</button></form></div><div class='stats'><span class='pill {'amber' if paused else 'green'}'>{'Paused' if paused else _escape(project['status'].replace('_',' ').title())}</span><span class='pill'>Mode · {_escape(project['mode'])}</span></div><h2>Incident history</h2>{table}<section class='grid'>{install_card}<article class='card'><h3>Ingest key</h3><p class='muted'>Rotate the project key if it is exposed. The new key appears once.</p><form method='post' action='/projects/{_escape(project_id)}/rotate-key'><input type='hidden' name='csrf' value='{_escape(_csrf(request))}'><button class='button' type='submit'>Rotate key</button></form></article><article class='card'><h3>Delete project data</h3><p class='muted'>Remove this project, its incidents, logs, fixes, and stored GitHub token.</p><form method='post' action='/projects/{_escape(project_id)}/delete'><input type='hidden' name='csrf' value='{_escape(_csrf(request))}'><div class='field'><label>Type DELETE to confirm</label><input name='confirm' required autocomplete='off'></div><button class='button danger' type='submit'>Delete project</button></form></article></section></section>"
+    body = f"<section class='section'><p><a href='/dashboard'>← Projects</a></p><div class='row'><div><div class='eyebrow'>Project</div><h1>{_escape(project['name'])}</h1><p class='muted'><a href='https://github.com/{_escape(project['repo_owner'])}/{_escape(project['repo_name'])}'>{_escape(project['repo_owner'])}/{_escape(project['repo_name'])}</a> · {_escape(project['branch'])} · {_escape(project['mode']).title()} mode</p></div><form method='post'><input type='hidden' name='csrf' value='{_escape(_csrf(request))}'><input type='hidden' name='paused' value='{'no' if paused else 'yes'}'><button class='button {'primary' if paused else 'danger'}' type='submit'>{button}</button></form></div><div class='stats'><span class='pill {'amber' if paused else 'green'}'>{'Paused' if paused else _escape(project['status'].replace('_',' ').title())}</span><span class='pill'>Mode · {_escape(project['mode'])}</span></div><h2>Incident history</h2>{table}<section class='grid'>{install_card}<article class='card'><h3>Update GitHub token</h3><p class='muted'>Use a token authorized for this repository with Contents and Pull requests read/write access. The new token replaces the saved one and is never shown again.</p><form method='post' action='/projects/{_escape(project_id)}/github-token'><input type='hidden' name='csrf' value='{_escape(_csrf(request))}'><div class='field'><label>New GitHub token</label><input name='github_token' type='password' autocomplete='new-password' required minlength='20' maxlength='500'></div><button class='button primary' type='submit'>Validate and save token</button></form></article><article class='card'><h3>Ingest key</h3><p class='muted'>Rotate the project key if it is exposed. The new key appears once.</p><form method='post' action='/projects/{_escape(project_id)}/rotate-key'><input type='hidden' name='csrf' value='{_escape(_csrf(request))}'><button class='button' type='submit'>Rotate key</button></form></article><article class='card'><h3>Delete project data</h3><p class='muted'>Remove this project, its incidents, logs, fixes, and stored GitHub token.</p><form method='post' action='/projects/{_escape(project_id)}/delete'><input type='hidden' name='csrf' value='{_escape(_csrf(request))}'><div class='field'><label>Type DELETE to confirm</label><input name='confirm' required autocomplete='off'></div><button class='button danger' type='submit'>Delete project</button></form></article></section></section>"
     return _response(body, request)
 
 
@@ -465,6 +469,32 @@ def _page_install_monitoring(request, project_id):
         return _response("<h1>Project not found</h1>", request, "404 Not Found")
     portal_db.audit(project_id, "monitoring_pr_opened", {"pr_url": result["url"], "pr_number": result["number"]})
     return _redirect(f"/projects/{project_id}")
+
+
+def _page_update_github_token(request, project_id):
+    gate = _require_access(request)
+    if gate:
+        return gate
+    if request.method != "POST" or not _csrf_valid(request):
+        return _response("<div class='alert'>Request expired or invalid.</div>", request, "403 Forbidden")
+    user_id = request.session["user_id"]
+    project = portal_db.get_project(project_id, user_id)
+    if not project:
+        return _response("<h1>Project not found</h1>", request, "404 Not Found")
+    token = request.form.get("github_token", "").strip()
+    if len(token) < 20 or len(token) > 500:
+        return _response("<div class='alert'>Enter the complete GitHub token.</div><p><a href='/projects/" + _escape(project_id) + "'>Back to project</a></p>", request, "400 Bad Request")
+    try:
+        validate_repository_access(owner=project["repo_owner"], repo=project["repo_name"], token=token)
+        ciphertext = _encrypt_token(token)
+    except GitHubInstallError as exc:
+        return _response(f"<div class='alert'>{_escape(exc)}</div><p><a href='/projects/{_escape(project_id)}'>Back to project</a></p>", request, "400 Bad Request")
+    except RuntimeError as exc:
+        return _response(f"<div class='alert'>{_escape(exc)}</div>", request, "503 Service Unavailable")
+    if not portal_db.update_project_github_token(project_id, user_id, ciphertext):
+        return _response("<h1>Project not found</h1>", request, "404 Not Found")
+    portal_db.audit(project_id, "github_token_updated", {"repository": f"{project['repo_owner']}/{project['repo_name']}"})
+    return _response("<div class='pill green'>GitHub token validated and updated. You can retry the monitoring pull request.</div><p><a class='button primary' href='/projects/" + _escape(project_id) + "'>Back to project</a></p>", request)
 
 
 def _page_rotate_ingest_key(request, project_id):
@@ -780,6 +810,9 @@ def _dispatch(request: Request) -> Response:
         return _page_heartbeat(request)
     if request.path == "/projects/new":
         return _page_new_project(request)
+    match = re.fullmatch(r"/projects/([0-9a-f-]{36})/github-token", request.path)
+    if match:
+        return _page_update_github_token(request, match.group(1))
     match = re.fullmatch(r"/projects/([0-9a-f-]{36})/rotate-key", request.path)
     if match:
         return _page_rotate_ingest_key(request, match.group(1))
