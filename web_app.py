@@ -627,9 +627,8 @@ def _razorpay_settings(plan: str = "yearly"):
         raise RuntimeError("Live mode requires a Razorpay live key beginning with rzp_live_")
     if mode not in ("test", "live") or not secret:
         raise RuntimeError("Configure Razorpay mode and key credentials")
-    legacy = os.getenv("RAZORPAY_AMOUNT_PAISE", "").strip()
     name = "RAZORPAY_MONTHLY_AMOUNT_PAISE" if plan == "monthly" else "RAZORPAY_YEARLY_AMOUNT_PAISE"
-    amount = os.getenv(name, "").strip() or (legacy if plan == "yearly" and legacy else ("10000" if plan == "monthly" else "100000"))
+    amount = os.getenv(name, "").strip() or ("10000" if plan == "monthly" else "100000")
     try:
         amount_paise = int(amount)
     except ValueError as exc:
