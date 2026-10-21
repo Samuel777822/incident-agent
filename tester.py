@@ -10,6 +10,7 @@ SECRET_VARS = ("GITHUB_TOKEN", "GROQ_API_KEY", "RENDER_API_KEY")
 
 @dataclass(frozen=True)
 class TestResult:
+    __test__ = False
     passed: bool
     output: str
     return_code: int
