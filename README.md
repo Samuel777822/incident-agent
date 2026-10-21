@@ -149,3 +149,34 @@ Useful modules:
 | `patcher.py`, `autofix.py`, `pr.py` | Constrained patch and CI-gated pull request workflow |
 | `agent_daemon.py`, `workflows.py` | Legacy local daemon and one-shot pipeline |
 
+
+
+## Manual UPI QR subscription flow (current status: unverified)
+
+The portal currently has a manual UPI payment submission path. Monthly is ₹100 for 30 days; yearly is ₹1,000 for 365 days. The customer page builds a UPI intent link and a QR image using the configured recipient UPI ID `7975291636@ptsbi`. On a compatible mobile device, the **Open UPI app** link attempts to launch an app registered for `upi://`; the QR is intended for scanning from another device. Device/browser support for UPI deep links varies, and the QR image provider is external.
+
+**Important:** this is not automatic payment verification. A static UPI QR does not send payment confirmation to this portal. The customer can submit a transaction/reference ID, but the app cannot prove that money was actually paid from that text alone. An administrator must independently check the transaction in the UPI/bank app before approving access. Do not describe this as automatic payment confirmation or automatically grant access based only on the submitted form. Do not use the reference ID alone as proof of payment.
+
+The admin payment queue has actions for **Grant 1 Month**, **Grant 1 Year**, and **Reject**. The latest corrective change validates that the selected grant duration matches the payment request's selected plan and amount. The general customer-access list was also changed so an active account shows **Revoke access** and an inactive account shows **Grant access**, rather than showing both actions at once. Trial requests remain a separate flow; a trial request is not active until an administrator approves it, and approval grants one day.
+
+The payment submission page tells customers to expect manual review (usually 1–2 hours), but this is an expectation rather than a guaranteed SLA. Admin and customer email delivery depends on correctly configured SMTP secrets in Render and still requires real inbox testing.
+
+### Known gaps and required verification
+
+- No verified gateway webhook or bank/UPI API is connected to confirm a static QR payment automatically.
+- Do not assume the QR/deep-link opens successfully on every Android browser or UPI app; test on real devices and verify the recipient and amount displayed by the UPI app before payment.
+- Email delivery to both administrator inboxes and customer decision emails has not been confirmed end to end.
+- The user reports that tests are failing. This repository snapshot has not been independently test-run as part of the manual UPI change; identify and fix the failing tests before relying on the release.
+- The live Render deployment and the production customer/admin flows must be checked after deployment; a GitHub merge is not proof that Render deployed successfully or that the app works.
+- The customer navigation currently has both **Dashboard** and **Access** destinations reported by the user as leading to the same or confusing experience. Inspect the route definitions and templates before deciding which one should be removed or repurposed.
+- The administrator workspace still needs a full UX and end-to-end audit. Avoid repeated/contradictory grant/revoke controls and verify that every state change updates the displayed state immediately after reload.
+- Customer monitoring, connected-project health, incident and fix/PR states, and human-review actions need an end-to-end check against actual project data rather than being treated as complete because a screen renders.
+
+### Suggested verification order
+
+1. Run the complete existing test suite and capture the exact failing test names, stack traces, and environment.
+2. Add/repair focused tests for payment page rendering, QR/deep-link amount and recipient, invalid and duplicate transaction references, pending state, plan/amount mismatch, admin approval/rejection, access expiry, and trial approval.
+3. Test email sending with the actual Render SMTP settings and confirm receipt in both admin inboxes and a customer inbox.
+4. Test sign-in, Dashboard vs Access navigation, trial request/approval, payment submission, admin verification, one-month/year access, revoke, and customer-visible status on the live deployment.
+5. Only then mark the release as verified.
+
