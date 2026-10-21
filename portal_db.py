@@ -1,0 +1,498 @@
+"""Persistence for the multi-project Agent Daemon web application.
+
+The same schema works with SQLite for local development and PostgreSQL in
+hosted deployments. Set DATABASE_URL to a PostgreSQL URL in production.
+"""
+
+from __future__ import annotations
+
+import hashlib
+import json
+import os
+import sqlite3
+import uuid
+from datetime import datetime, timedelta, timezone
+from pathlib import Path
+
+SCHEMA = """
+CREATE TABLE IF NOT EXISTS users (
+  id TEXT PRIMARY KEY,
+  email TEXT NOT NULL UNIQUE,
+  password_hash TEXT NOT NULL,
+  created_at TEXT NOT NULL
+);
+CREATE TABLE IF NOT EXISTS sessions (
+  id TEXT PRIMARY KEY,
+  user_id TEXT NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+  csrf_token TEXT NOT NULL,
+  expires_at TEXT NOT NULL,
+  created_at TEXT NOT NULL
+);
+CREATE TABLE IF NOT EXISTS projects (
+  id TEXT PRIMARY KEY,
+  user_id TEXT NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+  name TEXT NOT NULL,
+  repo_owner TEXT NOT NULL,
+  repo_name TEXT NOT NULL,
+  branch TEXT NOT NULL DEFAULT 'main',
+  mode TEXT NOT NULL DEFAULT 'pr',
+  github_token_ciphertext TEXT NOT NULL,
+  ingest_key_hash TEXT NOT NULL UNIQUE,
+  app_url TEXT NOT NULL DEFAULT '',
+  status TEXT NOT NULL DEFAULT 'pending_install',
+  install_pr_url TEXT NOT NULL DEFAULT '',
+  paused INTEGER NOT NULL DEFAULT 0,
+  active_until TEXT,
+  created_at TEXT NOT NULL
+);
+CREATE TABLE IF NOT EXISTS log_events (
+  id TEXT PRIMARY KEY,
+  project_id TEXT NOT NULL REFERENCES projects(id) ON DELETE CASCADE,
+  timestamp TEXT NOT NULL,
+  level TEXT NOT NULL,
+  message TEXT NOT NULL,
+  traceback TEXT NOT NULL DEFAULT '',
+  signature TEXT NOT NULL,
+  dedupe_hash TEXT NOT NULL,
+  incident_id TEXT,
+  UNIQUE(project_id, dedupe_hash)
+);
+CREATE TABLE IF NOT EXISTS incidents (
+  id TEXT PRIMARY KEY,
+  project_id TEXT NOT NULL REFERENCES projects(id) ON DELETE CASCADE,
+  signature TEXT NOT NULL,
+  status TEXT NOT NULL DEFAULT 'diagnosing',
+  category TEXT NOT NULL DEFAULT '',
+  confidence TEXT NOT NULL DEFAULT '',
+  occurrences INTEGER NOT NULL DEFAULT 1,
+  first_seen TEXT NOT NULL,
+  last_seen TEXT NOT NULL,
+  root_cause TEXT NOT NULL DEFAULT '',
+  report TEXT NOT NULL DEFAULT '',
+  pr_url TEXT NOT NULL DEFAULT '',
+  pr_number INTEGER,
+  ci_status TEXT NOT NULL DEFAULT 'unknown',
+  created_at TEXT NOT NULL,
+  resolved_at TEXT
+);
+CREATE TABLE IF NOT EXISTS fixes (
+  id TEXT PRIMARY KEY,
+  incident_id TEXT NOT NULL REFERENCES incidents(id) ON DELETE CASCADE,
+  branch TEXT NOT NULL DEFAULT '',
+  file_path TEXT NOT NULL DEFAULT '',
+  diff TEXT NOT NULL DEFAULT '',
+  ci_result TEXT NOT NULL DEFAULT 'pending',
+  merged_at TEXT,
+  reverted_at TEXT,
+  created_at TEXT NOT NULL
+);
+CREATE TABLE IF NOT EXISTS payments (
+  id TEXT PRIMARY KEY,
+  user_id TEXT NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+  razorpay_payment_id TEXT NOT NULL UNIQUE,
+  amount INTEGER NOT NULL,
+  status TEXT NOT NULL,
+  created_at TEXT NOT NULL
+);
+CREATE TABLE IF NOT EXISTS subscriptions (
+  user_id TEXT PRIMARY KEY REFERENCES users(id) ON DELETE CASCADE,
+  active_until TEXT NOT NULL,
+  updated_at TEXT NOT NULL
+);
+CREATE TABLE IF NOT EXISTS payment_orders (
+  id TEXT PRIMARY KEY,
+  user_id TEXT NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+  razorpay_order_id TEXT NOT NULL UNIQUE,
+  amount INTEGER NOT NULL,
+  status TEXT NOT NULL DEFAULT 'created',
+  created_at TEXT NOT NULL
+);
+CREATE TABLE IF NOT EXISTS audit_log (
+  id TEXT PRIMARY KEY,
+  project_id TEXT NOT NULL REFERENCES projects(id) ON DELETE CASCADE,
+  action TEXT NOT NULL,
+  detail TEXT NOT NULL DEFAULT '{}',
+  created_at TEXT NOT NULL
+);
+CREATE TABLE IF NOT EXISTS login_attempts (
+  attempt_key TEXT PRIMARY KEY,
+  window_started TEXT NOT NULL,
+  attempts INTEGER NOT NULL DEFAULT 0
+);
+CREATE TABLE IF NOT EXISTS ingest_limits (
+  project_id TEXT PRIMARY KEY REFERENCES projects(id) ON DELETE CASCADE,
+  window_started TEXT NOT NULL,
+  request_count INTEGER NOT NULL DEFAULT 0
+);
+CREATE INDEX IF NOT EXISTS idx_projects_user ON projects(user_id);
+CREATE INDEX IF NOT EXISTS idx_incidents_project_seen ON incidents(project_id, last_seen);
+CREATE INDEX IF NOT EXISTS idx_log_events_project_time ON log_events(project_id, timestamp);
+CREATE INDEX IF NOT EXISTS idx_audit_project_time ON audit_log(project_id, created_at);
+"""
+
+
+def _now() -> str:
+    return datetime.now(timezone.utc).isoformat(timespec="seconds")
+
+
+def _id() -> str:
+    return str(uuid.uuid4())
+
+
+def _database_url() -> str:
+    return os.getenv("DATABASE_URL", "").strip()
+
+
+def get_connection():
+    """Open one short-lived connection; production must provide PostgreSQL."""
+    url = _database_url()
+    if url.startswith(("postgres://", "postgresql://")):
+        try:
+            import psycopg
+            from psycopg.rows import dict_row
+        except ImportError as exc:
+            raise RuntimeError("PostgreSQL support requires psycopg; install requirements.txt") from exc
+        return psycopg.connect(url, row_factory=dict_row, connect_timeout=10)
+    if os.getenv("APP_ENV", "development").lower() == "production":
+        raise RuntimeError("DATABASE_URL must point to PostgreSQL in production")
+    path = os.getenv("PORTAL_DB_PATH", "portal.db")
+    conn = sqlite3.connect(path, timeout=20)
+    conn.row_factory = sqlite3.Row
+    conn.execute("PRAGMA foreign_keys = ON")
+    conn.execute("PRAGMA busy_timeout = 5000")
+    return conn
+
+
+def _execute(conn, sql: str, params=()):
+    if isinstance(conn, sqlite3.Connection):
+        return conn.execute(sql, params)
+    return conn.execute(sql.replace("?", "%s"), params)
+
+
+def init_db() -> None:
+    conn = get_connection()
+    try:
+        for statement in SCHEMA.split(";"):
+            if statement.strip():
+                _execute(conn, statement)
+        if isinstance(conn, sqlite3.Connection):
+            columns = {row[1] for row in conn.execute("PRAGMA table_info(projects)").fetchall()}
+            if "install_pr_url" not in columns:
+                conn.execute("ALTER TABLE projects ADD COLUMN install_pr_url TEXT NOT NULL DEFAULT ''")
+        else:
+            _execute(conn, "ALTER TABLE projects ADD COLUMN IF NOT EXISTS install_pr_url TEXT NOT NULL DEFAULT ''")
+        conn.commit()
+    finally:
+        conn.close()
+
+
+def create_user(email: str, password_hash: str) -> str:
+    user_id = _id()
+    conn = get_connection()
+    try:
+        _execute(conn, "INSERT INTO users(id,email,password_hash,created_at) VALUES(?,?,?,?)",
+                 (user_id, email.lower().strip(), password_hash, _now()))
+        conn.commit()
+        return user_id
+    finally:
+        conn.close()
+
+
+def get_user_by_email(email: str):
+    conn = get_connection()
+    try:
+        row = _execute(conn, "SELECT * FROM users WHERE email = ?", (email.lower().strip(),)).fetchone()
+        return dict(row) if row else None
+    finally:
+        conn.close()
+
+
+def create_session(user_id: str, csrf_token: str, expires_at: str) -> str:
+    session_id = _id()
+    conn = get_connection()
+    try:
+        _execute(conn, "INSERT INTO sessions(id,user_id,csrf_token,expires_at,created_at) VALUES(?,?,?,?,?)",
+                 (session_id, user_id, csrf_token, expires_at, _now()))
+        conn.commit()
+        return session_id
+    finally:
+        conn.close()
+
+
+def get_session(session_id: str):
+    conn = get_connection()
+    try:
+        row = _execute(conn,
+            "SELECT s.*,u.email FROM sessions s JOIN users u ON u.id=s.user_id WHERE s.id=? AND s.expires_at>?",
+            (session_id, _now())).fetchone()
+        return dict(row) if row else None
+    finally:
+        conn.close()
+
+
+def delete_session(session_id: str) -> None:
+    conn = get_connection()
+    try:
+        _execute(conn, "DELETE FROM sessions WHERE id=?", (session_id,))
+        conn.commit()
+    finally:
+        conn.close()
+
+
+def check_login_rate_limit(key: str, maximum: int = 8, window_seconds: int = 900) -> bool:
+    """Return True when another login attempt is allowed for this key."""
+    now = datetime.now(timezone.utc)
+    conn = get_connection()
+    try:
+        row = _execute(conn, "SELECT window_started,attempts FROM login_attempts WHERE attempt_key=?", (key,)).fetchone()
+        if row:
+            started = datetime.fromisoformat(row["window_started"])
+            if (now - started).total_seconds() < window_seconds:
+                if row["attempts"] >= maximum:
+                    return False
+                _execute(conn, "UPDATE login_attempts SET attempts=attempts+1 WHERE attempt_key=?", (key,))
+            else:
+                _execute(conn, "UPDATE login_attempts SET window_started=?,attempts=1 WHERE attempt_key=?", (now.isoformat(timespec="seconds"), key))
+        else:
+            _execute(conn, "INSERT INTO login_attempts(attempt_key,window_started,attempts) VALUES(?,?,1)",
+                     (key, now.isoformat(timespec="seconds")))
+        conn.commit()
+        return True
+    finally:
+        conn.close()
+
+
+def create_project(user_id: str, *, name: str, repo_owner: str, repo_name: str,
+                   branch: str, mode: str, token_ciphertext: str, ingest_key_hash: str,
+                   app_url: str = "") -> str:
+    project_id = _id()
+    conn = get_connection()
+    try:
+        subscription = _execute(conn, "SELECT active_until FROM subscriptions WHERE user_id=?", (user_id,)).fetchone()
+        active_until = subscription["active_until"] if subscription else None
+        _execute(conn, """INSERT INTO projects
+          (id,user_id,name,repo_owner,repo_name,branch,mode,github_token_ciphertext,
+           ingest_key_hash,app_url,active_until,created_at)
+          VALUES(?,?,?,?,?,?,?,?,?,?,?,?)""",
+          (project_id,user_id,name,repo_owner,repo_name,branch,mode,token_ciphertext,
+           ingest_key_hash,app_url,active_until,_now()))
+        conn.commit()
+        return project_id
+    finally:
+        conn.close()
+
+
+def get_project(project_id: str, user_id: str):
+    """Every project read includes its owner in the query."""
+    conn = get_connection()
+    try:
+        row = _execute(conn, "SELECT * FROM projects WHERE id=? AND user_id=?", (project_id,user_id)).fetchone()
+        return dict(row) if row else None
+    finally:
+        conn.close()
+
+
+def list_projects(user_id: str):
+    conn = get_connection()
+    try:
+        rows = _execute(conn, "SELECT * FROM projects WHERE user_id=? ORDER BY created_at DESC", (user_id,)).fetchall()
+        return [dict(row) for row in rows]
+    finally:
+        conn.close()
+
+
+def get_project_by_ingest_hash(key_hash: str):
+    conn = get_connection()
+    try:
+        row = _execute(conn, "SELECT id,user_id,name,repo_owner,repo_name,branch,mode,status,paused FROM projects WHERE ingest_key_hash=?", (key_hash,)).fetchone()
+        return dict(row) if row else None
+    finally:
+        conn.close()
+
+
+def rotate_project_ingest_key(project_id: str, user_id: str, key_hash: str) -> bool:
+    conn = get_connection()
+    try:
+        cur = _execute(conn, "UPDATE projects SET ingest_key_hash=? WHERE id=? AND user_id=?",
+                        (key_hash,project_id,user_id))
+        conn.commit()
+        return cur.rowcount == 1
+    finally:
+        conn.close()
+
+
+def delete_project(project_id: str, user_id: str) -> bool:
+    conn = get_connection()
+    try:
+        cur = _execute(conn, "DELETE FROM projects WHERE id=? AND user_id=?", (project_id,user_id))
+        conn.commit()
+        return cur.rowcount == 1
+    finally:
+        conn.close()
+
+
+def set_project_connected(project_id: str) -> None:
+    conn = get_connection()
+    try:
+        _execute(conn, "UPDATE projects SET status='connected' WHERE id=?", (project_id,))
+        conn.commit()
+    finally:
+        conn.close()
+
+
+def record_install_pr(project_id: str, user_id: str, pr_url: str) -> bool:
+    conn = get_connection()
+    try:
+        cur = _execute(conn, "UPDATE projects SET status='install_pr_open',install_pr_url=? WHERE id=? AND user_id=?",
+                       (pr_url, project_id, user_id))
+        conn.commit()
+        return cur.rowcount == 1
+    finally:
+        conn.close()
+
+
+def allow_ingest(project_id: str, maximum: int = 300, window_seconds: int = 60) -> bool:
+    """Atomic per-project sliding window counter for the ingest endpoint."""
+    now = datetime.now(timezone.utc)
+    conn = get_connection()
+    try:
+        if isinstance(conn, sqlite3.Connection):
+            conn.execute("BEGIN IMMEDIATE")
+        _execute(conn, "INSERT INTO ingest_limits(project_id,window_started,request_count) VALUES(?,?,0) ON CONFLICT(project_id) DO NOTHING",
+                 (project_id,now.isoformat(timespec="seconds")))
+        lock = " FOR UPDATE" if not isinstance(conn, sqlite3.Connection) else ""
+        row = _execute(conn, "SELECT window_started,request_count FROM ingest_limits WHERE project_id=?" + lock,
+                       (project_id,)).fetchone()
+        if not row:
+            conn.rollback()
+            return False
+        started = datetime.fromisoformat(row["window_started"])
+        count = int(row["request_count"])
+        if (now - started).total_seconds() >= window_seconds:
+            _execute(conn, "UPDATE ingest_limits SET window_started=?,request_count=1 WHERE project_id=?",
+                     (now.isoformat(timespec="seconds"),project_id))
+            allowed = True
+        elif count >= maximum:
+            allowed = False
+        else:
+            _execute(conn, "UPDATE ingest_limits SET request_count=request_count+1 WHERE project_id=?", (project_id,))
+            allowed = True
+        conn.commit()
+        return allowed
+    except Exception:
+        conn.rollback()
+        raise
+    finally:
+        conn.close()
+
+
+def ingest_event(project_id: str, *, timestamp: str, level: str, message: str,
+                 traceback: str = "", signature: str = "unknown") -> tuple[str | None, bool]:
+    """Deduplicate and attach an event to a project-scoped open incident."""
+    digest = hashlib.sha256("\0".join((timestamp, level, message, traceback)).encode("utf-8")).hexdigest()
+    conn = get_connection()
+    try:
+        event_id = _id()
+        cur = _execute(conn, """INSERT INTO log_events
+          (id,project_id,timestamp,level,message,traceback,signature,dedupe_hash)
+          VALUES(?,?,?,?,?,?,?,?) ON CONFLICT(project_id,dedupe_hash) DO NOTHING""",
+          (event_id,project_id,timestamp,level,message,traceback,signature,digest))
+        if cur.rowcount == 0:
+            conn.commit()
+            return None, False
+        row = _execute(conn, """SELECT id,occurrences FROM incidents
+          WHERE project_id=? AND signature=? AND status NOT IN ('resolved','reverted')
+          ORDER BY created_at DESC LIMIT 1""", (project_id,signature)).fetchone()
+        if row:
+            incident_id = row["id"]
+            _execute(conn, "UPDATE incidents SET occurrences=occurrences+1,last_seen=? WHERE id=? AND project_id=?",
+                     (timestamp,incident_id,project_id))
+        else:
+            incident_id = _id()
+            _execute(conn, """INSERT INTO incidents
+              (id,project_id,signature,first_seen,last_seen,created_at)
+              VALUES(?,?,?,?,?,?)""", (incident_id,project_id,signature,timestamp,timestamp,_now()))
+        _execute(conn, "UPDATE log_events SET incident_id=? WHERE id=? AND project_id=?",
+                 (incident_id,event_id,project_id))
+        conn.commit()
+        return incident_id, True
+    except Exception:
+        conn.rollback()
+        raise
+    finally:
+        conn.close()
+
+
+def list_incidents(project_id: str, limit: int = 100):
+    conn = get_connection()
+    try:
+        rows = _execute(conn, "SELECT * FROM incidents WHERE project_id=? ORDER BY last_seen DESC LIMIT ?",
+                        (project_id,limit)).fetchall()
+        return [dict(row) for row in rows]
+    finally:
+        conn.close()
+
+
+def audit(project_id: str, action: str, detail: dict | None = None) -> None:
+    conn = get_connection()
+    try:
+        _execute(conn,"INSERT INTO audit_log(id,project_id,action,detail,created_at) VALUES(?,?,?,?,?)",
+                 (_id(),project_id,action,json.dumps(detail or {},sort_keys=True),_now()))
+        conn.commit()
+    finally:
+        conn.close()
+
+
+def create_payment_order(user_id: str, order_id: str, amount: int) -> None:
+    conn = get_connection()
+    try:
+        _execute(conn, "INSERT INTO payment_orders(id,user_id,razorpay_order_id,amount,status,created_at) VALUES(?,?,?,?,?,?)",
+                 (_id(),user_id,order_id,amount,"created",_now()))
+        conn.commit()
+    finally:
+        conn.close()
+
+
+def complete_payment_order(order_id: str, payment_id: str, amount: int) -> bool:
+    """Record a verified capture once and extend only that user's projects."""
+    conn = get_connection()
+    try:
+        order = _execute(conn, "SELECT user_id,amount,status FROM payment_orders WHERE razorpay_order_id=?", (order_id,)).fetchone()
+        if not order or int(order["amount"]) != int(amount) or order["status"] == "paid":
+            return False
+        now = datetime.now(timezone.utc)
+        subscription = _execute(conn, "SELECT active_until FROM subscriptions WHERE user_id=?", (order["user_id"],)).fetchone()
+        existing_until = datetime.fromisoformat(subscription["active_until"]) if subscription else now
+        if existing_until.tzinfo is None:
+            existing_until = existing_until.replace(tzinfo=timezone.utc)
+        until = (max(now, existing_until) + timedelta(days=365)).isoformat(timespec="seconds")
+        cur = _execute(conn, "INSERT INTO payments(id,user_id,razorpay_payment_id,amount,status,created_at) VALUES(?,?,?,?,?,?) ON CONFLICT(razorpay_payment_id) DO NOTHING",
+                       (_id(),order["user_id"],payment_id,int(amount),"captured",now.isoformat(timespec="seconds")))
+        if cur.rowcount == 0:
+            conn.commit()
+            return False
+        _execute(conn, "UPDATE payment_orders SET status='paid' WHERE razorpay_order_id=?", (order_id,))
+        _execute(conn, "INSERT INTO subscriptions(user_id,active_until,updated_at) VALUES(?,?,?) ON CONFLICT(user_id) DO UPDATE SET active_until=excluded.active_until,updated_at=excluded.updated_at",
+                 (order["user_id"],until,now.isoformat(timespec="seconds")))
+        _execute(conn, "UPDATE projects SET active_until=? WHERE user_id=?", (until,order["user_id"]))
+        project_rows = _execute(conn, "SELECT id FROM projects WHERE user_id=?", (order["user_id"],)).fetchall()
+        detail = json.dumps({"payment_id":payment_id,"active_until":until})
+        for project in project_rows:
+            _execute(conn, "INSERT INTO audit_log(id,project_id,action,detail,created_at) VALUES(?,?,?,?,?)",
+                     (_id(),project["id"],"subscription_activated",detail,now.isoformat(timespec="seconds")))
+        conn.commit()
+        return True
+    except Exception:
+        conn.rollback()
+        raise
+    finally:
+        conn.close()
+
+
+def get_subscription_active_until(user_id: str):
+    conn = get_connection()
+    try:
+        row = _execute(conn, "SELECT active_until FROM subscriptions WHERE user_id=?", (user_id,)).fetchone()
+        return row["active_until"] if row else None
+    finally:
+        conn.close()
