@@ -205,7 +205,7 @@ def _password_matches(password: str, stored: str) -> bool:
 
 
 def _form(title: str, intro: str, fields: str, action: str, submit: str, csrf: str) -> str:
-    return f"<section class='card form-card'><h1>{title}</h1><p class='muted'>{intro}</p>{fields}<form method='post' action='{action}'><input type='hidden' name='csrf' value='{_escape(csrf)}'>{submit}</form></section>"
+    return f"<section class='card form-card'><h1>{title}</h1><p class='muted'>{intro}</p><form method='post' action='{action}'><input type='hidden' name='csrf' value='{_escape(csrf)}'>{fields}{submit}</form></section>"
 
 
 def _page_home(request):
