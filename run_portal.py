@@ -24,11 +24,11 @@ def _start():
     if env.get("PORTAL_RUN_WORKER", "1").strip() != "0":
         children["incident-worker"] = subprocess.Popen([sys.executable, "portal_worker.py"], env=env)
     children["web"] = subprocess.Popen([
-            "gunicorn", "--preload", "--bind", f"0.0.0.0:{port}",
-            "--workers", workers, "--threads", threads, "--timeout", "120",
-            "wsgi:application",
-        ], env=env),
-    }
+        "gunicorn", "--preload", "--bind", f"0.0.0.0:{port}",
+        "--workers", workers, "--threads", threads, "--timeout", "120",
+        "wsgi:application",
+    ], env=env)
+    return children
 
 
 def _stop_children(children):
