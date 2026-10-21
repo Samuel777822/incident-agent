@@ -64,7 +64,7 @@ def _repository_evidence(project: dict, traceback: str) -> str:
     source_files = {}
     excluded = {".git", ".github", "tests", "test", "venv", ".venv", "node_modules"}
     try:
-        with httpx.Client(headers=headers, timeout=httpx.Timeout(25, connect=10), follow_redirects=False) as client:
+        with httpx.Client(headers=headers, timeout=httpx.Timeout(15, connect=8), follow_redirects=False) as client:
             tree_response = client.get(f"{api}/git/trees/{quote(branch, safe='')}?recursive=1")
             if tree_response.status_code == 404:
                 raise WorkerError("Repository or selected branch was not found")
@@ -94,7 +94,7 @@ def _repository_evidence(project: dict, traceback: str) -> str:
             frame_names = {path.replace("\\", "/").split("/")[-1] for path in frame_basenames}
             py_paths.sort(key=lambda p: (0 if p.split("/")[-1] in frame_names else 1,
                                          0 if p.endswith(".py") else 1, len(p), p))
-            selected = py_paths[:40]
+            selected = py_paths[:20]
             total = 0
             for path in selected:
                 response = client.get(f"{api}/contents/{quote(path, safe='/')}?ref={quote(branch, safe='')}")

@@ -484,13 +484,25 @@ def claim_next_incident(*, min_occurrences: int = 5, min_age_seconds: int = 30,
             lock_clause = ""
         else:
             lock_clause = " FOR UPDATE OF j SKIP LOCKED"
+        exhausted = _execute(conn, """SELECT j.incident_id,i.project_id FROM incident_jobs j
+          JOIN incidents i ON i.id=j.incident_id
+          WHERE j.status='processing' AND j.locked_until<=? AND j.attempts>=? AND i.status='processing'""" + lock_clause,
+          (now_s,max_attempts)).fetchall()
+        for stale in exhausted:
+            detail = json.dumps({"incident_id":stale["incident_id"],"error":"Worker lease expired after max attempts","terminal":True},sort_keys=True)
+            _execute(conn, "UPDATE incident_jobs SET status='failed',locked_until=NULL,last_error=?,updated_at=? WHERE incident_id=?",
+                     ("Worker lease expired after max attempts",now_s,stale["incident_id"]))
+            _execute(conn, "UPDATE incidents SET status='needs_human' WHERE id=? AND project_id=? AND status='processing'",
+                     (stale["incident_id"],stale["project_id"]))
+            _execute(conn, "INSERT INTO audit_log(id,project_id,action,detail,created_at) VALUES(?,?,?,?,?)",
+                     (_id(),stale["project_id"],"diagnosis_failed",detail,now_s))
         row = _execute(conn, """SELECT j.incident_id,j.attempts,i.project_id,i.signature,i.occurrences,
                     i.first_seen,i.last_seen,p.repo_owner,p.repo_name,p.branch,p.mode,
                     p.github_token_ciphertext,p.active_until,p.paused,p.ai_consent_at
           FROM incident_jobs j
           JOIN incidents i ON i.id=j.incident_id
           JOIN projects p ON p.id=i.project_id
-          WHERE i.status IN ('diagnosing','queued') AND i.occurrences>=? AND i.first_seen<=?
+          WHERE i.status IN ('diagnosing','queued','processing') AND i.occurrences>=? AND i.first_seen<=?
             AND p.paused=0 AND p.ai_consent_at<>'' AND p.active_until>? AND j.attempts<?
             AND ((j.status='queued' AND j.available_at<=?)
               OR (j.status='processing' AND j.locked_until<=?))
