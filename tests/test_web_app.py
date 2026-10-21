@@ -97,6 +97,7 @@ def test_logout_requires_csrf_token(web_env):
 
 def test_ingest_authenticates_and_deduplicates_per_project(web_env):
     user_id = web_app.portal_db.create_user("ingest@example.com", "hash")
+    web_app.portal_db.admin_grant_access(user_id, 1, "trial", "test-admin")
     raw_key = "project-ingest-key-that-is-long-enough-123"
     project_id = web_app.portal_db.create_project(user_id, name="API", repo_owner="demo",
         repo_name="api", branch="main", mode="pr", token_ciphertext="cipher",
@@ -128,7 +129,7 @@ def test_payment_only_activates_after_captured_status(web_env, monkeypatch):
     monkeypatch.setenv("RAZORPAY_MODE", "test")
     monkeypatch.setenv("RAZORPAY_KEY_ID", "rzp_test_example")
     monkeypatch.setenv("RAZORPAY_KEY_SECRET", "test-secret")
-    monkeypatch.setenv("RAZORPAY_AMOUNT_PAISE", "49900")
+    monkeypatch.setenv("RAZORPAY_YEARLY_AMOUNT_PAISE", "49900")
     payment_id = "pay_abc123"
     signature = hmac.new(b"test-secret", b"order_abc123|pay_abc123", hashlib.sha256).hexdigest()
     monkeypatch.setattr(web_app, "_fetch_razorpay_payment", lambda *_: {

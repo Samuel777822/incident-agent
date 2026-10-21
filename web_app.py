@@ -41,6 +41,20 @@ CSS = """
 *{box-sizing:border-box}body{margin:0;background:radial-gradient(ellipse at 20% -20%,#1b3158 0,transparent 45%),var(--bg);color:var(--text);font:15px/1.55 Inter,ui-sans-serif,system-ui,-apple-system,"Segoe UI",sans-serif}
 a{color:var(--blue);text-decoration:none}a:hover{text-decoration:underline}.wrap{max-width:1080px;margin:auto;padding:0 24px}.nav{height:72px;border-bottom:1px solid #ffffff12;display:flex;align-items:center;justify-content:space-between}.brand{font-size:17px;font-weight:750;letter-spacing:.02em;color:var(--text)}.brand-mark{display:inline-grid;place-items:center;width:28px;height:28px;margin-right:9px;background:#274b82;border-radius:9px;color:white}.navlinks{display:flex;gap:20px;align-items:center;color:var(--muted)}.button{display:inline-flex;align-items:center;justify-content:center;padding:10px 16px;border:1px solid #ffffff20;border-radius:10px;background:#19243a;color:var(--text);font:inherit;font-weight:650;cursor:pointer}.button.primary{background:#2f68c8;border-color:#4e88e7;color:white}.button.danger{color:#ffb3b3}.button:hover{filter:brightness(1.12);text-decoration:none}.hero{padding:76px 0 62px;max-width:760px}.eyebrow{color:var(--green);text-transform:uppercase;letter-spacing:.13em;font-size:12px;font-weight:750}.hero h1{font-size:clamp(38px,6vw,64px);line-height:1.04;letter-spacing:-.045em;margin:15px 0 20px}.hero p{font-size:19px;color:#b7c4d8;max-width:640px}.actions{display:flex;gap:12px;align-items:center;margin-top:28px}.grid{display:grid;grid-template-columns:repeat(auto-fit,minmax(245px,1fr));gap:16px;margin:22px 0 50px}.card{background:linear-gradient(145deg,#141e33,#101729);border:1px solid var(--line);border-radius:16px;padding:22px;box-shadow:0 18px 50px #0002}.card h2,.card h3{margin:0 0 8px}.muted{color:var(--muted)}.section{padding:18px 0 42px}.section h2{font-size:26px;letter-spacing:-.025em}.form-card{max-width:480px;margin:58px auto}.form-card h1{font-size:32px;margin:0 0 8px}.field{margin:16px 0}.field label{display:block;font-weight:650;margin-bottom:6px}.field input,.field select{width:100%;padding:12px 13px;border-radius:9px;border:1px solid #34425e;background:#0b1324;color:var(--text);font:inherit}.field small{display:block;color:var(--muted);margin-top:5px}.checkbox{display:flex;gap:10px;align-items:flex-start;color:#c7d2e4}.checkbox input{margin-top:6px}.alert{padding:12px 14px;border:1px solid #a47638;border-radius:10px;background:#342918;color:#ffe0a3;margin:16px 0}.stats{display:flex;gap:10px;flex-wrap:wrap;margin:18px 0}.pill{display:inline-flex;gap:7px;align-items:center;padding:5px 10px;border-radius:99px;background:#1b2d43;color:#b8c9df;font-size:12px}.pill.green{color:#8ce4c0;background:#14392f}.pill.amber{color:#ffdc91;background:#3a301b}.row{display:flex;justify-content:space-between;align-items:center;gap:16px}.table{width:100%;border-collapse:collapse;margin-top:16px}.table th,.table td{text-align:left;padding:12px 8px;border-bottom:1px solid var(--line);vertical-align:top}.table th{color:var(--muted);font-size:12px;text-transform:uppercase;letter-spacing:.08em}.footer{border-top:1px solid #ffffff12;padding:24px 0 38px;color:var(--muted);font-size:13px}.empty{padding:30px;text-align:center;border:1px dashed #40506c;border-radius:14px;color:var(--muted)}
 @media(max-width:640px){.wrap{padding:0 17px}.navlinks{gap:11px}.hero{padding:54px 0 40px}.hero p{font-size:17px}.actions{align-items:stretch;flex-direction:column}.row{align-items:flex-start;flex-direction:column}.table{font-size:13px}}
+.button{transition:transform .15s ease,box-shadow .15s ease,border-color .15s ease}
+.button:focus-visible,a:focus-visible,input:focus-visible,select:focus-visible{outline:3px solid #75a7ff;outline-offset:3px}
+.button:active{transform:translateY(1px)}
+.card{transition:border-color .18s ease,transform .18s ease}
+a.card:hover{border-color:#4d6c9a;transform:translateY(-2px);text-decoration:none}
+.table-wrap{max-width:100%;overflow-x:auto;border:1px solid var(--line);border-radius:12px;margin:16px 0}
+.table{min-width:640px;margin:0}
+.table th,.table td{padding:14px 12px}
+.actions{display:flex;flex-wrap:wrap;gap:8px}
+.actions form{margin:0}
+.field input:focus,.field select:focus{border-color:var(--blue);box-shadow:0 0 0 3px #75a7ff20;outline:none}
+h1,h2,h3{line-height:1.2}
+@media(max-width:640px){.nav{height:auto;min-height:68px;align-items:flex-start;padding-top:16px;padding-bottom:16px;gap:12px}.navlinks{flex-wrap:wrap;justify-content:flex-end}.table{min-width:620px}.card{padding:18px}.section{padding-top:12px}}
+
 """
 
 
@@ -129,9 +143,20 @@ class ThreadingWSGIServer(ThreadingMixIn, WSGIServer):
     daemon_threads = True
 
 
+def _admin_emails() -> set[str]:
+    raw = os.getenv("ADMIN_EMAILS", "") or os.getenv("ADMIN_EMAIL", "")
+    return {item.strip().lower() for item in raw.split(",") if item.strip()}
+
+def _admin_password_env(email: str) -> str:
+    key = "ADMIN_PASSWORD_" + re.sub(r"[^A-Z0-9]", "_", email.upper())
+    specific = os.getenv(key, "")
+    if specific:
+        return specific
+    admins = _admin_emails()
+    return os.getenv("ADMIN_PASSWORD", "") if len(admins) == 1 and email in admins else ""
+
 def _is_admin(request: Request) -> bool:
-    configured = os.getenv("ADMIN_EMAIL", "").strip().lower()
-    return bool(request.session and configured and request.session.get("email", "").lower() == configured)
+    return bool(request.session and request.session.get("email", "").lower() in _admin_emails())
 
 
 def _layout(title: str, body: str, request: Request | None = None) -> str:
@@ -244,6 +269,8 @@ def _page_signup(request):
         return _response("<div class='alert'>Too many attempts. Try again in a few minutes.</div>", request, "429 Too Many Requests")
     if not EMAIL_RE.fullmatch(email) or len(password) < 12 or len(password) > 1024:
         return _response("<div class='alert'>Enter a valid email and a password with at least 12 characters.</div>", request, "400 Bad Request")
+    if email in _admin_emails():
+        return _response("<div class='alert'>This address is reserved for an administrator. Use administrator sign-in credentials.</div>", request, "403 Forbidden")
     try:
         user_id = portal_db.create_user(email, _password_hash(password))
     except Exception as exc:
@@ -265,12 +292,11 @@ def _page_login(request):
     rate_key = "login:" + hashlib.sha256((request.remote + "\0" + email).encode()).hexdigest()
     if not portal_db.check_login_rate_limit(rate_key):
         return _response("<div class='alert'>Too many sign-in attempts. Try again in a few minutes.</div>", request, "429 Too Many Requests")
-    configured_admin = os.getenv("ADMIN_EMAIL", "").strip().lower()
-    admin_password = os.getenv("ADMIN_PASSWORD", "")
     submitted_password = request.form.get("password", "")
-    if configured_admin and email == configured_admin:
+    if email in _admin_emails():
+        admin_password = _admin_password_env(email)
         if len(admin_password) < 12 or not hmac.compare_digest(submitted_password, admin_password):
-            return _response("<div class='alert'>Email or password is incorrect.</div>", request, "401 Unauthorized")
+            return _response("<div class='alert'>Administrator credentials are not configured or are incorrect.</div>", request, "401 Unauthorized")
         user = portal_db.get_user_by_email(email)
         user_id = user["id"] if user else portal_db.create_user(email, _password_hash(admin_password))
         return _redirect("/dashboard", _new_session(user_id))
@@ -290,6 +316,20 @@ def _page_admin(request):
             return _response("<div class='alert'>This form expired. Refresh and try again.</div>", request, "403 Forbidden")
         user_id = request.form.get("user_id", "")
         action = request.form.get("action", "")
+        if action in ("approve_trial", "reject_trial"):
+            request_id = request.form.get("request_id", "")
+            decision = "approved" if action == "approve_trial" else "rejected"
+            trial = portal_db.admin_review_trial_request(request_id, decision, request.session["email"])
+            if not trial:
+                return _response("<div class='alert'>This trial request was already reviewed or no longer exists.</div>", request, "409 Conflict")
+            if decision == "approved":
+                portal_db.admin_grant_access(trial["user_id"], 1, "trial", request.session["email"])
+            import notifications
+            subject = "Your Agent Daemon trial is approved" if decision == "approved" else "Update on your Agent Daemon trial request"
+            until = portal_db.get_subscription_active_until(trial["user_id"]) if decision == "approved" else ""
+            message = (f"Your one-day trial is approved and expires at {until}. Sign in to connect your project: https://incident-agent-portal.onrender.com" if decision == "approved" else "Your trial request was not approved at this time.")
+            sent = notifications.notify_customer(trial["email"], subject, message)
+            return _redirect("/admin?updated=1&email=" + ("sent" if sent else "not-configured"))
         if action == "revoke":
             portal_db.admin_revoke_access(user_id)
             return _redirect("/admin?updated=1")
@@ -305,10 +345,18 @@ def _page_admin(request):
         except ValueError as exc:
             return _response(f"<div class='alert'>{_escape(exc)}</div>", request, "400 Bad Request")
         return _redirect("/admin?updated=1")
+    csrf = _escape(_csrf(request))
+    trial_rows = []
+    for trial in portal_db.admin_list_trial_requests():
+        actions = ""
+        if trial["status"] == "pending":
+            actions = f"<form method='post' action='/admin' class='actions'><input type='hidden' name='csrf' value='{csrf}'><input type='hidden' name='request_id' value='{_escape(trial['id'])}'><button class='button primary' name='action' value='approve_trial' type='submit'>Approve 1-day trial</button><button class='button danger' name='action' value='reject_trial' type='submit'>Reject</button></form>"
+        trial_rows.append(f"<tr><td>{_escape(trial['email'])}</td><td>{_escape(trial['status'])}</td><td>{_escape(trial['requested_at'])}</td><td>{actions}</td></tr>")
+    trial_table = ("<div class='table-wrap'><table class='table'><thead><tr><th>Customer</th><th>Status</th><th>Requested</th><th>Decision</th></tr></thead><tbody>" + "".join(trial_rows) + "</tbody></table></div>") if trial_rows else "<div class='empty'>No trial requests yet.</div>"
     rows = []
     now = _now().isoformat(timespec="seconds")
     for user in portal_db.admin_list_users():
-        if user["email"].lower() == os.getenv("ADMIN_EMAIL", "").strip().lower():
+        if user["email"].lower() in _admin_emails():
             continue
         until = user.get("active_until") or ""
         active = bool(until and until > now)
@@ -321,8 +369,23 @@ def _page_admin(request):
     info = "<div class='alert'>Grant Paid only after payment is confirmed. Grant Trial only after approving the requested trial. Revoking access pauses the customer’s projects.</div>"
     if request.query.get("updated") == ["1"]:
         info = "<div class='pill green'>Access list updated.</div>" + info
-    return _response(f"<section class='section'><div class='eyebrow'>Administration</div><h1>Account permissions</h1><p class='muted'>Approve or revoke access for registered customers. Every grant is tied to an expiry date.</p>{info}{table}</section>", request)
+    return _response(f"<section class='section'><div class='eyebrow'>Administrator workspace</div><h1>Operations overview</h1><p class='muted'>Signed in as {_escape(request.session['email'])}.</p><h2>Trial requests</h2>{trial_table}<h2>Customer access</h2>{info}{table}</section>", request)
 
+
+def _page_trial_request(request):
+    gate = _require_session(request)
+    if gate:
+        return gate
+    if request.method != "POST":
+        return _response("Method not allowed", request, "405 Method Not Allowed")
+    if not _csrf_valid(request):
+        return _response("<div class='alert'>This form expired. Refresh and try again.</div>", request, "403 Forbidden")
+    existing = portal_db.create_trial_request(request.session["user_id"])
+    import notifications
+    results = notifications.notify_admins("New Agent Daemon trial request", f"Customer {request.session['email']} requested a one-day trial. Review it here: https://incident-agent-portal.onrender.com/admin")
+    sent = bool(results) and all(results.values())
+    message = "Trial request saved. Both administrators were notified by email." if sent else "Trial request saved, but email delivery is not confirmed. Administrators can still review it in the dashboard."
+    return _response(f"<section class='card form-card'><h1>Request received</h1><p>{_escape(message)}</p><p class='muted'>Status: {_escape(existing['status'])}</p><a class='button primary' href='/billing'>Back to account access</a></section>", request)
 
 def _page_dashboard(request):
     if request.method != "GET":
@@ -552,21 +615,26 @@ def _page_incident(request, project_id, incident_id):
     return _response(body, request)
 
 
-def _razorpay_settings():
+def _razorpay_settings(plan: str = "yearly"):
+    if plan not in ("monthly", "yearly"):
+        raise RuntimeError("Unknown subscription plan")
     key_id = os.getenv("RAZORPAY_KEY_ID", "").strip()
     secret = os.getenv("RAZORPAY_KEY_SECRET", "").strip()
     mode = os.getenv("RAZORPAY_MODE", "test").strip().lower()
-    amount = os.getenv("RAZORPAY_AMOUNT_PAISE", "").strip()
-    if mode != "test" or not key_id.startswith("rzp_test_"):
-        raise RuntimeError("Only Razorpay test mode is enabled in this build")
-    if not secret or not amount:
-        raise RuntimeError("Configure Razorpay test keys and RAZORPAY_AMOUNT_PAISE before checkout")
+    if mode == "test" and not key_id.startswith("rzp_test_"):
+        raise RuntimeError("Configure a Razorpay test key beginning with rzp_test_")
+    if mode == "live" and not key_id.startswith("rzp_live_"):
+        raise RuntimeError("Live mode requires a Razorpay live key beginning with rzp_live_")
+    if mode not in ("test", "live") or not secret:
+        raise RuntimeError("Configure Razorpay mode and key credentials")
+    name = "RAZORPAY_MONTHLY_AMOUNT_PAISE" if plan == "monthly" else "RAZORPAY_YEARLY_AMOUNT_PAISE"
+    amount = os.getenv(name, "").strip() or ("10000" if plan == "monthly" else "100000")
     try:
         amount_paise = int(amount)
     except ValueError as exc:
-        raise RuntimeError("RAZORPAY_AMOUNT_PAISE must be a positive integer") from exc
+        raise RuntimeError("Subscription amount must be a positive integer in paise") from exc
     if amount_paise < 100:
-        raise RuntimeError("RAZORPAY_AMOUNT_PAISE must be at least 100 paise")
+        raise RuntimeError("Subscription amount must be at least 100 paise")
     return key_id, secret, amount_paise
 
 
@@ -588,20 +656,30 @@ def _page_billing(request):
     gate = _require_session(request)
     if gate:
         return gate
-    active_until = portal_db.get_subscription_active_until(request.session["user_id"])
+    user_id = request.session["user_id"]
+    active_until = portal_db.get_subscription_active_until(user_id)
     active = bool(active_until and active_until > _now().isoformat(timespec="seconds"))
+    requests = [item for item in portal_db.admin_list_trial_requests() if item["user_id"] == user_id]
+    latest = requests[0] if requests else None
+    success = "<div class='pill green'>Payment verified and access activated.</div>" if request.query.get("success") == ["1"] else ""
     if active:
-        info = f"<div class='alert'>Your access is active through {_escape(active_until)}. Contact us if you need to renew.</div>"
+        info = f"<div class='alert'>Your access is active through {_escape(active_until)}.</div><p class='muted'>Your existing projects remain attached to your account.</p>"
     else:
-        info = """<p class='muted'>To request a trial, call us and we’ll explain the available plans. After payment, our admin will activate your account. You can connect a project once access is approved.</p>
-<div class='actions'><a class='button primary' href='tel:7975291636'>Call 7975291636</a><a class='button' href='tel:9341565937'>Call 9341565937</a></div>
-<p class='muted'>Access is assigned to your account by an administrator after trial approval or payment confirmation.</p>"""
-    body = f"<section class='section'><div class='eyebrow'>Account access</div><h1>{'Access active' if active else 'Request a trial or plan'}</h1>{info}</section>"
+        if latest and latest["status"] == "pending":
+            trial = "<div class='alert'>Your one-day trial request is pending administrator review.</div>"
+        elif latest and latest["status"] == "rejected":
+            trial = "<div class='alert'>Your latest trial request was not approved. You can still choose a paid plan.</div>"
+        else:
+            trial = f"<form method='post' action='/billing/trial-request'><input type='hidden' name='csrf' value='{_escape(_csrf(request))}'><button class='button' type='submit'>Request a free 1-day trial</button></form>"
+        info = f"""{trial}
+<div class='grid'>
+<article class='card'><div class='eyebrow'>Monthly</div><h2>₹100 <small class='muted'>/ month</small></h2><p class='muted'>30 days of access.</p><form method='post' action='/billing/order'><input type='hidden' name='csrf' value='{_escape(_csrf(request))}'><input type='hidden' name='plan' value='monthly'><button class='button primary' type='submit'>Choose monthly</button></form></article>
+<article class='card'><div class='eyebrow'>Yearly</div><h2>₹1,000 <small class='muted'>/ year</small></h2><p class='muted'>365 days of access.</p><form method='post' action='/billing/order'><input type='hidden' name='csrf' value='{_escape(_csrf(request))}'><input type='hidden' name='plan' value='yearly'><button class='button primary' type='submit'>Choose yearly</button></form></article>
+</div><p class='muted'>Checkout requires valid Razorpay credentials configured on the server. Access is activated only after payment is verified server-side.</p>"""
+    body = f"<section class='section'><div class='eyebrow'>Account access</div><h1>{'Your subscription' if active else 'Choose your access'}</h1>{success}{info}</section>"
     return _response(body, request)
 
-
 def _page_create_order(request):
-    return _response("<div class='alert'>Online checkout is currently disabled. Contact us for plans; access is activated by an administrator after payment confirmation.</div>", request, "410 Gone")
     gate = _require_session(request)
     if gate:
         return gate
@@ -609,8 +687,11 @@ def _page_create_order(request):
         return _response("Method not allowed", request, "405 Method Not Allowed")
     if not _csrf_valid(request):
         return _response("<div class='alert'>This form expired. Refresh and try again.</div>", request, "403 Forbidden")
+    plan = str(request.form.get("plan", "yearly"))
+    if plan not in ("monthly", "yearly"):
+        return _response("<div class='alert'>Choose a valid subscription plan.</div>", request, "400 Bad Request")
     try:
-        key_id, secret, amount = _razorpay_settings()
+        key_id, secret, amount = _razorpay_settings(plan)
     except RuntimeError as exc:
         return _response(f"<div class='alert'>{_escape(exc)}</div>", request, "503 Service Unavailable")
     user_id = request.session["user_id"]
@@ -628,14 +709,14 @@ def _page_create_order(request):
     order_id = str(order.get("id", ""))
     if not re.fullmatch(r"order_[A-Za-z0-9]+", order_id) or order.get("amount") != amount:
         return _response("<div class='alert'>Razorpay returned an invalid order. No payment was started.</div>", request, "502 Bad Gateway")
-    portal_db.create_payment_order(user_id, order_id, amount)
+    portal_db.create_payment_order(user_id, order_id, amount, plan)
     csrf = json.dumps(_csrf(request)).replace("</", "<\\/")
     key = json.dumps(key_id)
     order_value = json.dumps(order_id)
     nonce = secrets.token_urlsafe(18)
     body = f"""<section class='card form-card'><h1>Complete test payment</h1><p class='muted'>Razorpay test checkout will open. No live charge is possible in this build.</p><button class='button primary' id='pay' type='button'>Open secure checkout</button><p id='result' class='muted'></p></section>
 <script src='https://checkout.razorpay.com/v1/checkout.js'></script><script nonce='{nonce}'>
-const options={{key:{key},amount:{amount},currency:'INR',name:'Agent Daemon',description:'One-year pilot subscription',order_id:{order_value},handler:async function(r){{const response=await fetch('/billing/verify',{{method:'POST',headers:{{'Content-Type':'application/json'}},credentials:'same-origin',body:JSON.stringify({{csrf:{csrf},order_id:r.razorpay_order_id,payment_id:r.razorpay_payment_id,signature:r.razorpay_signature}})}});const data=await response.json();if(response.ok)location.href='/billing?success=1';else document.getElementById('result').textContent=data.error||'Payment verification failed.';}},modal:{{ondismiss:function(){{document.getElementById('result').textContent='Checkout closed. No subscription was activated.';}}}}}};
+const options={{key:{key},amount:{amount},currency:'INR',name:'Agent Daemon',description:{json.dumps(plan)},order_id:{order_value},handler:async function(r){{const response=await fetch('/billing/verify',{{method:'POST',headers:{{'Content-Type':'application/json'}},credentials:'same-origin',body:JSON.stringify({{csrf:{csrf},order_id:r.razorpay_order_id,payment_id:r.razorpay_payment_id,signature:r.razorpay_signature}})}});const data=await response.json();if(response.ok)location.href='/billing?success=1';else document.getElementById('result').textContent=data.error||'Payment verification failed.';}},modal:{{ondismiss:function(){{document.getElementById('result').textContent='Checkout closed. No subscription was activated.';}}}}}};
 document.getElementById('pay').addEventListener('click',()=>new Razorpay(options).open());
 </script>"""
     headers = [("Content-Type", "text/html; charset=utf-8"), ("Cache-Control", "no-store"),
@@ -645,7 +726,6 @@ document.getElementById('pay').addEventListener('click',()=>new Razorpay(options
 
 
 def _page_verify_payment(request):
-    return Response(json.dumps({"error": "Online checkout is disabled; access is activated by an administrator after payment confirmation."}), "410 Gone", [("Content-Type", "application/json")])
     if request.method != "POST" or not request.session:
         return Response(json.dumps({"error": "Sign in is required."}), "401 Unauthorized", [("Content-Type", "application/json")])
     if not _csrf_valid(request):
@@ -798,6 +878,8 @@ def _dispatch(request: Request) -> Response:
         return _page_dashboard(request)
     if request.path == "/billing":
         return _page_billing(request)
+    if request.path == "/billing/trial-request":
+        return _page_trial_request(request)
     if request.path == "/billing/order":
         return _page_create_order(request)
     if request.path == "/billing/verify":

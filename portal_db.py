@@ -141,6 +141,16 @@ CREATE INDEX IF NOT EXISTS idx_incidents_project_seen ON incidents(project_id, l
 CREATE INDEX IF NOT EXISTS idx_log_events_project_time ON log_events(project_id, timestamp);
 CREATE INDEX IF NOT EXISTS idx_incident_jobs_ready ON incident_jobs(status, available_at, locked_until);
 CREATE INDEX IF NOT EXISTS idx_audit_project_time ON audit_log(project_id, created_at);
+CREATE TABLE IF NOT EXISTS trial_requests (
+  id TEXT PRIMARY KEY,
+  user_id TEXT NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+  status TEXT NOT NULL DEFAULT 'pending',
+  requested_at TEXT NOT NULL,
+  reviewed_at TEXT NOT NULL DEFAULT '',
+  reviewed_by TEXT NOT NULL DEFAULT '',
+  decision_note TEXT NOT NULL DEFAULT ''
+);
+CREATE INDEX IF NOT EXISTS idx_trial_requests_status ON trial_requests(status, requested_at);
 """
 
 
@@ -203,9 +213,13 @@ def init_db() -> None:
                 conn.execute("ALTER TABLE subscriptions ADD COLUMN grant_type TEXT NOT NULL DEFAULT 'paid'")
             if "granted_by" not in columns:
                 conn.execute("ALTER TABLE subscriptions ADD COLUMN granted_by TEXT NOT NULL DEFAULT ''")
+            order_columns = {row[1] for row in conn.execute("PRAGMA table_info(payment_orders)").fetchall()}
+            if "plan" not in order_columns:
+                conn.execute("ALTER TABLE payment_orders ADD COLUMN plan TEXT NOT NULL DEFAULT 'yearly'")
         else:
             _execute(conn, "ALTER TABLE subscriptions ADD COLUMN IF NOT EXISTS grant_type TEXT NOT NULL DEFAULT 'paid'")
             _execute(conn, "ALTER TABLE subscriptions ADD COLUMN IF NOT EXISTS granted_by TEXT NOT NULL DEFAULT ''")
+            _execute(conn, "ALTER TABLE payment_orders ADD COLUMN IF NOT EXISTS plan TEXT NOT NULL DEFAULT 'yearly'")
         conn.commit()
     finally:
         conn.close()
@@ -696,11 +710,13 @@ def audit(project_id: str, action: str, detail: dict | None = None) -> None:
         conn.close()
 
 
-def create_payment_order(user_id: str, order_id: str, amount: int) -> None:
+def create_payment_order(user_id: str, order_id: str, amount: int, plan: str = "yearly") -> None:
+    if plan not in ("monthly", "yearly"):
+        raise ValueError("Plan must be monthly or yearly")
     conn = get_connection()
     try:
-        _execute(conn, "INSERT INTO payment_orders(id,user_id,razorpay_order_id,amount,status,created_at) VALUES(?,?,?,?,?,?)",
-                 (_id(),user_id,order_id,amount,"created",_now()))
+        _execute(conn, "INSERT INTO payment_orders(id,user_id,razorpay_order_id,amount,status,created_at,plan) VALUES(?,?,?,?,?,?,?)",
+                 (_id(),user_id,order_id,amount,"created",_now(),plan))
         conn.commit()
     finally:
         conn.close()
@@ -710,7 +726,7 @@ def complete_payment_order(order_id: str, payment_id: str, amount: int) -> bool:
     """Record a verified capture once and extend only that user's projects."""
     conn = get_connection()
     try:
-        order = _execute(conn, "SELECT user_id,amount,status FROM payment_orders WHERE razorpay_order_id=?", (order_id,)).fetchone()
+        order = _execute(conn, "SELECT user_id,amount,status,plan FROM payment_orders WHERE razorpay_order_id=?", (order_id,)).fetchone()
         if not order or int(order["amount"]) != int(amount) or order["status"] == "paid":
             return False
         now = datetime.now(timezone.utc)
@@ -718,15 +734,15 @@ def complete_payment_order(order_id: str, payment_id: str, amount: int) -> bool:
         existing_until = datetime.fromisoformat(subscription["active_until"]) if subscription else now
         if existing_until.tzinfo is None:
             existing_until = existing_until.replace(tzinfo=timezone.utc)
-        until = (max(now, existing_until) + timedelta(days=365)).isoformat(timespec="seconds")
+        until = (max(now, existing_until) + timedelta(days=30 if order["plan"] == "monthly" else 365)).isoformat(timespec="seconds")
         cur = _execute(conn, "INSERT INTO payments(id,user_id,razorpay_payment_id,amount,status,created_at) VALUES(?,?,?,?,?,?) ON CONFLICT(razorpay_payment_id) DO NOTHING",
                        (_id(),order["user_id"],payment_id,int(amount),"captured",now.isoformat(timespec="seconds")))
         if cur.rowcount == 0:
             conn.commit()
             return False
         _execute(conn, "UPDATE payment_orders SET status='paid' WHERE razorpay_order_id=?", (order_id,))
-        _execute(conn, "INSERT INTO subscriptions(user_id,active_until,updated_at) VALUES(?,?,?) ON CONFLICT(user_id) DO UPDATE SET active_until=excluded.active_until,updated_at=excluded.updated_at",
-                 (order["user_id"],until,now.isoformat(timespec="seconds")))
+        _execute(conn, "INSERT INTO subscriptions(user_id,active_until,grant_type,granted_by,updated_at) VALUES(?,?,?,?,?) ON CONFLICT(user_id) DO UPDATE SET active_until=excluded.active_until,grant_type='paid',granted_by='',updated_at=excluded.updated_at",
+                 (order["user_id"],until,"paid","",now.isoformat(timespec="seconds")))
         _execute(conn, "UPDATE projects SET active_until=? WHERE user_id=?", (until,order["user_id"]))
         project_rows = _execute(conn, "SELECT id FROM projects WHERE user_id=?", (order["user_id"],)).fetchall()
         detail = json.dumps({"payment_id":payment_id,"active_until":until})
@@ -801,3 +817,50 @@ def admin_revoke_access(user_id: str) -> bool:
     finally:
         conn.close()
 
+
+
+def create_trial_request(user_id: str) -> dict:
+    """Create one pending trial request per customer; return its current record."""
+    conn = get_connection()
+    try:
+        row = _execute(conn, "SELECT * FROM trial_requests WHERE user_id=? AND status='pending' ORDER BY requested_at DESC LIMIT 1", (user_id,)).fetchone()
+        if row:
+            return dict(row)
+        request_id = _id()
+        now = _now()
+        _execute(conn, "INSERT INTO trial_requests(id,user_id,status,requested_at) VALUES(?,?,?,?)",
+                 (request_id, user_id, "pending", now))
+        conn.commit()
+        row = _execute(conn, "SELECT * FROM trial_requests WHERE id=?", (request_id,)).fetchone()
+        return dict(row)
+    finally:
+        conn.close()
+
+
+def admin_list_trial_requests():
+    conn = get_connection()
+    try:
+        rows = _execute(conn, """SELECT tr.*,u.email FROM trial_requests tr
+            JOIN users u ON u.id=tr.user_id
+            ORDER BY CASE WHEN tr.status='pending' THEN 0 ELSE 1 END, tr.requested_at DESC""").fetchall()
+        return [dict(row) for row in rows]
+    finally:
+        conn.close()
+
+
+def admin_review_trial_request(request_id: str, status: str, reviewed_by: str, note: str = "") -> dict | None:
+    if status not in ("approved", "rejected"):
+        raise ValueError("Trial request status must be approved or rejected")
+    conn = get_connection()
+    try:
+        row = _execute(conn, "SELECT * FROM trial_requests WHERE id=?", (request_id,)).fetchone()
+        if not row or row["status"] != "pending":
+            return None
+        now = _now()
+        _execute(conn, """UPDATE trial_requests SET status=?,reviewed_at=?,reviewed_by=?,decision_note=?
+            WHERE id=? AND status='pending'""", (status, now, reviewed_by, note[:500], request_id))
+        conn.commit()
+        updated = _execute(conn, "SELECT tr.*,u.email FROM trial_requests tr JOIN users u ON u.id=tr.user_id WHERE tr.id=?", (request_id,)).fetchone()
+        return dict(updated) if updated else None
+    finally:
+        conn.close()

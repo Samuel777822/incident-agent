@@ -87,6 +87,29 @@ directly to the default branch.
 The old daemon reads logs from a file on its machine, waits for at least five occurrences and thirty seconds, and
 has no multi-tenant scheduling. It is not currently connected to the portal's PostgreSQL project data.
 
+## Administrator accounts, trial requests, and email
+
+Set `ADMIN_EMAILS` to a comma-separated allowlist of administrator addresses. Each administrator needs a distinct secret password in Render:
+- `ADMIN_PASSWORD_NAVEENACHANDRA371_GMAIL_COM`
+- `ADMIN_PASSWORD_PRANAVVRAO1_GMAIL_COM`
+
+Each password must contain at least 12 characters. Do not put administrator passwords in Git or send them in chat. The listed addresses are reserved and cannot be registered through public signup. If using this dual-admin setup, configure `ADMIN_EMAILS`; do not rely on the legacy single `ADMIN_EMAIL`.
+
+Trial requests are stored in PostgreSQL and visible in `/admin`. Approval grants one day from the time of approval; rejection and approval send a customer decision email when SMTP is configured. Trial-request notifications are sent to every address in `ADMIN_EMAILS`. The dashboard still stores the request if SMTP is unavailable and shows that delivery could not be confirmed.
+
+Configure SMTP using Render secret environment variables:
+- `SMTP_HOST` (for Gmail, `smtp.gmail.com`)
+- `SMTP_PORT` (usually `587`)
+- `SMTP_USERNAME`
+- `SMTP_PASSWORD` (use a provider app password where required)
+- `EMAIL_FROM` (verified sender address)
+
+A message is reported as sent only when the SMTP server accepts it. Check Render application logs for delivery errors; SMTP acceptance alone cannot guarantee inbox placement.
+
+## Subscription plans
+
+The billing page offers ₹100 monthly (30 days) and ₹1,000 yearly (365 days). Amounts are configured in paise using `RAZORPAY_MONTHLY_AMOUNT_PAISE` and `RAZORPAY_YEARLY_AMOUNT_PAISE`; defaults are `10000` and `100000`. Use `RAZORPAY_MODE=test` and `rzp_test_` credentials for validation first. Live checkout requires `RAZORPAY_MODE=live` with a matching `rzp_live_` key ID and secret; do not enable live mode until test checkout, server-side payment capture verification, and renewal behavior have been validated.
+
 ## Development
 
 Install dependencies with `pip install -r requirements.txt`. Portal local development can use SQLite. For production,
