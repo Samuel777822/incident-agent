@@ -31,15 +31,17 @@ def _projects() -> list[str]:
     return sorted(data)
 
 
-def _validate_config() -> list[str]:
+def _missing_config() -> list[str]:
     missing = [name for name in ("GROQ_API_KEY", "GITHUB_TOKEN", "INGEST_KEY")
                if not os.getenv(name, "").strip()]
     if not ADMIN_KEY:
         missing.append("ADMIN_KEY")
     elif len(ADMIN_KEY) < 32:
         missing.append("ADMIN_KEY (at least 32 characters)")
-    if missing:
-        raise RuntimeError("Missing Render environment configuration: " + ", ".join(missing))
+    return missing
+
+
+def _validate_config() -> list[str]:
     projects = _projects()
     if PROJECT not in projects:
         raise RuntimeError(f"AGENT_PROJECT '{PROJECT}' is not configured in repos.json")
@@ -115,8 +117,11 @@ class Handler(BaseHTTPRequestHandler):
     def do_GET(self) -> None:
         path = urlsplit(self.path).path
         if path == "/health":
-            alive = bool(worker_thread and worker_thread.is_alive())
-            self._send(200 if alive else 503, {"status": "ok" if alive else "degraded"})
+            # Render can serve the setup screen before secrets exist; worker state
+            # is reported separately at /api/status.
+            worker_failed = worker_thread is not None and not worker_thread.is_alive()
+            self._send(503 if worker_failed else 200,
+                       {"status": "degraded" if worker_failed else "ok"})
             return
         if path == "/api/status":
             try:
@@ -127,6 +132,7 @@ class Handler(BaseHTTPRequestHandler):
                 "worker_alive": bool(worker_thread and worker_thread.is_alive()),
                 "projects": projects,
                 "project": PROJECT,
+                "missing_configuration": _missing_config(),
             })
             return
         if path == "/api/incidents":
@@ -159,8 +165,12 @@ def main() -> None:
     print(f"git: {git_version}", flush=True)
     print(f"Projects loaded from repos.json: {projects}", flush=True)
 
-    worker_thread = threading.Thread(target=_worker_main, name="incident-agent-worker", daemon=True)
-    worker_thread.start()
+    missing = _missing_config()
+    if missing:
+        print("Worker paused until Render secrets are set: " + ", ".join(missing), flush=True)
+    else:
+        worker_thread = threading.Thread(target=_worker_main, name="incident-agent-worker", daemon=True)
+        worker_thread.start()
 
     port = int(os.getenv("PORT", "10000"))
     http_server = ThreadingHTTPServer(("0.0.0.0", port), Handler)
