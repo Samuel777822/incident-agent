@@ -306,10 +306,11 @@ def _page_new_project(request):
 <div class='field'><label>GitHub repository</label><input name='repo' required placeholder='owner/repository'><small>Use a fine-grained token limited to this repository.</small></div>
 <div class='field'><label>GitHub token</label><input name='github_token' type='password' autocomplete='off' required><small>Stored encrypted. It is never displayed after saving.</small></div>
 <div class='field'><label>Default branch</label><input name='branch' value='main' required maxlength='100'></div>
-<div class='field'><label>Agent mode</label><select name='mode'><option value='report' selected>Report only</option><option value='pr' disabled>Pull request (not available yet)</option><option value='auto' disabled>Auto (not available yet)</option></select><small>Hosted diagnosis is currently report-only. Fix PRs and automatic merges are not enabled.</small></div>
+<div class='field'><label>Agent mode</label><select name='mode'><option value='report' selected>Report only</option><option value='pr'>Pull request</option><option value='auto'>Auto (merge only after passing CI)</option></select><small>Pull request mode opens a reviewable PR. Auto mode also merges only after GitHub reports at least one completed passing check and no failing or pending checks. With no checks, the PR stays open.</small></div>
 <div class='field'><label>App URL (optional)</label><input name='app_url' type='url' placeholder='https://app.example.com'></div>
 <div class='field'><label class='checkbox'><input name='allow_install' type='checkbox' value='yes' required><span>I authorize Agent Daemon to add its monitoring code to this repository through a reviewable pull request.</span></label></div>
-<div class='field'><label class='checkbox'><input name='allow_ai_processing' type='checkbox' value='yes' required><span>I understand that selected error logs, tracebacks, and relevant repository source files will be sent to Groq for AI diagnosis.</span></label></div>"""
+<div class='field'><label class='checkbox'><input name='allow_ai_processing' type='checkbox' value='yes' required><span>I understand that selected error logs, tracebacks, and relevant repository source files will be sent to Groq for AI diagnosis.</span></label></div>
+<div class='field'><label class='checkbox'><input name='allow_remediation' type='checkbox' value='yes'><span>For Pull request or Auto mode, I authorize small, high-confidence Python fixes as pull requests. The agent will not run my code or tests. Auto mode may merge only after all GitHub checks it can see pass; no checks, failed checks, or unavailable checks leave the PR open.</span></label></div>"""
         body = _form("Connect a project", "We only monitor after you authorize the installation.", fields,
                      "/projects/new", "<button class='button primary' type='submit'>Save project</button>", _csrf(request))
         return _response(body, request)
@@ -319,11 +320,13 @@ def _page_new_project(request):
         return _response("<div class='alert'>Authorize monitoring installation and AI diagnosis data processing before continuing.</div>", request, "400 Bad Request")
     repo_match = REPO_RE.fullmatch(request.form.get("repo", "").strip())
     token = request.form.get("github_token", "").strip()
-    mode = request.form.get("mode", "pr")
+    mode = request.form.get("mode", "report")
     name = request.form.get("name", "").strip()
     branch = request.form.get("branch", "main").strip()
-    if not repo_match or not token or not name or not branch or mode != "report":
+    if not repo_match or not token or not name or not branch or mode not in ("report", "pr", "auto"):
         return _response("<div class='alert'>Check the repository, token, project name, branch, and mode.</div>", request, "400 Bad Request")
+    if mode in ("pr", "auto") and request.form.get("allow_remediation") != "yes":
+        return _response("<div class='alert'>Authorize pull request remediation before selecting Pull request or Auto mode.</div>", request, "400 Bad Request")
     try:
         ciphertext = _encrypt_token(token)
     except RuntimeError as exc:
@@ -337,8 +340,10 @@ def _page_new_project(request):
         app_url=request.form.get("app_url", "").strip(), ai_consent_at=portal_db._now())
     portal_db.audit(project_id, "project_connected", {"repo": f"{owner}/{repo}", "mode": mode})
     portal_db.audit(project_id, "ai_diagnosis_consent", {"scope": "selected logs, tracebacks, and repository source sent to Groq"})
+    if mode in ("pr", "auto"):
+        portal_db.audit(project_id, "remediation_consent", {"mode": mode, "auto_merge_requires_passing_github_checks": mode == "auto"})
     notice = f"<div class='alert'>Save this ingest key now. It is shown once: <code>{_escape(ingest_key)}</code></div>"
-    return _response(notice + f"<section class='card'><h1>Project saved</h1><p class='muted'>The monitoring installer is the next step. Your project is pending until the pull request is merged and its first heartbeat arrives.</p><a class='button primary' href='/projects/{_escape(project_id)}'>View project</a></section>", request, "201 Created")
+    return _response(notice + f"<section class='card'><h1>Project saved</h1><p class='muted'>The monitoring installer is the next step. Your project is pending until the monitoring pull request is merged and its first heartbeat arrives.</p><a class='button primary' href='/projects/{_escape(project_id)}'>View project</a></section>", request, "201 Created")
 
 
 def _page_project(request, project_id):
