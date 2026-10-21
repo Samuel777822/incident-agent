@@ -19,8 +19,6 @@ CREATE TABLE IF NOT EXISTS users (
   id TEXT PRIMARY KEY,
   email TEXT NOT NULL UNIQUE,
   password_hash TEXT NOT NULL DEFAULT '',
-  google_sub TEXT NOT NULL DEFAULT '',
-  email_verified INTEGER NOT NULL DEFAULT 0,
   created_at TEXT NOT NULL
 );
 CREATE TABLE IF NOT EXISTS sessions (
@@ -138,7 +136,6 @@ CREATE TABLE IF NOT EXISTS ingest_limits (
   window_started TEXT NOT NULL,
   request_count INTEGER NOT NULL DEFAULT 0
 );
-CREATE UNIQUE INDEX IF NOT EXISTS idx_users_google_sub ON users(google_sub) WHERE google_sub <> '';
 CREATE INDEX IF NOT EXISTS idx_projects_user ON projects(user_id);
 CREATE INDEX IF NOT EXISTS idx_incidents_project_seen ON incidents(project_id, last_seen);
 CREATE INDEX IF NOT EXISTS idx_log_events_project_time ON log_events(project_id, timestamp);
@@ -202,21 +199,12 @@ def init_db() -> None:
             if statement.strip():
                 _execute(conn, statement)
         if isinstance(conn, sqlite3.Connection):
-            user_columns = {row[1] for row in conn.execute("PRAGMA table_info(users)").fetchall()}
-            if "google_sub" not in user_columns:
-                conn.execute("ALTER TABLE users ADD COLUMN google_sub TEXT NOT NULL DEFAULT ''")
-            if "email_verified" not in user_columns:
-                conn.execute("ALTER TABLE users ADD COLUMN email_verified INTEGER NOT NULL DEFAULT 0")
-            conn.execute("CREATE UNIQUE INDEX IF NOT EXISTS idx_users_google_sub ON users(google_sub) WHERE google_sub <> ''")
             columns = {row[1] for row in conn.execute("PRAGMA table_info(projects)").fetchall()}
             if "install_pr_url" not in columns:
                 conn.execute("ALTER TABLE projects ADD COLUMN install_pr_url TEXT NOT NULL DEFAULT ''")
             if "ai_consent_at" not in columns:
                 conn.execute("ALTER TABLE projects ADD COLUMN ai_consent_at TEXT NOT NULL DEFAULT ''")
         else:
-            _execute(conn, "ALTER TABLE users ADD COLUMN IF NOT EXISTS google_sub TEXT NOT NULL DEFAULT ''")
-            _execute(conn, "ALTER TABLE users ADD COLUMN IF NOT EXISTS email_verified INTEGER NOT NULL DEFAULT 0")
-            _execute(conn, "CREATE UNIQUE INDEX IF NOT EXISTS idx_users_google_sub ON users(google_sub) WHERE google_sub <> ''")
             _execute(conn, "ALTER TABLE projects ADD COLUMN IF NOT EXISTS install_pr_url TEXT NOT NULL DEFAULT ''")
             _execute(conn, "ALTER TABLE projects ADD COLUMN IF NOT EXISTS ai_consent_at TEXT NOT NULL DEFAULT ''")
         if isinstance(conn, sqlite3.Connection):
@@ -252,29 +240,21 @@ def create_user(email: str, password_hash: str) -> str:
 def get_or_create_google_user(email: str, google_sub: str, email_verified: bool) -> dict:
     email = email.lower().strip()
     if not email or not google_sub or not email_verified:
-        raise ValueError("A verified Google identity is required")
+        raise ValueError('A verified Google identity is required')
+    # Use the verified Google subject as the internal ID to avoid altering existing production schema.
     conn = get_connection()
     try:
-        row = _execute(conn, "SELECT * FROM users WHERE google_sub=?", (google_sub,)).fetchone()
+        row = _execute(conn, 'SELECT * FROM users WHERE id=?', (google_sub,)).fetchone()
         if row:
-            if row["email"].lower() != email:
-                raise ValueError("This Google account's email changed. Contact support to update the account safely.")
+            if row['email'].lower() != email:
+                raise ValueError('This Google account email changed. Contact support to update it safely.')
             return dict(row)
-        by_email = _execute(conn, "SELECT * FROM users WHERE email=?", (email,)).fetchone()
+        by_email = _execute(conn, 'SELECT * FROM users WHERE email=?', (email,)).fetchone()
         if by_email:
-            if not bool(by_email["email_verified"]):
-                raise ValueError("An account already uses this email. Sign in with its current method and verify/link Google from account settings first.")
-            if by_email["google_sub"] and by_email["google_sub"] != google_sub:
-                raise ValueError("This email is already linked to a different Google account.")
-            _execute(conn, "UPDATE users SET google_sub=?,email_verified=1 WHERE id=?",
-                     (google_sub, by_email["id"]))
-            conn.commit()
-            return dict(_execute(conn, "SELECT * FROM users WHERE id=?", (by_email["id"],)).fetchone())
-        user_id = _id()
-        _execute(conn, "INSERT INTO users(id,email,password_hash,google_sub,email_verified,created_at) VALUES(?,?,?,?,?,?)",
-                 (user_id, email, "", google_sub, 1, _now()))
+            raise ValueError('An account with this email already exists. Sign in using its current method; account linking must be completed separately.')
+        _execute(conn, 'INSERT INTO users(id,email,password_hash,created_at) VALUES(?,?,?,?)', (google_sub, email, '', _now()))
         conn.commit()
-        return dict(_execute(conn, "SELECT * FROM users WHERE id=?", (user_id,)).fetchone())
+        return dict(_execute(conn, 'SELECT * FROM users WHERE id=?', (google_sub,)).fetchone())
     finally:
         conn.close()
 
@@ -282,7 +262,7 @@ def get_or_create_google_user(email: str, google_sub: str, email_verified: bool)
 def get_user_by_google_sub(google_sub: str):
     conn = get_connection()
     try:
-        row = _execute(conn, "SELECT * FROM users WHERE google_sub=?", (google_sub,)).fetchone()
+        row = _execute(conn, "SELECT * FROM users WHERE id = ?", (google_sub,)).fetchone()
         return dict(row) if row else None
     finally:
         conn.close()
@@ -291,7 +271,7 @@ def get_user_by_google_sub(google_sub: str):
 def get_user_by_email(email: str):
     conn = get_connection()
     try:
-        row = _execute(conn, "SELECT * FROM users WHERE email = ?", (email.lower().strip(),)).fetchone()
+        row = _execute(conn, 'SELECT * FROM users WHERE email = ?', (email.lower().strip(),)).fetchone()
         return dict(row) if row else None
     finally:
         conn.close()
