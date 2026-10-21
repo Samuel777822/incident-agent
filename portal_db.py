@@ -107,6 +107,8 @@ CREATE TABLE IF NOT EXISTS payments (
 CREATE TABLE IF NOT EXISTS subscriptions (
   user_id TEXT PRIMARY KEY REFERENCES users(id) ON DELETE CASCADE,
   active_until TEXT NOT NULL,
+  grant_type TEXT NOT NULL DEFAULT 'paid',
+  granted_by TEXT NOT NULL DEFAULT '',
   updated_at TEXT NOT NULL
 );
 CREATE TABLE IF NOT EXISTS payment_orders (
@@ -195,6 +197,15 @@ def init_db() -> None:
         else:
             _execute(conn, "ALTER TABLE projects ADD COLUMN IF NOT EXISTS install_pr_url TEXT NOT NULL DEFAULT ''")
             _execute(conn, "ALTER TABLE projects ADD COLUMN IF NOT EXISTS ai_consent_at TEXT NOT NULL DEFAULT ''")
+        if isinstance(conn, sqlite3.Connection):
+            columns = {row[1] for row in conn.execute("PRAGMA table_info(subscriptions)").fetchall()}
+            if "grant_type" not in columns:
+                conn.execute("ALTER TABLE subscriptions ADD COLUMN grant_type TEXT NOT NULL DEFAULT 'paid'")
+            if "granted_by" not in columns:
+                conn.execute("ALTER TABLE subscriptions ADD COLUMN granted_by TEXT NOT NULL DEFAULT ''")
+        else:
+            _execute(conn, "ALTER TABLE subscriptions ADD COLUMN IF NOT EXISTS grant_type TEXT NOT NULL DEFAULT 'paid'")
+            _execute(conn, "ALTER TABLE subscriptions ADD COLUMN IF NOT EXISTS granted_by TEXT NOT NULL DEFAULT ''")
         conn.commit()
     finally:
         conn.close()
@@ -724,6 +735,57 @@ def get_subscription_active_until(user_id: str):
     try:
         row = _execute(conn, "SELECT active_until FROM subscriptions WHERE user_id=?", (user_id,)).fetchone()
         return row["active_until"] if row else None
+    finally:
+        conn.close()
+
+
+def user_has_active_access(user_id: str) -> bool:
+    active_until = get_subscription_active_until(user_id)
+    return bool(active_until and active_until > _now())
+
+
+def admin_list_users():
+    conn = get_connection()
+    try:
+        rows = _execute(conn, """SELECT u.id,u.email,u.created_at,s.active_until,
+            COALESCE(s.grant_type,'') AS grant_type
+            FROM users u LEFT JOIN subscriptions s ON s.user_id=u.id
+            ORDER BY u.created_at DESC""").fetchall()
+        return [dict(row) for row in rows]
+    finally:
+        conn.close()
+
+
+def admin_grant_access(user_id: str, days: int, grant_type: str, granted_by: str) -> str:
+    if not 1 <= int(days) <= 3650 or grant_type not in ("trial", "paid"):
+        raise ValueError("Access grant must be 1–3650 days and trial or paid")
+    now = datetime.now(timezone.utc)
+    conn = get_connection()
+    try:
+        row = _execute(conn, "SELECT active_until FROM subscriptions WHERE user_id=?", (user_id,)).fetchone()
+        existing = datetime.fromisoformat(row["active_until"]) if row else now
+        if existing.tzinfo is None:
+            existing = existing.replace(tzinfo=timezone.utc)
+        until = (max(now, existing) + timedelta(days=int(days))).isoformat(timespec="seconds")
+        _execute(conn, """INSERT INTO subscriptions(user_id,active_until,grant_type,granted_by,updated_at)
+            VALUES(?,?,?,?,?) ON CONFLICT(user_id) DO UPDATE SET
+            active_until=excluded.active_until,grant_type=excluded.grant_type,
+            granted_by=excluded.granted_by,updated_at=excluded.updated_at""",
+            (user_id, until, grant_type, granted_by, now.isoformat(timespec="seconds")))
+        _execute(conn, "UPDATE projects SET active_until=? WHERE user_id=?", (until, user_id))
+        conn.commit()
+        return until
+    finally:
+        conn.close()
+
+
+def admin_revoke_access(user_id: str) -> bool:
+    conn = get_connection()
+    try:
+        cur = _execute(conn, "DELETE FROM subscriptions WHERE user_id=?", (user_id,))
+        _execute(conn, "UPDATE projects SET active_until=NULL,paused=1 WHERE user_id=?", (user_id,))
+        conn.commit()
+        return cur.rowcount > 0
     finally:
         conn.close()
 
