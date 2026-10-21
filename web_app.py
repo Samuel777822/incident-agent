@@ -20,10 +20,12 @@ from socketserver import ThreadingMixIn
 from datetime import datetime, timedelta, timezone
 from http import cookies
 from io import BytesIO
-from urllib.parse import parse_qs, urlsplit
+from urllib.parse import parse_qs, urlencode, urlsplit
 from urllib.error import HTTPError, URLError
 from urllib.request import Request as UrlRequest, urlopen
 from wsgiref.simple_server import WSGIServer, make_server
+
+import httpx
 
 import portal_db
 from monitoring_installer import GitHubInstallError, open_monitoring_pr, validate_repository_access
@@ -33,6 +35,8 @@ SESSION_COOKIE = "agent_session"
 CSRF_COOKIE = "agent_csrf"
 SESSION_SECONDS = 60 * 60 * 24 * 7
 MAX_BODY = 65536
+GOOGLE_CALLBACK_PATH = "/auth/google/callback"
+GOOGLE_TOKENINFO_URL = "https://oauth2.googleapis.com/tokeninfo"
 EMAIL_RE = re.compile(r"^[^\s@]+@[^\s@]+\.[^\s@]+$")
 REPO_RE = re.compile(r"^(?:https?://github\.com/)?([A-Za-z0-9_.-]+)/([A-Za-z0-9_.-]+?)(?:\.git)?/?$")
 
@@ -141,6 +145,100 @@ class Response:
 
 class ThreadingWSGIServer(ThreadingMixIn, WSGIServer):
     daemon_threads = True
+
+
+def _google_oauth_settings() -> tuple[str, str, str]:
+    client_id = os.getenv("GOOGLE_CLIENT_ID", "").strip()
+    client_secret = os.getenv("GOOGLE_CLIENT_SECRET", "").strip()
+    redirect_uri = os.getenv("GOOGLE_REDIRECT_URI", "").strip()
+    if not client_id or not client_secret or not redirect_uri:
+        raise RuntimeError("Google sign-in is not configured yet. Ask the deployment owner to finish Google OAuth setup.")
+    parsed = urlsplit(redirect_uri)
+    if parsed.scheme != "https" or not parsed.netloc or parsed.path != GOOGLE_CALLBACK_PATH or parsed.query or parsed.fragment:
+        raise RuntimeError("Google sign-in callback must be the HTTPS /auth/google/callback URL.")
+    return client_id, client_secret, redirect_uri
+
+
+def _google_login_url(state: str, client_id: str, redirect_uri: str) -> str:
+    params = {
+        "client_id": client_id,
+        "redirect_uri": redirect_uri,
+        "response_type": "code",
+        "scope": "openid email profile",
+        "state": state,
+        "prompt": "select_account",
+    }
+    return "https://accounts.google.com/o/oauth2/v2/auth?" + urlencode(params)
+
+
+def _verified_google_identity(code: str, state: str, request: Request) -> dict:
+    expected_state = request.cookies.get("agent_google_state", "")
+    if not state or not expected_state or not hmac.compare_digest(state, expected_state):
+        raise ValueError("Google sign-in expired or could not be validated. Please try again.")
+    client_id, client_secret, redirect_uri = _google_oauth_settings()
+    try:
+        token_response = httpx.post("https://oauth2.googleapis.com/token", data={
+            "code": code,
+            "client_id": client_id,
+            "client_secret": client_secret,
+            "redirect_uri": redirect_uri,
+            "grant_type": "authorization_code",
+        }, timeout=10, follow_redirects=False)
+        if token_response.status_code != 200:
+            raise ValueError("Google could not complete sign-in. Please try again.")
+        token_data = token_response.json()
+        id_token = token_data.get("id_token")
+        if not isinstance(id_token, str) or not id_token:
+            raise ValueError("Google did not return a verified identity.")
+        claims_response = httpx.get(GOOGLE_TOKENINFO_URL, params={"id_token": id_token},
+                                    timeout=10, follow_redirects=False)
+        if claims_response.status_code != 200:
+            raise ValueError("Google identity could not be verified. Please try again.")
+        claims = claims_response.json()
+    except (httpx.HTTPError, ValueError):
+        raise ValueError("Google sign-in service could not be reached or verified. Please try again.") from None
+    except (KeyError, TypeError):
+        raise ValueError("Google returned an invalid sign-in response.") from None
+    if (claims.get("aud") != client_id or claims.get("iss") not in ("accounts.google.com", "https://accounts.google.com")
+            or not claims.get("sub") or not claims.get("email_verified")):
+        raise ValueError("Google account verification failed. Use a verified Google account.")
+    email = claims.get("email")
+    if not isinstance(email, str) or not EMAIL_RE.fullmatch(email):
+        raise ValueError("Google did not provide a valid email address.")
+    return {"email": email.lower().strip(), "google_sub": str(claims["sub"]),
+            "email_verified": True}
+
+
+def _google_begin(request: Request):
+    try:
+        client_id, _client_secret, redirect_uri = _google_oauth_settings()
+    except RuntimeError as exc:
+        return _response(f"<div class='alert'>{_escape(exc)}</div>", request, "503 Service Unavailable")
+    state = secrets.token_urlsafe(32)
+    state_cookie = _cookie("agent_google_state", _signed_cookie(state), max_age=600, http_only=True)
+    response = _redirect(_google_login_url(state, client_id, redirect_uri), [state_cookie])
+    return response
+
+
+def _google_callback(request: Request):
+    if request.method != "GET":
+        return _response("Method not allowed", request, "405 Method Not Allowed")
+    error = request.query.get("error", [""])[0]
+    code = request.query.get("code", [""])[0]
+    state = request.query.get("state", [""])[0]
+    if error:
+        return _redirect("/login", [("Set-Cookie", _cookie("agent_google_state", "", max_age=0, http_only=True)[1])])
+    if not code:
+        return _response("<div class='alert'>Google did not return an authorization code.</div>", request, "400 Bad Request")
+    try:
+        identity = _verified_google_identity(code, state, request)
+        user = portal_db.get_or_create_google_user(identity["email"], identity["google_sub"], identity["email_verified"])
+    except (ValueError, RuntimeError) as exc:
+        return _response(f"<div class='alert'>{_escape(exc)}</div>", request, "400 Bad Request",
+                         headers=[("Set-Cookie", _cookie("agent_google_state", "", max_age=0, http_only=True)[1])])
+    session_headers = _new_session(user["id"])
+    session_headers.append(("Set-Cookie", _cookie("agent_google_state", "", max_age=0, http_only=True)[1]))
+    return _redirect("/dashboard", session_headers)
 
 
 def _admin_emails() -> set[str]:
@@ -257,10 +355,11 @@ def _page_home(request):
 
 def _page_signup(request):
     if request.method == "GET":
-        body = _form("Create your account", "Sign up to request a trial or plan. Project access is enabled by our admin after approval.",
-          "<div class='field'><label>Email</label><input name='email' type='email' autocomplete='email' required maxlength='254'></div><div class='field'><label>Password</label><input name='password' type='password' autocomplete='new-password' minlength='12' required><small>Use at least 12 characters.</small></div>",
+        body = _form("Create your account", "Sign up with Google to request a trial or plan.",
+          "<p class='muted'>Use your verified Google account to continue. Email and password sign-up is also available.</p><div class='field'><label>Email</label><input name='email' type='email' autocomplete='email' required maxlength='254'></div><div class='field'><label>Password</label><input name='password' type='password' autocomplete='new-password' minlength='12' required><small>Use at least 12 characters.</small></div>",
           "/signup", "<button class='button primary' type='submit'>Create account</button>", _csrf(request))
-        return _response(body, request)
+        google_button = "<a class='button' href='/auth/google'>Continue with Google</a><div class='divider'>or use email and password</div>"
+        return _response("<section class='card form-card'>" + google_button + body + "</section>", request)
     if not _csrf_valid(request):
         return _response("<div class='alert'>This form expired. Refresh and try again.</div>", request, "403 Forbidden")
     email, password = request.form.get("email", "").strip().lower(), request.form.get("password", "")
@@ -284,8 +383,9 @@ def _page_login(request):
     if request.method == "GET":
         body = _form("Welcome back", "Sign in to view your monitored projects.",
           "<div class='field'><label>Email</label><input name='email' type='email' autocomplete='email' required maxlength='254'></div><div class='field'><label>Password</label><input name='password' type='password' autocomplete='current-password' required></div>",
-          "/login", "<button class='button primary' type='submit'>Sign in</button>", _csrf(request))
-        return _response(body, request)
+          "/login", "<button class='button primary' type='submit'>Sign in with email</button>", _csrf(request))
+        google_button = "<a class='button primary' href='/auth/google'>Continue with Google</a><div class='divider'>or sign in with email</div>"
+        return _response("<section class='card form-card'>" + google_button + body + "</section>", request)
     if not _csrf_valid(request):
         return _response("<div class='alert'>This form expired. Refresh and try again.</div>", request, "403 Forbidden")
     email = request.form.get("email", "").strip().lower()
@@ -868,6 +968,12 @@ def _page_logout(request):
 def _dispatch(request: Request) -> Response:
     if request.method == "GET" and request.path == "/":
         return _page_home(request)
+    if request.path == "/auth/google":
+        if request.method != "GET":
+            return _response("Method not allowed", request, "405 Method Not Allowed")
+        return _google_begin(request)
+    if request.path == GOOGLE_CALLBACK_PATH:
+        return _google_callback(request)
     if request.path in ("/signup", "/login") and request.method in ("GET", "POST"):
         return _page_signup(request) if request.path == "/signup" else _page_login(request)
     if request.path == "/logout":
