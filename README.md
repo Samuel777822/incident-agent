@@ -1,7 +1,7 @@
 # Agent Daemon
 
 Agent Daemon is a multi-tenant on-call service. This repository contains the account portal, project storage,
-monitoring installer, payment flow, and a separate portal diagnosis worker. The hosted portal can turn repeated
+monitoring installer, access control, and a separate portal diagnosis worker. The hosted portal can turn repeated
 events into project-scoped diagnosis reports. Repository repair, fix pull requests, auto-merge, health checks,
 monitoring verification, and automatic rollback are not yet connected to this worker.
 
@@ -52,16 +52,16 @@ unavailable checks leave the PR open. The defaults can be adjusted with `WORKER_
 The Docker web service starts a small supervisor that runs Gunicorn and the incident worker together, which supports
 Render's free web-service plan. Configure `PORTAL_RUN_WORKER=0` only when deploying a separate worker service, as
 the paid Blueprint does. Free Render services sleep after inactivity, so the worker only processes jobs while the
-web service is awake. Keep `SESSION_SECRET`, `TOKEN_ENCRYPTION_KEY`, `DATABASE_URL`, `GROQ_API_KEY`, and any
-Razorpay test credentials in the hosting provider's secret environment settings.
+web service is awake. Keep `SESSION_SECRET`, `TOKEN_ENCRYPTION_KEY`, `DATABASE_URL`, `GROQ_API_KEY`,
+`ADMIN_EMAIL`, and `ADMIN_PASSWORD` in the hosting provider's secret environment settings.
 
 ## Render deployment
 
 The root `render.yaml` defines the web service, a continuously running worker, a private paid Postgres database,
 and separate secret groups. Connect the repository to Render and create a Blueprint from this file. Render will
-prompt for `GROQ_API_KEY` and Razorpay **test-mode** credentials; it generates the session and token-encryption
-secrets. Verify the generated `TOKEN_ENCRYPTION_KEY` is a valid Fernet key before onboarding customers. Keep
-`RAZORPAY_MODE=test` until live billing has been deliberately configured and reviewed. Paid Postgres is specified
+prompt for `GROQ_API_KEY`, `ADMIN_EMAIL`, and `ADMIN_PASSWORD`; it generates the session and token-encryption
+secrets. Verify the generated `TOKEN_ENCRYPTION_KEY` is a valid Fernet key before onboarding customers. Online
+checkout is disabled; an administrator grants access after confirming a payment or approving a trial. Paid Postgres is specified
 so database recovery is available; on Render's Hobby workspace, its documented recovery window is three days.
 
 The hosted repair path is a supervised pilot. Post-merge health monitoring, automatic rollback, and heartbeat alerts
