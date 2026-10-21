@@ -108,7 +108,7 @@ A message is reported as sent only when the SMTP server accepts it. Check Render
 
 ## Subscription plans
 
-The billing page offers ₹100 monthly (30 days) and ₹1,000 yearly (365 days). Amounts are configured in paise using `RAZORPAY_MONTHLY_AMOUNT_PAISE` and `RAZORPAY_YEARLY_AMOUNT_PAISE`; defaults are `10000` and `100000`. The older `RAZORPAY_AMOUNT_PAISE` is retained as a yearly-plan override for backward compatibility. Use `RAZORPAY_MODE=test` and `rzp_test_` credentials for validation first. Live checkout requires `RAZORPAY_MODE=live` with a matching `rzp_live_` key ID and secret; do not enable live mode until test checkout, server-side payment capture verification, and renewal behavior have been validated.
+The billing page offers ₹100 monthly (30 days) and ₹1,000 yearly (365 days). Amounts are configured in paise using `RAZORPAY_MONTHLY_AMOUNT_PAISE` and `RAZORPAY_YEARLY_AMOUNT_PAISE`; defaults are `10000` and `100000`. Use `RAZORPAY_MODE=test` and `rzp_test_` credentials for validation first. Live checkout requires `RAZORPAY_MODE=live` with a matching `rzp_live_` key ID and secret; do not enable live mode until test checkout, server-side payment capture verification, and renewal behavior have been validated.
 
 ## Development
 
