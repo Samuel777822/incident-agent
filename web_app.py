@@ -211,7 +211,7 @@ def _form(title: str, intro: str, fields: str, action: str, submit: str, csrf: s
 def _page_home(request):
     if request.session:
         return _redirect("/dashboard")
-    body = """<section class="hero"><div class="eyebrow">Incident response for Python services</div><h1>When production breaks, get to the fix faster.</h1><p>Agent Daemon groups recurring errors, explains likely causes, and prepares a small, tested change for your review.</p><div class="actions"><a class="button primary" href="/signup">Start with a project</a><a class="button" href="/login">Sign in</a></div></section><section class="grid"><article class="card"><h3>See what happened</h3><p class="muted">Turn repeated error logs into incidents with a clear timeline and diagnosis.</p></article><article class="card"><h3>Review every change</h3><p class="muted">Fixes are prepared on a branch and checked before they reach your app.</p></article><article class="card"><h3>Keep control</h3><p class="muted">Choose report-only, pull request, or carefully gated automatic repair for each project.</p></article></section>"""
+    body = """<section class="hero"><div class="eyebrow">Incident response for Python services</div><h1>When production breaks, get to the cause faster.</h1><p>Agent Daemon groups recurring error logs and explains likely causes in a project-scoped incident report.</p><div class="actions"><a class="button primary" href="/signup">Start with a project</a><a class="button" href="/login">Sign in</a></div></section><section class="grid"><article class="card"><h3>See what happened</h3><p class="muted">Turn repeated error logs into incidents with a clear timeline and diagnosis.</p></article><article class="card"><h3>Keep your code in your control</h3><p class="muted">The hosted diagnosis worker reads repository files as evidence. It does not run your code or tests or change your repository.</p></article><article class="card"><h3>Keep control</h3><p class="muted">Pause monitoring or remove the project and its stored data from your dashboard.</p></article></section>"""
     return _response(body, request)
 
 
@@ -306,22 +306,23 @@ def _page_new_project(request):
 <div class='field'><label>GitHub repository</label><input name='repo' required placeholder='owner/repository'><small>Use a fine-grained token limited to this repository.</small></div>
 <div class='field'><label>GitHub token</label><input name='github_token' type='password' autocomplete='off' required><small>Stored encrypted. It is never displayed after saving.</small></div>
 <div class='field'><label>Default branch</label><input name='branch' value='main' required maxlength='100'></div>
-<div class='field'><label>Agent mode</label><select name='mode'><option value='report'>Report only</option><option value='pr' selected>Pull request</option><option value='auto'>Auto (requires green CI)</option></select></div>
+<div class='field'><label>Agent mode</label><select name='mode'><option value='report' selected>Report only</option><option value='pr' disabled>Pull request (not available yet)</option><option value='auto' disabled>Auto (not available yet)</option></select><small>Hosted diagnosis is currently report-only. Fix PRs and automatic merges are not enabled.</small></div>
 <div class='field'><label>App URL (optional)</label><input name='app_url' type='url' placeholder='https://app.example.com'></div>
-<div class='field'><label class='checkbox'><input name='allow_install' type='checkbox' value='yes' required><span>I authorize Agent Daemon to add its monitoring code to this repository through a reviewable pull request.</span></label></div>"""
+<div class='field'><label class='checkbox'><input name='allow_install' type='checkbox' value='yes' required><span>I authorize Agent Daemon to add its monitoring code to this repository through a reviewable pull request.</span></label></div>
+<div class='field'><label class='checkbox'><input name='allow_ai_processing' type='checkbox' value='yes' required><span>I understand that selected error logs, tracebacks, and relevant repository source files will be sent to Groq for AI diagnosis.</span></label></div>"""
         body = _form("Connect a project", "We only monitor after you authorize the installation.", fields,
                      "/projects/new", "<button class='button primary' type='submit'>Save project</button>", _csrf(request))
         return _response(body, request)
     if not _csrf_valid(request):
         return _response("<div class='alert'>This form expired. Refresh and try again.</div>", request, "403 Forbidden")
-    if request.form.get("allow_install") != "yes":
-        return _response("<div class='alert'>Please authorize the monitoring installation before continuing.</div>", request, "400 Bad Request")
+    if request.form.get("allow_install") != "yes" or request.form.get("allow_ai_processing") != "yes":
+        return _response("<div class='alert'>Authorize monitoring installation and AI diagnosis data processing before continuing.</div>", request, "400 Bad Request")
     repo_match = REPO_RE.fullmatch(request.form.get("repo", "").strip())
     token = request.form.get("github_token", "").strip()
     mode = request.form.get("mode", "pr")
     name = request.form.get("name", "").strip()
     branch = request.form.get("branch", "main").strip()
-    if not repo_match or not token or not name or not branch or mode not in {"report", "pr", "auto"}:
+    if not repo_match or not token or not name or not branch or mode != "report":
         return _response("<div class='alert'>Check the repository, token, project name, branch, and mode.</div>", request, "400 Bad Request")
     try:
         ciphertext = _encrypt_token(token)
@@ -333,8 +334,9 @@ def _page_new_project(request):
     project_id = portal_db.create_project(request.session["user_id"], name=name,
         repo_owner=owner, repo_name=repo.removesuffix(".git"), branch=branch, mode=mode,
         token_ciphertext=ciphertext, ingest_key_hash=ingest_hash,
-        app_url=request.form.get("app_url", "").strip())
+        app_url=request.form.get("app_url", "").strip(), ai_consent_at=portal_db._now())
     portal_db.audit(project_id, "project_connected", {"repo": f"{owner}/{repo}", "mode": mode})
+    portal_db.audit(project_id, "ai_diagnosis_consent", {"scope": "selected logs, tracebacks, and repository source sent to Groq"})
     notice = f"<div class='alert'>Save this ingest key now. It is shown once: <code>{_escape(ingest_key)}</code></div>"
     return _response(notice + f"<section class='card'><h1>Project saved</h1><p class='muted'>The monitoring installer is the next step. Your project is pending until the pull request is merged and its first heartbeat arrives.</p><a class='button primary' href='/projects/{_escape(project_id)}'>View project</a></section>", request, "201 Created")
 
@@ -752,3 +754,4 @@ def main():
 
 if __name__ == "__main__":
     main()
+

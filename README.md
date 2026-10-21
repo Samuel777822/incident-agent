@@ -1,9 +1,9 @@
 # Agent Daemon
 
 Agent Daemon is a multi-tenant on-call service. This repository contains the account portal, project storage,
-monitoring installer, payment flow, and an older single-repository daemon. The hosted portal's incident ingest is
-not yet connected to an isolated multi-tenant diagnosis and repair worker, so hosted diagnosis and repair are not
-operational yet.
+monitoring installer, payment flow, and a separate portal diagnosis worker. The hosted portal can turn repeated
+events into project-scoped diagnosis reports. Repository repair, fix pull requests, auto-merge, health checks,
+monitoring verification, and automatic rollback are not yet connected to this worker.
 
 ## Web application
 
@@ -30,8 +30,25 @@ and `INCIDENT_AGENT_INGEST_KEY` in the customer's deployment environment. The in
 hash is stored by the portal.
 
 The `/ingest` endpoint accepts JSON with an `X-Ingest-Key` header. `/heartbeat` uses the same project key. Events are
-deduplicated per project, and dashboard queries scope projects and incidents to their owner. Razorpay checkout
-activates a subscription only after verifying the checkout signature and confirming the payment is captured.
+deduplicated per project, and dashboard queries scope projects and incidents to their owner. New project setup asks
+for explicit consent before selected logs, tracebacks, and relevant Python source files are sent to Groq for diagnosis.
+Razorpay checkout activates a subscription only after verifying the checkout signature and confirming the payment is captured.
+
+## Hosted diagnosis worker
+
+Run one worker process separately from the web service with `python portal_worker.py`. Configure it with the same
+`DATABASE_URL`, `TOKEN_ENCRYPTION_KEY`, and `APP_ENV=production` as the web service, plus `GROQ_API_KEY`. The worker
+polls PostgreSQL for incidents that have at least five events over 30 seconds, whose project is not paused, whose
+subscription is active, and whose owner consented to AI diagnosis. It uses the GitHub REST API to read a bounded
+set of source files and recent commit summaries; it does not clone repositories or run customer code or tests.
+Temporary job failures are retried up to three times and are written to the project audit log. The worker stores a
+diagnosis report and does not yet create a patch or pull request. The defaults can be adjusted with
+`WORKER_POLL_SECONDS`, `WORKER_MIN_OCCURRENCES`, `WORKER_MIN_AGE_SECONDS`, `WORKER_LEASE_SECONDS`, and
+`WORKER_MAX_ATTEMPTS`.
+
+Deploy the portal, this worker, and PostgreSQL as separate services. Do not mount a persistent local database or
+store customer source on the worker. Keep `SESSION_SECRET`, `TOKEN_ENCRYPTION_KEY`, `DATABASE_URL`, and
+`GROQ_API_KEY` in the hosting provider's secret environment settings.
 
 ## Existing single-repository daemon
 
@@ -62,7 +79,9 @@ Useful modules:
 | File | Purpose |
 | --- | --- |
 | `web_app.py`, `portal_db.py` | Portal routes, sessions, tenant-scoped data and billing |
+| `portal_worker.py` | Subscription-gated, consent-gated hosted diagnosis worker |
 | `monitoring_installer.py` | Opens the customer's opt-in monitoring pull request |
 | `diagnose.py`, `run_diagnosis.py` | Legacy single-repository diagnosis flow |
 | `patcher.py`, `autofix.py`, `pr.py` | Constrained patch and CI-gated pull request workflow |
 | `agent_daemon.py`, `workflows.py` | Legacy local daemon and one-shot pipeline |
+

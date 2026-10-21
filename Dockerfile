@@ -1,11 +1,9 @@
 # Container entry point for the Agent Daemon web application
 FROM python:3.11-slim
 
-# Install system dependencies: Git and CA certificates for HTTPS git operations
+# CA certificates are needed for the GitHub and Groq HTTPS APIs.
 RUN apt-get update && apt-get install -y --no-install-recommends \
-    git \
     ca-certificates \
-    curl \
     && rm -rf /var/lib/apt/lists/*
 
 WORKDIR /app
@@ -24,3 +22,4 @@ ENV HOST=0.0.0.0
 
 # Run the active hosted application, not a hard-coded sample customer daemon.
 CMD ["python", "web_app.py"]
+

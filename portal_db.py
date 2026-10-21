@@ -41,6 +41,7 @@ CREATE TABLE IF NOT EXISTS projects (
   app_url TEXT NOT NULL DEFAULT '',
   status TEXT NOT NULL DEFAULT 'pending_install',
   install_pr_url TEXT NOT NULL DEFAULT '',
+  ai_consent_at TEXT NOT NULL DEFAULT '',
   paused INTEGER NOT NULL DEFAULT 0,
   active_until TEXT,
   created_at TEXT NOT NULL
@@ -74,6 +75,15 @@ CREATE TABLE IF NOT EXISTS incidents (
   ci_status TEXT NOT NULL DEFAULT 'unknown',
   created_at TEXT NOT NULL,
   resolved_at TEXT
+);
+CREATE TABLE IF NOT EXISTS incident_jobs (
+  incident_id TEXT PRIMARY KEY REFERENCES incidents(id) ON DELETE CASCADE,
+  status TEXT NOT NULL DEFAULT 'queued',
+  attempts INTEGER NOT NULL DEFAULT 0,
+  available_at TEXT NOT NULL,
+  locked_until TEXT,
+  last_error TEXT NOT NULL DEFAULT '',
+  updated_at TEXT NOT NULL
 );
 CREATE TABLE IF NOT EXISTS fixes (
   id TEXT PRIMARY KEY,
@@ -127,6 +137,7 @@ CREATE TABLE IF NOT EXISTS ingest_limits (
 CREATE INDEX IF NOT EXISTS idx_projects_user ON projects(user_id);
 CREATE INDEX IF NOT EXISTS idx_incidents_project_seen ON incidents(project_id, last_seen);
 CREATE INDEX IF NOT EXISTS idx_log_events_project_time ON log_events(project_id, timestamp);
+CREATE INDEX IF NOT EXISTS idx_incident_jobs_ready ON incident_jobs(status, available_at, locked_until);
 CREATE INDEX IF NOT EXISTS idx_audit_project_time ON audit_log(project_id, created_at);
 """
 
@@ -179,8 +190,11 @@ def init_db() -> None:
             columns = {row[1] for row in conn.execute("PRAGMA table_info(projects)").fetchall()}
             if "install_pr_url" not in columns:
                 conn.execute("ALTER TABLE projects ADD COLUMN install_pr_url TEXT NOT NULL DEFAULT ''")
+            if "ai_consent_at" not in columns:
+                conn.execute("ALTER TABLE projects ADD COLUMN ai_consent_at TEXT NOT NULL DEFAULT ''")
         else:
             _execute(conn, "ALTER TABLE projects ADD COLUMN IF NOT EXISTS install_pr_url TEXT NOT NULL DEFAULT ''")
+            _execute(conn, "ALTER TABLE projects ADD COLUMN IF NOT EXISTS ai_consent_at TEXT NOT NULL DEFAULT ''")
         conn.commit()
     finally:
         conn.close()
@@ -264,7 +278,7 @@ def check_login_rate_limit(key: str, maximum: int = 8, window_seconds: int = 900
 
 def create_project(user_id: str, *, name: str, repo_owner: str, repo_name: str,
                    branch: str, mode: str, token_ciphertext: str, ingest_key_hash: str,
-                   app_url: str = "") -> str:
+                   app_url: str = "", ai_consent_at: str = "") -> str:
     project_id = _id()
     conn = get_connection()
     try:
@@ -272,10 +286,10 @@ def create_project(user_id: str, *, name: str, repo_owner: str, repo_name: str,
         active_until = subscription["active_until"] if subscription else None
         _execute(conn, """INSERT INTO projects
           (id,user_id,name,repo_owner,repo_name,branch,mode,github_token_ciphertext,
-           ingest_key_hash,app_url,active_until,created_at)
-          VALUES(?,?,?,?,?,?,?,?,?,?,?,?)""",
+           ingest_key_hash,app_url,active_until,created_at,ai_consent_at)
+          VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?)""",
           (project_id,user_id,name,repo_owner,repo_name,branch,mode,token_ciphertext,
-           ingest_key_hash,app_url,active_until,_now()))
+           ingest_key_hash,app_url,active_until,_now(),ai_consent_at))
         conn.commit()
         return project_id
     finally:
@@ -400,13 +414,34 @@ def ingest_event(project_id: str, *, timestamp: str, level: str, message: str,
         if cur.rowcount == 0:
             conn.commit()
             return None, False
-        row = _execute(conn, """SELECT id,occurrences FROM incidents
+        row = _execute(conn, """SELECT id,occurrences,status,last_seen FROM incidents
           WHERE project_id=? AND signature=? AND status NOT IN ('resolved','reverted')
           ORDER BY created_at DESC LIMIT 1""", (project_id,signature)).fetchone()
         if row:
             incident_id = row["id"]
-            _execute(conn, "UPDATE incidents SET occurrences=occurrences+1,last_seen=? WHERE id=? AND project_id=?",
-                     (timestamp,incident_id,project_id))
+            reopened = False
+            if row["status"] in ("diagnosed", "needs_human"):
+                try:
+                    previous = datetime.fromisoformat(row["last_seen"])
+                    current = datetime.fromisoformat(timestamp)
+                    if previous.tzinfo is None:
+                        previous = previous.replace(tzinfo=timezone.utc)
+                    if current.tzinfo is None:
+                        current = current.replace(tzinfo=timezone.utc)
+                    reopened = (current - previous).total_seconds() > 60
+                except (TypeError, ValueError):
+                    reopened = False
+            if reopened:
+                _execute(conn, """UPDATE incidents SET status='diagnosing',category='',confidence='',occurrences=1,
+                  first_seen=?,last_seen=?,root_cause='',report='',ci_status='unknown'
+                  WHERE id=? AND project_id=?""", (timestamp,timestamp,incident_id,project_id))
+                _execute(conn, """INSERT INTO incident_jobs(incident_id,status,attempts,available_at,locked_until,last_error,updated_at)
+                  VALUES(?,?,?,?,NULL,'',?) ON CONFLICT(incident_id) DO UPDATE SET
+                  status='queued',attempts=0,available_at=excluded.available_at,locked_until=NULL,last_error='',updated_at=excluded.updated_at""",
+                  (incident_id,"queued",0,_now(),_now()))
+            else:
+                _execute(conn, "UPDATE incidents SET occurrences=occurrences+1,last_seen=? WHERE id=? AND project_id=?",
+                         (timestamp,incident_id,project_id))
         else:
             incident_id = _id()
             _execute(conn, """INSERT INTO incidents
@@ -414,6 +449,8 @@ def ingest_event(project_id: str, *, timestamp: str, level: str, message: str,
               VALUES(?,?,?,?,?,?)""", (incident_id,project_id,signature,timestamp,timestamp,_now()))
         _execute(conn, "UPDATE log_events SET incident_id=? WHERE id=? AND project_id=?",
                  (incident_id,event_id,project_id))
+        _execute(conn, "INSERT INTO incident_jobs(incident_id,status,available_at,updated_at) VALUES(?,?,?,?) ON CONFLICT(incident_id) DO NOTHING",
+                 (incident_id,"queued",_now(),_now()))
         conn.commit()
         return incident_id, True
     except Exception:
@@ -429,6 +466,106 @@ def list_incidents(project_id: str, limit: int = 100):
         rows = _execute(conn, "SELECT * FROM incidents WHERE project_id=? ORDER BY last_seen DESC LIMIT ?",
                         (project_id,limit)).fetchall()
         return [dict(row) for row in rows]
+    finally:
+        conn.close()
+
+
+def claim_next_incident(*, min_occurrences: int = 5, min_age_seconds: int = 30,
+                        lease_seconds: int = 600, max_attempts: int = 3):
+    """Claim one eligible, subscribed project's diagnosis job with a lease."""
+    now = datetime.now(timezone.utc)
+    now_s = now.isoformat(timespec="seconds")
+    eligible_before = (now - timedelta(seconds=min_age_seconds)).isoformat(timespec="seconds")
+    lease_until = (now + timedelta(seconds=lease_seconds)).isoformat(timespec="seconds")
+    conn = get_connection()
+    try:
+        if isinstance(conn, sqlite3.Connection):
+            conn.execute("BEGIN IMMEDIATE")
+            lock_clause = ""
+        else:
+            lock_clause = " FOR UPDATE OF j SKIP LOCKED"
+        row = _execute(conn, """SELECT j.incident_id,j.attempts,i.project_id,i.signature,i.occurrences,
+                    i.first_seen,i.last_seen,p.repo_owner,p.repo_name,p.branch,p.mode,
+                    p.github_token_ciphertext,p.active_until,p.paused,p.ai_consent_at
+          FROM incident_jobs j
+          JOIN incidents i ON i.id=j.incident_id
+          JOIN projects p ON p.id=i.project_id
+          WHERE i.status IN ('diagnosing','queued') AND i.occurrences>=? AND i.first_seen<=?
+            AND p.paused=0 AND p.ai_consent_at<>'' AND p.active_until>? AND j.attempts<?
+            AND ((j.status='queued' AND j.available_at<=?)
+              OR (j.status='processing' AND j.locked_until<=?))
+          ORDER BY i.first_seen ASC LIMIT 1""" + lock_clause,
+          (min_occurrences,eligible_before,now_s,max_attempts,now_s,now_s)).fetchone()
+        if not row:
+            conn.commit()
+            return None
+        incident_id = row["incident_id"]
+        _execute(conn, "UPDATE incident_jobs SET status='processing',attempts=attempts+1,locked_until=?,updated_at=? WHERE incident_id=?",
+                 (lease_until,now_s,incident_id))
+        _execute(conn, "UPDATE incidents SET status='processing' WHERE id=? AND project_id=?",
+                 (incident_id,row["project_id"]))
+        event = _execute(conn, """SELECT message,traceback,timestamp FROM log_events
+          WHERE project_id=? AND incident_id=? AND timestamp>=? ORDER BY timestamp ASC LIMIT 1""",
+          (row["project_id"],incident_id,row["first_seen"])).fetchone()
+        conn.commit()
+        claimed = dict(row)
+        claimed["first_event"] = dict(event) if event else None
+        return claimed
+    except Exception:
+        conn.rollback()
+        raise
+    finally:
+        conn.close()
+
+
+def complete_diagnosis(incident_id: str, project_id: str, result: dict) -> bool:
+    """Save diagnosis and mark only this project's job complete."""
+    conn = get_connection()
+    now = _now()
+    try:
+        cur = _execute(conn, """UPDATE incidents SET status='diagnosed',category=?,confidence=?,
+          root_cause=?,report=? WHERE id=? AND project_id=? AND status='processing'""",
+          (str(result.get("category", "unknown"))[:80],str(result.get("confidence", "low"))[:20],
+           str(result.get("root_cause", ""))[:4000],str(result.get("report", ""))[:30000],incident_id,project_id))
+        if cur.rowcount != 1:
+            conn.rollback()
+            return False
+        _execute(conn, "UPDATE incident_jobs SET status='done',locked_until=NULL,last_error='',updated_at=? WHERE incident_id=?",
+                 (now,incident_id))
+        _execute(conn, "INSERT INTO audit_log(id,project_id,action,detail,created_at) VALUES(?,?,?,?,?)",
+                 (_id(),project_id,"incident_diagnosed",json.dumps({"incident_id":incident_id},sort_keys=True),now))
+        conn.commit()
+        return True
+    except Exception:
+        conn.rollback()
+        raise
+    finally:
+        conn.close()
+
+
+def fail_diagnosis(incident_id: str, project_id: str, error: str, *, retry_delay_seconds: int = 60,
+                   max_attempts: int = 3) -> None:
+    """Retry transient worker failures without persisting credentials or tracebacks."""
+    conn = get_connection()
+    now = datetime.now(timezone.utc)
+    try:
+        row = _execute(conn, "SELECT attempts FROM incident_jobs WHERE incident_id=?", (incident_id,)).fetchone()
+        if not row:
+            return
+        terminal = int(row["attempts"]) >= max_attempts
+        status = "failed" if terminal else "queued"
+        next_at = now if terminal else now + timedelta(seconds=retry_delay_seconds)
+        safe_error = str(error).replace("\n", " ")[:500]
+        _execute(conn, "UPDATE incident_jobs SET status=?,available_at=?,locked_until=NULL,last_error=?,updated_at=? WHERE incident_id=?",
+                 (status,next_at.isoformat(timespec="seconds"),safe_error,now.isoformat(timespec="seconds"),incident_id))
+        _execute(conn, "UPDATE incidents SET status=? WHERE id=? AND project_id=? AND status='processing'",
+                 ("needs_human" if terminal else "diagnosing",incident_id,project_id))
+        _execute(conn, "INSERT INTO audit_log(id,project_id,action,detail,created_at) VALUES(?,?,?,?,?)",
+                 (_id(),project_id,"diagnosis_failed",json.dumps({"incident_id":incident_id,"error":safe_error,"terminal":terminal},sort_keys=True),now.isoformat(timespec="seconds")))
+        conn.commit()
+    except Exception:
+        conn.rollback()
+        raise
     finally:
         conn.close()
 
@@ -496,3 +633,4 @@ def get_subscription_active_until(user_id: str):
         return row["active_until"] if row else None
     finally:
         conn.close()
+
