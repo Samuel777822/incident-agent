@@ -29,10 +29,24 @@ def _request(url: str, token: str, method: str = "GET", payload=None):
             raw = response.read()
             return json.loads(raw) if raw else {}
     except urllib.error.HTTPError as exc:
-        detail = exc.read().decode("utf-8", errors="replace")[:500]
-        raise GitHubInstallError(f"GitHub API returned HTTP {exc.code}: {detail}") from exc
+        if exc.code == 401:
+            message = "GitHub rejected this token (401 Bad credentials). Create or regenerate a token, then update it on the project page."
+        elif exc.code == 403:
+            message = "GitHub denied this token. Confirm it is allowed to access this repository and can create branches and pull requests."
+        elif exc.code == 404:
+            message = "GitHub could not find this repository for the saved token. Check the owner/repository name and the token's repository access."
+        else:
+            message = f"GitHub could not complete the request (HTTP {exc.code}). Try again later."
+        raise GitHubInstallError(message) from None
     except urllib.error.URLError as exc:
         raise GitHubInstallError("Could not reach GitHub to create the installation pull request.") from exc
+
+
+def validate_repository_access(*, owner: str, repo: str, token: str) -> None:
+    """Check that a token is accepted and can see the selected repository."""
+    owner_q = urllib.parse.quote(owner, safe="")
+    repo_q = urllib.parse.quote(repo, safe="")
+    _request(f"https://api.github.com/repos/{owner_q}/{repo_q}", token)
 
 
 def _blob(api: str, token: str, content: str) -> str:
@@ -52,6 +66,7 @@ def open_monitoring_pr(*, owner: str, repo: str, base_branch: str,
     owner_q = urllib.parse.quote(owner, safe="")
     repo_q = urllib.parse.quote(repo, safe="")
     api = f"https://api.github.com/repos/{owner_q}/{repo_q}"
+    validate_repository_access(owner=owner, repo=repo, token=token)
     ref = urllib.parse.quote(base_branch, safe="")
     base = _request(f"{api}/git/ref/heads/{ref}", token)["object"]["sha"]
     base_commit = _request(f"{api}/git/commits/{base}", token)
