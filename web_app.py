@@ -302,6 +302,20 @@ def _page_admin(request):
             return _response("<div class='alert'>This form expired. Refresh and try again.</div>", request, "403 Forbidden")
         user_id = request.form.get("user_id", "")
         action = request.form.get("action", "")
+        if action in ("approve_trial", "reject_trial"):
+            request_id = request.form.get("request_id", "")
+            decision = "approved" if action == "approve_trial" else "rejected"
+            trial = portal_db.admin_review_trial_request(request_id, decision, request.session["email"])
+            if not trial:
+                return _response("<div class='alert'>This trial request was already reviewed or no longer exists.</div>", request, "409 Conflict")
+            if decision == "approved":
+                portal_db.admin_grant_access(trial["user_id"], 1, "trial", request.session["email"])
+            import notifications
+            subject = "Your Agent Daemon trial is approved" if decision == "approved" else "Update on your Agent Daemon trial request"
+            until = portal_db.get_subscription_active_until(trial["user_id"]) if decision == "approved" else ""
+            message = (f"Your one-day trial is approved and expires at {until}. Sign in to connect your project: https://incident-agent-portal.onrender.com" if decision == "approved" else "Your trial request was not approved at this time.")
+            sent = notifications.notify_customer(trial["email"], subject, message)
+            return _redirect("/admin?updated=1&email=" + ("sent" if sent else "not-configured"))
         if action == "revoke":
             portal_db.admin_revoke_access(user_id)
             return _redirect("/admin?updated=1")
@@ -335,6 +349,21 @@ def _page_admin(request):
         info = "<div class='pill green'>Access list updated.</div>" + info
     return _response(f"<section class='section'><div class='eyebrow'>Administration</div><h1>Account permissions</h1><p class='muted'>Approve or revoke access for registered customers. Every grant is tied to an expiry date.</p>{info}{table}</section>", request)
 
+
+def _page_trial_request(request):
+    gate = _require_session(request)
+    if gate:
+        return gate
+    if request.method != "POST":
+        return _response("Method not allowed", request, "405 Method Not Allowed")
+    if not _csrf_valid(request):
+        return _response("<div class='alert'>This form expired. Refresh and try again.</div>", request, "403 Forbidden")
+    existing = portal_db.create_trial_request(request.session["user_id"])
+    import notifications
+    results = notifications.notify_admins("New Agent Daemon trial request", f"Customer {request.session['email']} requested a one-day trial. Review it here: https://incident-agent-portal.onrender.com/admin")
+    sent = bool(results) and all(results.values())
+    message = "Trial request saved. Both administrators were notified by email." if sent else "Trial request saved, but email delivery is not confirmed. Administrators can still review it in the dashboard."
+    return _response(f"<section class='card form-card'><h1>Request received</h1><p>{_escape(message)}</p><p class='muted'>Status: {_escape(existing['status'])}</p><a class='button primary' href='/billing'>Back to account access</a></section>", request)
 
 def _page_dashboard(request):
     if request.method != "GET":
@@ -810,6 +839,8 @@ def _dispatch(request: Request) -> Response:
         return _page_dashboard(request)
     if request.path == "/billing":
         return _page_billing(request)
+    if request.path == "/billing/trial-request":
+        return _page_trial_request(request)
     if request.path == "/billing/order":
         return _page_create_order(request)
     if request.path == "/billing/verify":
