@@ -8,7 +8,7 @@ monitoring verification, and automatic rollback are not yet connected to this wo
 ## Web application
 
 The server-rendered site is in `web_app.py`. It provides account sign-in, owner-scoped projects and incidents,
-per-project event ingestion, project controls, and Razorpay test-mode checkout. Local development uses SQLite;
+per-project event ingestion, project controls, and administrator-managed access. Local development uses SQLite;
 production requires PostgreSQL via `DATABASE_URL` and HTTPS in front of the app.
 
 Set these values before production startup:
@@ -18,10 +18,8 @@ Set these values before production startup:
 | `SESSION_SECRET` | At least 32 random characters for signed sessions |
 | `TOKEN_ENCRYPTION_KEY` | Fernet key for encrypting customer GitHub tokens |
 | `DATABASE_URL` | PostgreSQL connection URL |
-| `RAZORPAY_MODE` | Must be `test`; live payments are disabled |
-| `RAZORPAY_KEY_ID`, `RAZORPAY_KEY_SECRET` | Razorpay test credentials |
-| `RAZORPAY_WEBHOOK_SECRET` | Secret for the captured-payment webhook |
-| `RAZORPAY_AMOUNT_PAISE` | Product owner's test subscription amount |
+| `ADMIN_EMAIL` | Administrator login email |
+| `ADMIN_PASSWORD` | Strong private password for the administrator login; never commit it |
 
 Run locally with `python web_app.py`. For production, use the Gunicorn entry point in `wsgi.py`; the Dockerfile
 starts it with multiple worker threads and validates the required session secret and database at startup. The project
@@ -33,7 +31,7 @@ hash is stored by the portal.
 The `/ingest` endpoint accepts JSON with an `X-Ingest-Key` header. `/heartbeat` uses the same project key. Events are
 deduplicated per project, and dashboard queries scope projects and incidents to their owner. New project setup asks
 for explicit consent before selected logs, tracebacks, and relevant Python source files are sent to Groq for diagnosis.
-Razorpay checkout activates a subscription only after verifying the checkout signature and confirming the payment is captured.
+Project access is granted only by an administrator and expires at the configured grant date.
 
 ## Hosted diagnosis worker
 
