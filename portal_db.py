@@ -335,6 +335,18 @@ def get_project_by_ingest_hash(key_hash: str):
         conn.close()
 
 
+def update_project_github_token(project_id: str, user_id: str, token_ciphertext: str) -> bool:
+    """Replace a project's encrypted GitHub token for its owner."""
+    conn = get_connection()
+    try:
+        cur = _execute(conn, "UPDATE projects SET github_token_ciphertext=? WHERE id=? AND user_id=?",
+                       (token_ciphertext, project_id, user_id))
+        conn.commit()
+        return cur.rowcount == 1
+    finally:
+        conn.close()
+
+
 def rotate_project_ingest_key(project_id: str, user_id: str, key_hash: str) -> bool:
     conn = get_connection()
     try:
