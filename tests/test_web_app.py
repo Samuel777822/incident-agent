@@ -97,6 +97,7 @@ def test_logout_requires_csrf_token(web_env):
 
 def test_ingest_authenticates_and_deduplicates_per_project(web_env):
     user_id = web_app.portal_db.create_user("ingest@example.com", "hash")
+    web_app.portal_db.admin_grant_access(user_id, 1, "trial", "test-admin")
     raw_key = "project-ingest-key-that-is-long-enough-123"
     project_id = web_app.portal_db.create_project(user_id, name="API", repo_owner="demo",
         repo_name="api", branch="main", mode="pr", token_ciphertext="cipher",
