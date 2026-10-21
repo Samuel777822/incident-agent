@@ -590,11 +590,31 @@ def record_remediation(incident_id: str, project_id: str, *, branch: str, file_p
     try:
         _execute(conn, "INSERT INTO fixes(id,incident_id,branch,file_path,diff,ci_result,created_at) VALUES(?,?,?,?,?,?,?)",
                  (_id(), incident_id, branch, file_path, diff[:50000], ci_status, now))
-        _execute(conn, """UPDATE incidents SET status='pr_opened',pr_url=?,pr_number=?,ci_status=?
-                          WHERE id=? AND project_id=?""",
-                 (pr_url, pr_number, ci_status, incident_id, project_id))
+        _execute(conn, """UPDATE incidents SET status='pr_opened',pr_url=?,pr_number=?,ci_status=?,
+                          report=COALESCE(report,'') || ? WHERE id=? AND project_id=?""",
+                 (pr_url, pr_number, ci_status,
+                  "\\n\\nFix pull request opened: " + pr_url + ". Customer code and tests were not run.",
+                  incident_id, project_id))
         _execute(conn, "INSERT INTO audit_log(id,project_id,action,detail,created_at) VALUES(?,?,?,?,?)",
                  (_id(), project_id, "fix_pr_opened", json.dumps({"incident_id":incident_id,"pr_url":pr_url},sort_keys=True), now))
+        conn.commit()
+    except Exception:
+        conn.rollback()
+        raise
+    finally:
+        conn.close()
+
+
+def mark_remediation_needs_human(incident_id: str, project_id: str, reason: str) -> None:
+    """Keep diagnosis available while recording that no safe PR was created."""
+    conn = get_connection()
+    now = _now()
+    safe_reason = str(reason).replace("\\n", " ")[:400]
+    try:
+        _execute(conn, "UPDATE incidents SET status='needs_human',report=COALESCE(report,'') || ? WHERE id=? AND project_id=?",
+                 ("\\n\\nNo fix PR was created: " + safe_reason, incident_id, project_id))
+        _execute(conn, "INSERT INTO audit_log(id,project_id,action,detail,created_at) VALUES(?,?,?,?,?)",
+                 (_id(), project_id, "fix_pr_not_created", json.dumps({"incident_id":incident_id,"reason":safe_reason},sort_keys=True), now))
         conn.commit()
     except Exception:
         conn.rollback()
