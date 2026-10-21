@@ -637,17 +637,28 @@ def _page_billing(request):
     gate = _require_session(request)
     if gate:
         return gate
-    active_until = portal_db.get_subscription_active_until(request.session["user_id"])
+    user_id = request.session["user_id"]
+    active_until = portal_db.get_subscription_active_until(user_id)
     active = bool(active_until and active_until > _now().isoformat(timespec="seconds"))
+    requests = [item for item in portal_db.admin_list_trial_requests() if item["user_id"] == user_id]
+    latest = requests[0] if requests else None
+    success = "<div class='pill green'>Payment verified and access activated.</div>" if request.query.get("success") == ["1"] else ""
     if active:
-        info = f"<div class='alert'>Your access is active through {_escape(active_until)}. Contact us if you need to renew.</div>"
+        info = f"<div class='alert'>Your access is active through {_escape(active_until)}.</div><p class='muted'>Your existing projects remain attached to your account.</p>"
     else:
-        info = """<p class='muted'>To request a trial, call us and we’ll explain the available plans. After payment, our admin will activate your account. You can connect a project once access is approved.</p>
-<div class='actions'><a class='button primary' href='tel:7975291636'>Call 7975291636</a><a class='button' href='tel:9341565937'>Call 9341565937</a></div>
-<p class='muted'>Access is assigned to your account by an administrator after trial approval or payment confirmation.</p>"""
-    body = f"<section class='section'><div class='eyebrow'>Account access</div><h1>{'Access active' if active else 'Request a trial or plan'}</h1>{info}</section>"
+        if latest and latest["status"] == "pending":
+            trial = "<div class='alert'>Your one-day trial request is pending administrator review.</div>"
+        elif latest and latest["status"] == "rejected":
+            trial = "<div class='alert'>Your latest trial request was not approved. You can still choose a paid plan.</div>"
+        else:
+            trial = f"<form method='post' action='/billing/trial-request'><input type='hidden' name='csrf' value='{_escape(_csrf(request))}'><button class='button' type='submit'>Request a free 1-day trial</button></form>"
+        info = f"""{trial}
+<div class='grid'>
+<article class='card'><div class='eyebrow'>Monthly</div><h2>₹100 <small class='muted'>/ month</small></h2><p class='muted'>30 days of access.</p><form method='post' action='/billing/order'><input type='hidden' name='csrf' value='{_escape(_csrf(request))}'><input type='hidden' name='plan' value='monthly'><button class='button primary' type='submit'>Choose monthly</button></form></article>
+<article class='card'><div class='eyebrow'>Yearly</div><h2>₹1,000 <small class='muted'>/ year</small></h2><p class='muted'>365 days of access.</p><form method='post' action='/billing/order'><input type='hidden' name='csrf' value='{_escape(_csrf(request))}'><input type='hidden' name='plan' value='yearly'><button class='button primary' type='submit'>Choose yearly</button></form></article>
+</div><p class='muted'>Checkout requires valid Razorpay credentials configured on the server. Access is activated only after payment is verified server-side.</p>"""
+    body = f"<section class='section'><div class='eyebrow'>Account access</div><h1>{'Your subscription' if active else 'Choose your access'}</h1>{success}{info}</section>"
     return _response(body, request)
-
 
 def _page_create_order(request):
     return _response("<div class='alert'>Online checkout is currently disabled. Contact us for plans; access is activated by an administrator after payment confirmation.</div>", request, "410 Gone")
