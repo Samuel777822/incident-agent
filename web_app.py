@@ -228,7 +228,7 @@ def _google_callback(request: Request):
                          headers=[clear_state])
     session_headers = _new_session(user["id"])
     session_headers.append(clear_state)
-    return _redirect("/dashboard", session_headers)
+    return _redirect("/admin" if identity["email"] in _admin_emails() else "/dashboard", session_headers)
 
 
 def _admin_emails() -> set[str]:
@@ -338,7 +338,7 @@ def _form(title: str, intro: str, fields: str, action: str, submit: str, csrf: s
 
 def _page_home(request):
     if request.session:
-        return _redirect("/dashboard")
+        return _redirect("/admin" if _is_admin(request) else "/dashboard")
     body = """<section class="hero"><div class="eyebrow">Incident response for Python services</div><h1>When production breaks, get to the cause faster.</h1><p>Agent Daemon groups recurring error logs and explains likely causes in a project-scoped incident report. Create an account to request access; projects unlock after trial approval or payment confirmation.</p><div class="actions"><a class="button primary" href="/signup">Create account</a><a class="button" href="/login">Sign in</a></div></section><section class="grid"><article class="card"><h3>See what happened</h3><p class="muted">Turn repeated error logs into incidents with a clear timeline and diagnosis.</p></article><article class="card"><h3>Keep your code in your control</h3><p class="muted">The hosted diagnosis worker reads repository files as evidence. It does not run your code or tests or change your repository.</p></article><article class="card"><h3>Keep control</h3><p class="muted">Pause monitoring or remove the project and its stored data from your dashboard.</p></article></section>"""
     return _response(body, request)
 
@@ -395,7 +395,7 @@ def _page_login(request):
             return _response("<div class='alert'>Administrator credentials are not configured or are incorrect.</div>", request, "401 Unauthorized")
         user = portal_db.get_user_by_email(email)
         user_id = user["id"] if user else portal_db.create_user(email, _password_hash(admin_password))
-        return _redirect("/dashboard", _new_session(user_id))
+        return _redirect("/admin", _new_session(user_id))
     user = portal_db.get_user_by_email(email)
     if not user or not _password_matches(submitted_password, user["password_hash"]):
         return _response("<div class='alert'>Email or password is incorrect.</div>", request, "401 Unauthorized")
