@@ -741,8 +741,8 @@ def complete_payment_order(order_id: str, payment_id: str, amount: int) -> bool:
             conn.commit()
             return False
         _execute(conn, "UPDATE payment_orders SET status='paid' WHERE razorpay_order_id=?", (order_id,))
-        _execute(conn, "INSERT INTO subscriptions(user_id,active_until,updated_at) VALUES(?,?,?) ON CONFLICT(user_id) DO UPDATE SET active_until=excluded.active_until,updated_at=excluded.updated_at",
-                 (order["user_id"],until,now.isoformat(timespec="seconds")))
+        _execute(conn, "INSERT INTO subscriptions(user_id,active_until,grant_type,granted_by,updated_at) VALUES(?,?,?,?,?) ON CONFLICT(user_id) DO UPDATE SET active_until=excluded.active_until,grant_type='paid',granted_by='',updated_at=excluded.updated_at",
+                 (order["user_id"],until,"paid","",now.isoformat(timespec="seconds")))
         _execute(conn, "UPDATE projects SET active_until=? WHERE user_id=?", (until,order["user_id"]))
         project_rows = _execute(conn, "SELECT id FROM projects WHERE user_id=?", (order["user_id"],)).fetchall()
         detail = json.dumps({"payment_id":payment_id,"active_until":until})
