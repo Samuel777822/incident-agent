@@ -1,0 +1,82 @@
+# Render Blueprint: a persistent PostgreSQL database, public web app, and
+# separate background diagnosis worker. Secret values are entered in Render.
+databases:
+  - name: incident-agent-db
+    databaseName: incident_agent
+    plan: basic_256mb
+    region: singapore
+    diskSizeGB: 1
+    ipAllowList: []
+
+envVarGroups:
+  - name: incident-agent-core
+    envVars:
+      - key: APP_ENV
+        value: production
+      - key: DATABASE_URL
+        fromDatabase:
+          name: incident-agent-db
+          property: connectionString
+      - key: TOKEN_ENCRYPTION_KEY
+        generateValue: true
+      - key: GROQ_API_KEY
+        sync: false
+  - name: incident-agent-web-secrets
+    envVars:
+      - key: SESSION_SECRET
+        generateValue: true
+      - key: ADMIN_EMAIL
+        sync: false
+      - key: ADMIN_PASSWORD
+        sync: false
+      - key: ADMIN_EMAILS
+        value: naveenachandra371@gmail.com,pranavvrao1@gmail.com
+      - key: PORTAL_BASE_URL
+        sync: false
+      - key: BREVO_API_KEY
+        sync: false
+      - key: EMAIL_FROM
+        sync: false
+      - key: RAZORPAY_KEY_ID
+        sync: false
+      - key: RAZORPAY_KEY_SECRET
+        sync: false
+      - key: RAZORPAY_WEBHOOK_SECRET
+        sync: false
+
+services:
+  - type: web
+    name: incident-agent-web
+    runtime: docker
+    repo: https://github.com/Samuel777822/incident-agent
+    branch: main
+    plan: starter
+    region: singapore
+    dockerfilePath: ./Dockerfile
+    healthCheckPath: /health
+    autoDeploy: true
+    envVars:
+      - fromGroup: incident-agent-core
+      - fromGroup: incident-agent-web-secrets
+      - key: PORTAL_RUN_WORKER
+        value: "0"
+
+  - type: worker
+    name: incident-agent-worker
+    runtime: docker
+    repo: https://github.com/Samuel777822/incident-agent
+    branch: main
+    plan: starter
+    region: singapore
+    dockerfilePath: ./Dockerfile
+    dockerCommand: python portal_worker.py
+    autoDeploy: true
+    envVars:
+      - fromGroup: incident-agent-core
+      - key: WORKER_POLL_SECONDS
+        value: "5"
+      - key: WORKER_MIN_OCCURRENCES
+        value: "5"
+      - key: WORKER_MIN_AGE_SECONDS
+        value: "30"
+

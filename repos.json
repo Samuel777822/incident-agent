@@ -1,0 +1,11 @@
+{
+  "coffee-shop": {
+    "url": "https://github.com/Samuel777822/cofee-shop.git",
+    "branch": "master",
+    "test_command": "pytest",
+    "mode": "auto",
+    "log_branch": "logs",
+    "log_file": "logs/app.log",
+    "app_url": "https://cofee-shop-q36h.onrender.com/"
+  }
+}
