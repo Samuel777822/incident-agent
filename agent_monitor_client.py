@@ -17,7 +17,7 @@ import time
 import traceback
 import urllib.request
 
-HEARTBEAT_SECONDS = 300
+HEARTBEAT_SECONDS = 30
 MAX_EVENTS_PER_MINUTE = 30
 _STATE = {"started": False, "events": [], "local": threading.local()}
 
