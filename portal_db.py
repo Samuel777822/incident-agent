@@ -148,6 +148,7 @@ CREATE TABLE IF NOT EXISTS manual_payments (
   amount INTEGER NOT NULL,
   plan TEXT NOT NULL,
   transaction_ref TEXT NOT NULL,
+  ref_norm TEXT NOT NULL DEFAULT '',
   status TEXT NOT NULL DEFAULT 'pending',
   created_at TEXT NOT NULL,
   reviewed_at TEXT NOT NULL DEFAULT '',
@@ -165,6 +166,22 @@ CREATE TABLE IF NOT EXISTS trial_requests (
   decision_note TEXT NOT NULL DEFAULT ''
 );
 CREATE INDEX IF NOT EXISTS idx_trial_requests_status ON trial_requests(status, requested_at);
+
+CREATE TABLE IF NOT EXISTS notification_log (
+  id TEXT PRIMARY KEY,
+  created_at TEXT NOT NULL,
+  kind TEXT NOT NULL,
+  recipient TEXT NOT NULL,
+  subject TEXT NOT NULL,
+  ok INTEGER NOT NULL,
+  detail TEXT NOT NULL DEFAULT ''
+);
+CREATE INDEX IF NOT EXISTS idx_notification_log_time ON notification_log(created_at);
+
+CREATE TABLE IF NOT EXISTS worker_status (
+  name TEXT PRIMARY KEY,
+  last_seen TEXT NOT NULL
+);
 """
 
 
@@ -212,29 +229,31 @@ def init_db() -> None:
         for statement in SCHEMA.split(";"):
             if statement.strip():
                 _execute(conn, statement)
-        if isinstance(conn, sqlite3.Connection):
-            columns = {row[1] for row in conn.execute("PRAGMA table_info(projects)").fetchall()}
-            if "install_pr_url" not in columns:
-                conn.execute("ALTER TABLE projects ADD COLUMN install_pr_url TEXT NOT NULL DEFAULT ''")
-            if "ai_consent_at" not in columns:
-                conn.execute("ALTER TABLE projects ADD COLUMN ai_consent_at TEXT NOT NULL DEFAULT ''")
-        else:
-            _execute(conn, "ALTER TABLE projects ADD COLUMN IF NOT EXISTS install_pr_url TEXT NOT NULL DEFAULT ''")
-            _execute(conn, "ALTER TABLE projects ADD COLUMN IF NOT EXISTS ai_consent_at TEXT NOT NULL DEFAULT ''")
-        if isinstance(conn, sqlite3.Connection):
-            columns = {row[1] for row in conn.execute("PRAGMA table_info(subscriptions)").fetchall()}
-            if "grant_type" not in columns:
-                conn.execute("ALTER TABLE subscriptions ADD COLUMN grant_type TEXT NOT NULL DEFAULT 'paid'")
-            if "granted_by" not in columns:
-                conn.execute("ALTER TABLE subscriptions ADD COLUMN granted_by TEXT NOT NULL DEFAULT ''")
-            order_columns = {row[1] for row in conn.execute("PRAGMA table_info(payment_orders)").fetchall()}
-            if "plan" not in order_columns:
-                conn.execute("ALTER TABLE payment_orders ADD COLUMN plan TEXT NOT NULL DEFAULT 'yearly'")
-        else:
-            _execute(conn, "ALTER TABLE subscriptions ADD COLUMN IF NOT EXISTS grant_type TEXT NOT NULL DEFAULT 'paid'")
-            _execute(conn, "ALTER TABLE subscriptions ADD COLUMN IF NOT EXISTS granted_by TEXT NOT NULL DEFAULT ''")
-            _execute(conn, "ALTER TABLE payment_orders ADD COLUMN IF NOT EXISTS plan TEXT NOT NULL DEFAULT 'yearly'")
+        # Safe, repeatable migrations for databases created by older versions.
+        additions = [
+            ("projects", "install_pr_url", "TEXT NOT NULL DEFAULT ''"),
+            ("projects", "ai_consent_at", "TEXT NOT NULL DEFAULT ''"),
+            ("projects", "last_heartbeat_at", "TEXT NOT NULL DEFAULT ''"),
+            ("projects", "ingest_key_ciphertext", "TEXT NOT NULL DEFAULT ''"),
+            ("subscriptions", "grant_type", "TEXT NOT NULL DEFAULT 'paid'"),
+            ("subscriptions", "granted_by", "TEXT NOT NULL DEFAULT ''"),
+            ("payment_orders", "plan", "TEXT NOT NULL DEFAULT 'yearly'"),
+            ("manual_payments", "ref_norm", "TEXT NOT NULL DEFAULT ''"),
+        ]
+        for table, column, ddl in additions:
+            if isinstance(conn, sqlite3.Connection):
+                columns = {row[1] for row in conn.execute(f"PRAGMA table_info({table})").fetchall()}
+                if column not in columns:
+                    conn.execute(f"ALTER TABLE {table} ADD COLUMN {column} {ddl}")
+            else:
+                _execute(conn, f"ALTER TABLE {table} ADD COLUMN IF NOT EXISTS {column} {ddl}")
         conn.commit()
+        try:
+            _execute(conn, "CREATE UNIQUE INDEX IF NOT EXISTS idx_manual_payments_ref "
+                           "ON manual_payments(ref_norm) WHERE ref_norm <> ''")
+            conn.commit()
+        except Exception:
+            conn.rollback()
     finally:
         conn.close()
 
@@ -348,7 +367,7 @@ def check_login_rate_limit(key: str, maximum: int = 8, window_seconds: int = 900
 
 def create_project(user_id: str, *, name: str, repo_owner: str, repo_name: str,
                    branch: str, mode: str, token_ciphertext: str, ingest_key_hash: str,
-                   app_url: str = "", ai_consent_at: str = "") -> str:
+                   app_url: str = "", ai_consent_at: str = "", ingest_key_ciphertext: str = "") -> str:
     project_id = _id()
     conn = get_connection()
     try:
@@ -356,10 +375,10 @@ def create_project(user_id: str, *, name: str, repo_owner: str, repo_name: str,
         active_until = subscription["active_until"] if subscription else None
         _execute(conn, """INSERT INTO projects
           (id,user_id,name,repo_owner,repo_name,branch,mode,github_token_ciphertext,
-           ingest_key_hash,app_url,active_until,created_at,ai_consent_at)
-          VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?)""",
+           ingest_key_hash,app_url,active_until,created_at,ai_consent_at,ingest_key_ciphertext)
+          VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?)""",
           (project_id,user_id,name,repo_owner,repo_name,branch,mode,token_ciphertext,
-           ingest_key_hash,app_url,active_until,_now(),ai_consent_at))
+           ingest_key_hash,app_url,active_until,_now(),ai_consent_at,ingest_key_ciphertext))
         conn.commit()
         return project_id
     finally:
@@ -406,11 +425,11 @@ def update_project_github_token(project_id: str, user_id: str, token_ciphertext:
         conn.close()
 
 
-def rotate_project_ingest_key(project_id: str, user_id: str, key_hash: str) -> bool:
+def rotate_project_ingest_key(project_id: str, user_id: str, key_hash: str, key_ciphertext: str = "") -> bool:
     conn = get_connection()
     try:
-        cur = _execute(conn, "UPDATE projects SET ingest_key_hash=? WHERE id=? AND user_id=?",
-                        (key_hash,project_id,user_id))
+        cur = _execute(conn, "UPDATE projects SET ingest_key_hash=?,ingest_key_ciphertext=? WHERE id=? AND user_id=?",
+                        (key_hash, key_ciphertext, project_id, user_id))
         conn.commit()
         return cur.rowcount == 1
     finally:
@@ -428,9 +447,11 @@ def delete_project(project_id: str, user_id: str) -> bool:
 
 
 def set_project_connected(project_id: str) -> None:
+    """Mark a project connected and remember when it last checked in."""
     conn = get_connection()
     try:
-        _execute(conn, "UPDATE projects SET status='connected' WHERE id=?", (project_id,))
+        _execute(conn, "UPDATE projects SET status='connected',last_heartbeat_at=? WHERE id=?",
+                 (_now(), project_id))
         conn.commit()
     finally:
         conn.close()
@@ -789,6 +810,7 @@ def complete_payment_order(order_id: str, payment_id: str, amount: int) -> bool:
         _execute(conn, "INSERT INTO subscriptions(user_id,active_until,grant_type,granted_by,updated_at) VALUES(?,?,?,?,?) ON CONFLICT(user_id) DO UPDATE SET active_until=excluded.active_until,grant_type='paid',granted_by='',updated_at=excluded.updated_at",
                  (order["user_id"],until,"paid","",now.isoformat(timespec="seconds")))
         _execute(conn, "UPDATE projects SET active_until=? WHERE user_id=?", (until,order["user_id"]))
+        _execute(conn, "UPDATE projects SET paused=0 WHERE user_id=? AND paused=2", (order["user_id"],))
         project_rows = _execute(conn, "SELECT id FROM projects WHERE user_id=?", (order["user_id"],)).fetchall()
         detail = json.dumps({"payment_id":payment_id,"active_until":until})
         for project in project_rows:
@@ -829,34 +851,57 @@ def admin_list_users():
         conn.close()
 
 
+def _parse_ts(value: str) -> datetime:
+    parsed = datetime.fromisoformat(value)
+    return parsed if parsed.tzinfo else parsed.replace(tzinfo=timezone.utc)
+
+
+def _grant_in_conn(conn, user_id: str, days: int, grant_type: str, granted_by: str) -> str:
+    """Extend (never replace) access inside the caller's transaction.
+
+    A paid plan is never downgraded to "trial" by a later trial grant.
+    """
+    now = datetime.now(timezone.utc)
+    row = _execute(conn, "SELECT active_until,grant_type FROM subscriptions WHERE user_id=?", (user_id,)).fetchone()
+    existing = _parse_ts(row["active_until"]) if row else None
+    active = bool(existing and existing > now)
+    base = existing if active else now
+    until = (base + timedelta(days=int(days))).isoformat(timespec="seconds")
+    final_type = "paid" if grant_type == "paid" or (active and row["grant_type"] == "paid") else "trial"
+    stamp = now.isoformat(timespec="seconds")
+    _execute(conn, """INSERT INTO subscriptions(user_id,active_until,grant_type,granted_by,updated_at)
+        VALUES(?,?,?,?,?) ON CONFLICT(user_id) DO UPDATE SET
+        active_until=excluded.active_until,grant_type=excluded.grant_type,
+        granted_by=excluded.granted_by,updated_at=excluded.updated_at""",
+        (user_id, until, final_type, granted_by, stamp))
+    _execute(conn, "UPDATE projects SET active_until=? WHERE user_id=?", (until, user_id))
+    _execute(conn, "UPDATE projects SET paused=0 WHERE user_id=? AND paused=2", (user_id,))
+    return until
+
+
 def admin_grant_access(user_id: str, days: int, grant_type: str, granted_by: str) -> str:
     if not 1 <= int(days) <= 3650 or grant_type not in ("trial", "paid"):
-        raise ValueError("Access grant must be 1–3650 days and trial or paid")
-    now = datetime.now(timezone.utc)
+        raise ValueError("Access grant must be 1-3650 days and trial or paid")
     conn = get_connection()
     try:
-        row = _execute(conn, "SELECT active_until FROM subscriptions WHERE user_id=?", (user_id,)).fetchone()
-        existing = datetime.fromisoformat(row["active_until"]) if row else now
-        if existing.tzinfo is None:
-            existing = existing.replace(tzinfo=timezone.utc)
-        until = (max(now, existing) + timedelta(days=int(days))).isoformat(timespec="seconds")
-        _execute(conn, """INSERT INTO subscriptions(user_id,active_until,grant_type,granted_by,updated_at)
-            VALUES(?,?,?,?,?) ON CONFLICT(user_id) DO UPDATE SET
-            active_until=excluded.active_until,grant_type=excluded.grant_type,
-            granted_by=excluded.granted_by,updated_at=excluded.updated_at""",
-            (user_id, until, grant_type, granted_by, now.isoformat(timespec="seconds")))
-        _execute(conn, "UPDATE projects SET active_until=? WHERE user_id=?", (until, user_id))
+        until = _grant_in_conn(conn, user_id, days, grant_type, granted_by)
         conn.commit()
         return until
+    except Exception:
+        conn.rollback()
+        raise
     finally:
         conn.close()
 
 
 def admin_revoke_access(user_id: str) -> bool:
+    """Remove access. Projects the customer did not pause themselves are marked
+    paused=2 so they resume automatically when access is granted again."""
     conn = get_connection()
     try:
         cur = _execute(conn, "DELETE FROM subscriptions WHERE user_id=?", (user_id,))
-        _execute(conn, "UPDATE projects SET active_until=NULL,paused=1 WHERE user_id=?", (user_id,))
+        _execute(conn, "UPDATE projects SET active_until=NULL,paused=CASE WHEN paused=0 THEN 2 ELSE paused END WHERE user_id=?",
+                 (user_id,))
         conn.commit()
         return cur.rowcount > 0
     finally:
@@ -865,27 +910,45 @@ def admin_revoke_access(user_id: str) -> bool:
 
 
 
+def normalize_payment_ref(value: str) -> str:
+    return "".join(str(value).split()).upper()
+
+
 def create_manual_payment_request(user_id: str, amount: int, plan: str, transaction_ref: str) -> dict:
-    """Record a customer's claimed UPI payment for manual administrator verification."""
-    if amount not in (100, 1000) or plan not in ("monthly", "yearly"):
-        raise ValueError("Choose a valid plan and amount.")
+    """Record a customer's claimed UPI payment for manual verification.
+
+    The reference must look like a UPI reference and be unique across ALL
+    customers. This does not prove that money moved; an admin must check.
+    """
     if (plan, amount) not in (("monthly", 100), ("yearly", 1000)):
         raise ValueError("The amount does not match the selected plan.")
-    transaction_ref = transaction_ref.strip()
-    if not transaction_ref or len(transaction_ref) > 120:
-        raise ValueError("Enter the UPI transaction/reference ID.")
+    transaction_ref = " ".join(str(transaction_ref).split())
+    norm = normalize_payment_ref(transaction_ref)
+    if not norm.isalnum() or not 8 <= len(norm) <= 35:
+        raise ValueError("Enter the 12-digit UPI reference (UTR) from your payment receipt.")
     conn = get_connection()
     try:
-        row = _execute(conn, """SELECT * FROM manual_payments
-            WHERE user_id=? AND transaction_ref=?""", (user_id, transaction_ref)).fetchone()
-        if row:
-            return dict(row)
+        existing = _execute(conn, "SELECT * FROM manual_payments WHERE ref_norm=?", (norm,)).fetchone()
+        if existing:
+            if existing["user_id"] == user_id:
+                return dict(existing)
+            raise ValueError("That reference has already been submitted.")
+        pending = _execute(conn, "SELECT COUNT(*) AS n FROM manual_payments WHERE user_id=? AND status='pending'",
+                           (user_id,)).fetchone()["n"]
+        if pending >= 3:
+            raise ValueError("You already have payments waiting for review. Please wait for them to be confirmed.")
         payment_id = _id()
-        _execute(conn, """INSERT INTO manual_payments
-            (id,user_id,amount,plan,transaction_ref,status,created_at)
-            VALUES(?,?,?,?,?,'pending',?)""",
-            (payment_id,user_id,amount,plan,transaction_ref,_now()))
-        conn.commit()
+        try:
+            _execute(conn, """INSERT INTO manual_payments
+                (id,user_id,amount,plan,transaction_ref,ref_norm,status,created_at)
+                VALUES(?,?,?,?,?,?,'pending',?)""",
+                (payment_id, user_id, amount, plan, transaction_ref, norm, _now()))
+            conn.commit()
+        except Exception as exc:
+            conn.rollback()
+            if "unique" in str(exc).lower() or "duplicate" in str(exc).lower():
+                raise ValueError("That reference has already been submitted.") from None
+            raise
         return dict(_execute(conn, "SELECT * FROM manual_payments WHERE id=?", (payment_id,)).fetchone())
     finally:
         conn.close()
@@ -903,36 +966,85 @@ def admin_list_manual_payments():
 
 
 def admin_review_manual_payment(payment_id: str, decision: str, reviewed_by: str):
+    """Reject (or mark) a pending payment exactly once. Use approve_manual_payment to approve."""
     if decision not in ("approved", "rejected"):
         raise ValueError("Invalid payment decision.")
     conn = get_connection()
     try:
-        row = _execute(conn, "SELECT * FROM manual_payments WHERE id=? AND status='pending'", (payment_id,)).fetchone()
-        if not row:
+        cur = _execute(conn, """UPDATE manual_payments SET status=?,reviewed_at=?,reviewed_by=?
+            WHERE id=? AND status='pending'""", (decision, _now(), reviewed_by, payment_id))
+        if cur.rowcount != 1:
+            conn.rollback()
             return None
-        _execute(conn, """UPDATE manual_payments SET status=?,reviewed_at=?,reviewed_by=?
-            WHERE id=? AND status='pending'""", (decision,_now(),reviewed_by,payment_id))
         conn.commit()
-        updated = _execute(conn, "SELECT * FROM manual_payments WHERE id=?", (payment_id,)).fetchone()
-        return dict(updated) if updated else None
+        row = _execute(conn, "SELECT p.*,u.email FROM manual_payments p JOIN users u ON u.id=p.user_id WHERE p.id=?",
+                       (payment_id,)).fetchone()
+        return dict(row) if row else None
     finally:
         conn.close()
 
 
-def create_trial_request(user_id: str) -> dict:
-    """Create one pending trial request per customer; return its current record."""
+def approve_manual_payment(payment_id: str, reviewed_by: str):
+    """Approve a pending payment and grant the matching access in ONE transaction."""
     conn = get_connection()
     try:
-        row = _execute(conn, "SELECT * FROM trial_requests WHERE user_id=? AND status='pending' ORDER BY requested_at DESC LIMIT 1", (user_id,)).fetchone()
-        if row:
-            return dict(row)
-        request_id = _id()
-        now = _now()
-        _execute(conn, "INSERT INTO trial_requests(id,user_id,status,requested_at) VALUES(?,?,?,?)",
-                 (request_id, user_id, "pending", now))
+        row = _execute(conn, "SELECT p.*,u.email FROM manual_payments p JOIN users u ON u.id=p.user_id WHERE p.id=?",
+                       (payment_id,)).fetchone()
+        if not row or row["status"] != "pending":
+            return None
+        if (row["plan"], row["amount"]) not in (("monthly", 100), ("yearly", 1000)):
+            raise ValueError("This payment record has an invalid plan or amount.")
+        cur = _execute(conn, """UPDATE manual_payments SET status='approved',reviewed_at=?,reviewed_by=?
+            WHERE id=? AND status='pending'""", (_now(), reviewed_by, payment_id))
+        if cur.rowcount != 1:
+            conn.rollback()
+            return None
+        days = 30 if row["plan"] == "monthly" else 365
+        until = _grant_in_conn(conn, row["user_id"], days, "paid", reviewed_by)
         conn.commit()
-        row = _execute(conn, "SELECT * FROM trial_requests WHERE id=?", (request_id,)).fetchone()
-        return dict(row)
+        result = dict(row)
+        result.update(status="approved", days=days, active_until=until)
+        return result
+    except Exception:
+        conn.rollback()
+        raise
+    finally:
+        conn.close()
+
+
+def user_trial_status(user_id: str) -> str:
+    """none | pending | approved | rejected. "approved" means the one trial was used."""
+    conn = get_connection()
+    try:
+        rows = _execute(conn, "SELECT status FROM trial_requests WHERE user_id=?", (user_id,)).fetchall()
+    finally:
+        conn.close()
+    statuses = {row["status"] for row in rows}
+    for status in ("approved", "pending", "rejected"):
+        if status in statuses:
+            return status
+    return "none"
+
+
+def create_trial_request(user_id: str) -> dict:
+    """One trial per customer, ever. Re-requesting while pending returns the same request."""
+    conn = get_connection()
+    try:
+        rows = _execute(conn, "SELECT * FROM trial_requests WHERE user_id=? ORDER BY requested_at DESC", (user_id,)).fetchall()
+        if any(row["status"] == "approved" for row in rows):
+            raise ValueError("Your free trial has already been used. Choose a plan to continue.")
+        pending = next((row for row in rows if row["status"] == "pending"), None)
+        if pending:
+            existing = dict(pending)
+            existing["created"] = False
+            return existing
+        request_id = _id()
+        _execute(conn, "INSERT INTO trial_requests(id,user_id,status,requested_at) VALUES(?,?,?,?)",
+                 (request_id, user_id, "pending", _now()))
+        conn.commit()
+        created = dict(_execute(conn, "SELECT * FROM trial_requests WHERE id=?", (request_id,)).fetchone())
+        created["created"] = True
+        return created
     finally:
         conn.close()
 
@@ -949,18 +1061,202 @@ def admin_list_trial_requests():
 
 
 def admin_review_trial_request(request_id: str, status: str, reviewed_by: str, note: str = "") -> dict | None:
+    """Review a pending request exactly once (used for rejection; approval uses approve_trial_request)."""
     if status not in ("approved", "rejected"):
         raise ValueError("Trial request status must be approved or rejected")
     conn = get_connection()
     try:
-        row = _execute(conn, "SELECT * FROM trial_requests WHERE id=?", (request_id,)).fetchone()
-        if not row or row["status"] != "pending":
+        cur = _execute(conn, """UPDATE trial_requests SET status=?,reviewed_at=?,reviewed_by=?,decision_note=?
+            WHERE id=? AND status='pending'""", (status, _now(), reviewed_by, note[:500], request_id))
+        if cur.rowcount != 1:
+            conn.rollback()
             return None
-        now = _now()
-        _execute(conn, """UPDATE trial_requests SET status=?,reviewed_at=?,reviewed_by=?,decision_note=?
-            WHERE id=? AND status='pending'""", (status, now, reviewed_by, note[:500], request_id))
         conn.commit()
-        updated = _execute(conn, "SELECT tr.*,u.email FROM trial_requests tr JOIN users u ON u.id=tr.user_id WHERE tr.id=?", (request_id,)).fetchone()
-        return dict(updated) if updated else None
+        row = _execute(conn, "SELECT tr.*,u.email FROM trial_requests tr JOIN users u ON u.id=tr.user_id WHERE tr.id=?",
+                       (request_id,)).fetchone()
+        return dict(row) if row else None
     finally:
         conn.close()
+
+
+def approve_trial_request(request_id: str, reviewed_by: str) -> dict | None:
+    """Approve a pending trial and grant one day of access in ONE transaction."""
+    conn = get_connection()
+    try:
+        row = _execute(conn, "SELECT tr.*,u.email FROM trial_requests tr JOIN users u ON u.id=tr.user_id WHERE tr.id=?",
+                       (request_id,)).fetchone()
+        if not row or row["status"] != "pending":
+            return None
+        cur = _execute(conn, """UPDATE trial_requests SET status='approved',reviewed_at=?,reviewed_by=?
+            WHERE id=? AND status='pending'""", (_now(), reviewed_by, request_id))
+        if cur.rowcount != 1:
+            conn.rollback()
+            return None
+        until = _grant_in_conn(conn, row["user_id"], 1, "trial", reviewed_by)
+        conn.commit()
+        result = dict(row)
+        result.update(status="approved", active_until=until)
+        return result
+    except Exception:
+        conn.rollback()
+        raise
+    finally:
+        conn.close()
+
+
+# ---------------------------------------------------------------------------
+# Notification log, worker status and dashboard read models
+# ---------------------------------------------------------------------------
+
+def database_kind() -> str:
+    return "postgresql" if _database_url() else "sqlite"
+
+
+def log_notification(kind: str, recipient: str, subject: str, ok: bool, detail: str = "") -> None:
+    conn = get_connection()
+    try:
+        _execute(conn, "INSERT INTO notification_log(id,created_at,kind,recipient,subject,ok,detail) VALUES(?,?,?,?,?,?,?)",
+                 (_id(), _now(), kind[:40], recipient[:254], subject[:200], 1 if ok else 0, detail[:300]))
+        _execute(conn, """DELETE FROM notification_log WHERE id NOT IN
+            (SELECT id FROM notification_log ORDER BY created_at DESC LIMIT 200)""")
+        conn.commit()
+    finally:
+        conn.close()
+
+
+def recent_notifications(limit: int = 12) -> list[dict]:
+    conn = get_connection()
+    try:
+        rows = _execute(conn, "SELECT * FROM notification_log ORDER BY created_at DESC LIMIT ?", (limit,)).fetchall()
+        return [dict(row) for row in rows]
+    finally:
+        conn.close()
+
+
+def touch_worker(name: str = "portal_worker") -> None:
+    conn = get_connection()
+    try:
+        _execute(conn, """INSERT INTO worker_status(name,last_seen) VALUES(?,?)
+            ON CONFLICT(name) DO UPDATE SET last_seen=excluded.last_seen""", (name, _now()))
+        conn.commit()
+    finally:
+        conn.close()
+
+
+def worker_last_seen(name: str = "portal_worker"):
+    conn = get_connection()
+    try:
+        row = _execute(conn, "SELECT last_seen FROM worker_status WHERE name=?", (name,)).fetchone()
+        return row["last_seen"] if row else None
+    finally:
+        conn.close()
+
+
+def get_user_email(user_id: str) -> str:
+    conn = get_connection()
+    try:
+        row = _execute(conn, "SELECT email FROM users WHERE id=?", (user_id,)).fetchone()
+        return row["email"] if row else ""
+    finally:
+        conn.close()
+
+
+def get_payment_order(order_id: str):
+    conn = get_connection()
+    try:
+        row = _execute(conn, "SELECT user_id,amount,status,plan FROM payment_orders WHERE razorpay_order_id=?",
+                       (order_id,)).fetchone()
+        return dict(row) if row else None
+    finally:
+        conn.close()
+
+
+def user_manual_payments(user_id: str, limit: int = 5) -> list[dict]:
+    conn = get_connection()
+    try:
+        rows = _execute(conn, "SELECT * FROM manual_payments WHERE user_id=? ORDER BY created_at DESC LIMIT ?",
+                        (user_id, limit)).fetchall()
+        return [dict(row) for row in rows]
+    finally:
+        conn.close()
+
+
+def list_projects_with_activity(user_id: str) -> list[dict]:
+    """Projects plus real incident counts and the latest incident, for the customer dashboard."""
+    projects = list_projects(user_id)
+    conn = get_connection()
+    try:
+        for project in projects:
+            counts = _execute(conn, """SELECT COUNT(*) AS total,
+                COALESCE(SUM(CASE WHEN status<>'resolved' THEN 1 ELSE 0 END),0) AS open_count
+                FROM incidents WHERE project_id=?""", (project["id"],)).fetchone()
+            project["incident_total"] = int(counts["total"] or 0)
+            project["incident_open"] = int(counts["open_count"] or 0)
+            latest = _execute(conn, """SELECT id,signature,status,last_seen,pr_url,ci_status FROM incidents
+                WHERE project_id=? ORDER BY last_seen DESC LIMIT 1""", (project["id"],)).fetchone()
+            project["latest_incident"] = dict(latest) if latest else None
+        return projects
+    finally:
+        conn.close()
+
+
+def recent_activity(user_id: str, limit: int = 8) -> list[dict]:
+    conn = get_connection()
+    try:
+        rows = _execute(conn, """SELECT i.id,i.project_id,i.signature,i.status,i.last_seen,i.occurrences,
+            i.pr_url,i.ci_status,p.name AS project_name
+            FROM incidents i JOIN projects p ON p.id=i.project_id
+            WHERE p.user_id=? ORDER BY i.last_seen DESC LIMIT ?""", (user_id, limit)).fetchall()
+        return [dict(row) for row in rows]
+    finally:
+        conn.close()
+
+
+def admin_projects() -> list[dict]:
+    conn = get_connection()
+    try:
+        rows = _execute(conn, """SELECT p.id,p.name,p.repo_owner,p.repo_name,p.status,p.paused,p.mode,
+            p.last_heartbeat_at,p.active_until,u.email AS owner_email,
+            (SELECT COUNT(*) FROM incidents i WHERE i.project_id=p.id AND i.status<>'resolved') AS open_incidents
+            FROM projects p JOIN users u ON u.id=p.user_id ORDER BY p.created_at DESC""").fetchall()
+        return [dict(row) for row in rows]
+    finally:
+        conn.close()
+
+
+def admin_recent_incidents(limit: int = 12) -> list[dict]:
+    conn = get_connection()
+    try:
+        rows = _execute(conn, """SELECT i.id,i.project_id,i.signature,i.status,i.occurrences,i.last_seen,
+            i.pr_url,i.ci_status,p.name AS project_name,u.email AS owner_email
+            FROM incidents i JOIN projects p ON p.id=i.project_id JOIN users u ON u.id=p.user_id
+            ORDER BY i.last_seen DESC LIMIT ?""", (limit,)).fetchall()
+        return [dict(row) for row in rows]
+    finally:
+        conn.close()
+
+
+def admin_stats(admin_emails: set[str]) -> dict:
+    """Headline numbers for the admin page, computed from real rows."""
+    now = _now()
+    customers = [u for u in admin_list_users() if u["email"].lower() not in admin_emails]
+    active = [u for u in customers if u.get("active_until") and u["active_until"] > now]
+    conn = get_connection()
+    try:
+        def count(sql):
+            return int(_execute(conn, sql).fetchone()["n"])
+        stats = {
+            "customers": len(customers),
+            "active": len(active),
+            "inactive": len(customers) - len(active),
+            "paid_active": sum(1 for u in active if u.get("grant_type") == "paid"),
+            "trial_active": sum(1 for u in active if u.get("grant_type") != "paid"),
+            "pending_trials": count("SELECT COUNT(*) AS n FROM trial_requests WHERE status='pending'"),
+            "pending_payments": count("SELECT COUNT(*) AS n FROM manual_payments WHERE status='pending'"),
+            "projects": count("SELECT COUNT(*) AS n FROM projects"),
+            "open_incidents": count("SELECT COUNT(*) AS n FROM incidents WHERE status<>'resolved'"),
+            "needs_human": count("SELECT COUNT(*) AS n FROM incidents WHERE status='needs_human'"),
+        }
+    finally:
+        conn.close()
+    return stats

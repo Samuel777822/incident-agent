@@ -2,8 +2,11 @@ import json
 import os
 from pathlib import Path
 
-from dotenv import load_dotenv
-from groq import Groq
+try:
+    from dotenv import load_dotenv
+except ImportError:  # optional: only used to read a local .env file
+    def load_dotenv(*_args, **_kwargs):
+        return False
 
 load_dotenv(Path(__file__).parent / ".env")
 
@@ -117,6 +120,7 @@ def diagnose_incident(incident_message, traceback, repository_evidence):
     if not api_key:
         raise ValueError("GROQ_API_KEY was not found. Check the .env file.")
 
+    from groq import Groq  # imported here so this module can be imported (and tested) without the SDK
     client = Groq(api_key=api_key)
     prompt = build_prompt(incident_message, traceback, repository_evidence)
 

@@ -1,1 +1,0 @@
-{"ts":"2026-10-17T14:02:11","level":"ERROR","service":"shop-api","message":"KeyError: 'price'","traceback":"Traceback (most recent call last):\n  File \"main.py\", line 42, in checkout\n    total = PRODUCTS[i][\"price\"]\nKeyError: 'price'"}

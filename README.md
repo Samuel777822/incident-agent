@@ -1,182 +1,98 @@
 # Agent Daemon
 
-Agent Daemon is a multi-tenant on-call service. This repository contains the account portal, project storage,
-monitoring installer, access control, and a separate portal diagnosis worker. The hosted portal can turn repeated
-events into project-scoped diagnosis reports. Repository repair, fix pull requests, auto-merge, health checks,
-monitoring verification, and automatic rollback are not yet connected to this worker.
+An AI on-call engineer for Python apps. Customers connect a GitHub repository, monitoring is added to it
+automatically, errors are grouped into incidents, an LLM diagnoses them, and a fix is proposed as a pull request.
 
-## Web application
+## What the portal does
 
-The server-rendered site is in `web_app.py`. It provides account sign-in, owner-scoped projects and incidents,
-per-project event ingestion, project controls, and administrator-managed access. Local development uses SQLite;
-production requires PostgreSQL via `DATABASE_URL` and HTTPS in front of the app.
+| Page | Who | Purpose |
+| --- | --- | --- |
+| `/dashboard` | customer | Projects, whether each one is live, incidents and what the agent did, plan and days left |
+| `/billing` | customer | Plan and expiry, one-time free-trial request, pay for a plan |
+| `/projects/new` | customer | Connect a repository. Monitoring is installed automatically |
+| `/admin` | the two admins | Customers, trial requests, UPI payments to confirm, apps and their health, incidents, email status |
 
-Set these values before production startup:
+Only the emails in `ADMIN_EMAILS` are administrators. They are sent to `/admin` and never see customer pages.
+Admin accounts cannot be registered on the public sign-up form.
+
+## Access rules
+
+* **Free trial:** one per customer, ever. The customer requests it, an admin approves it, and one day of access
+  starts at that moment.
+* **Paid plans:** ₹100 for 30 days, ₹1,000 for 365 days. Renewals extend the current expiry.
+* A paid plan is never downgraded to "trial" by a later grant. Revoking pauses the customer's projects and granting
+  access again resumes them. A project the customer paused themselves stays paused.
+
+## Payments
+
+**Instant, optional (needs a Razorpay account, not in use).** Set `RAZORPAY_KEY_ID` and `RAZORPAY_KEY_SECRET` and the pay buttons open Razorpay Checkout
+(UPI apps such as Paytm, PhonePe and Google Pay, plus cards). The amount is created on the server, so a customer can only
+pay the plan price. Access starts when Razorpay reports the payment as captured, through `/billing/verify` or through
+the signed webhook `/webhooks/razorpay` (set `RAZORPAY_WEBHOOK_SECRET`). Nobody has to approve anything.
+
+**Paytm QR with admin confirmation (the mode in use).** A personal UPI QR cannot tell this site that money arrived, so:
+1. The customer pays the QR (the site shows a QR with the exact amount, plus a plain one as a fallback) and enters the UPI reference (UTR).
+2. The customer is told to wait 1 to 2 hours and gets an email saying so. Both admins get an email: *customer X says they paid ₹100*.
+3. An admin opens Paytm, finds that reference and amount, then presses **I received ₹100 · grant 30 days** on `/admin` (or **Not received**).
+4. The customer's access starts, and they get an email. Nothing unlocks without that click.
+References must look like a UTR and must be unique across all customers. `UPI_ID` and `UPI_PAYEE_NAME` set the recipient.
+On `/admin`, customers needing action are listed first, and each row shows Trial, Paid or No access with the expiry.
+
+## Email
+
+Render's free tier blocks SMTP, so the default provider is an HTTPS API:
 
 | Variable | Purpose |
 | --- | --- |
-| `SESSION_SECRET` | At least 32 random characters for signed sessions |
-| `TOKEN_ENCRYPTION_KEY` | Fernet key for encrypting customer GitHub tokens |
-| `DATABASE_URL` | PostgreSQL connection URL |
-| `ADMIN_EMAIL` | Administrator login email |
-| `ADMIN_PASSWORD` | Strong private password for the administrator login; never commit it |
+| `BREVO_API_KEY` | Brevo API key (or `RESEND_API_KEY` for Resend) |
+| `EMAIL_FROM` | A sender address verified with the provider |
+| `ADMIN_EMAILS` | Comma-separated admin emails; each gets every admin alert |
+| `PORTAL_BASE_URL` | Public URL used in email links |
 
-Run locally with `python web_app.py`. For production, use the Gunicorn entry point in `wsgi.py`; the Dockerfile
-starts it with multiple worker threads and validates the required session secret and database at startup. The project
-creation page requires explicit monitoring-install consent, AI processing consent, and a GitHub token. The **Open monitoring PR** action creates a branch and pull request containing an opt-in Python helper
-and setup notes. The PR contains no credentials. After reviewing and merging it, configure `INCIDENT_AGENT_INGEST_URL`
-and `INCIDENT_AGENT_INGEST_KEY` in the customer's deployment environment. The ingest key is shown once; only its
-hash is stored by the portal.
+Every attempt is stored and shown in **Admin → Email status**, including the provider's error. "Accepted" means the
+provider took the message. It does not guarantee inbox delivery. The **Send test email** button checks the setup.
+SMTP (`SMTP_HOST`, `SMTP_PORT`, `SMTP_USERNAME`, `SMTP_PASSWORD`) still works on hosts that allow it.
 
-The `/ingest` endpoint accepts JSON with an `X-Ingest-Key` header. `/heartbeat` uses the same project key. Events are
-deduplicated per project, and dashboard queries scope projects and incidents to their owner. New project setup asks
-for explicit consent before selected logs, tracebacks, and relevant Python source files are sent to Groq for diagnosis.
-Project access is granted only by an administrator and expires at the configured grant date.
+## Automatic monitoring install
 
-## Hosted diagnosis worker
+When a project is connected, the portal opens a pull request that adds `incident_agent_monitor.py`, one import line in
+the app's entry file (`app.py`, `main.py`, `wsgi.py`, ...), and, for **private** repositories, the project's ingest URL
+and key in `incident_agent_config.json`. It then tries to merge the PR. The client reports unhandled exceptions, logged
+errors and a heartbeat every 5 minutes, never raises into the app, and uses short timeouts. For **public** repositories the key is
+not committed; the customer sets `INCIDENT_AGENT_INGEST_URL` and `INCIDENT_AGENT_INGEST_KEY` instead.
 
-Run one worker process separately from the web service with `python portal_worker.py`. Configure it with the same
-`DATABASE_URL`, `TOKEN_ENCRYPTION_KEY`, and `APP_ENV=production` as the web service, plus `GROQ_API_KEY`. The worker
-polls PostgreSQL for incidents that have at least five events over 30 seconds, whose project is not paused, whose
-subscription is active, and whose owner consented to AI diagnosis. It uses the GitHub REST API to read a bounded
-set of source files and recent commit summaries; it does not clone repositories or run customer code or tests.
-Temporary job failures are retried up to three times and are written to the project audit log.
-Report mode stores diagnosis only. Pull request and Auto modes require separate explicit remediation consent and
-only attempt a small, high-confidence Python source edit. The worker never executes customer code or tests. It opens
-a reviewable fix PR and saves its diff in the incident view. Auto mode merges only an open PR whose unchanged head
-has at least one completed GitHub check/status and all checks it can read succeeded. Missing, failed, pending, or
-unavailable checks leave the PR open. The defaults can be adjusted with `WORKER_POLL_SECONDS`,
-`WORKER_MIN_OCCURRENCES`, `WORKER_MIN_AGE_SECONDS`, `WORKER_LEASE_SECONDS`, `WORKER_MAX_ATTEMPTS`, and
-`AUTO_MERGE_POLL_SECONDS`.
+## Environment variables
 
-The Docker web service starts a small supervisor that runs Gunicorn and the incident worker together, which supports
-Render's free web-service plan. Configure `PORTAL_RUN_WORKER=0` only when deploying a separate worker service, as
-the paid Blueprint does. Free Render services sleep after inactivity, so the worker only processes jobs while the
-web service is awake. Keep `SESSION_SECRET`, `TOKEN_ENCRYPTION_KEY`, `DATABASE_URL`, `GROQ_API_KEY`,
-`ADMIN_EMAIL`, and `ADMIN_PASSWORD` in the hosting provider's secret environment settings.
+| Variable | Required | Purpose |
+| --- | --- | --- |
+| `APP_ENV` | yes | `production` on Render |
+| `DATABASE_URL` | production | PostgreSQL URL (SQLite is used locally) |
+| `SESSION_SECRET` | yes | 32+ random characters |
+| `TOKEN_ENCRYPTION_KEY` | yes | Fernet key; encrypts GitHub tokens and ingest keys |
+| `GROQ_API_KEY` | yes | Diagnosis |
+| `ADMIN_EMAILS` | yes | The two admin emails |
+| `ADMIN_PASSWORD_<EMAIL>` | one way to sign in | Password for an admin, `<EMAIL>` is the email upper-cased with non-letters/digits as `_` |
+| `GOOGLE_CLIENT_ID`, `GOOGLE_CLIENT_SECRET` | optional | Google sign-in |
+| `BREVO_API_KEY`, `EMAIL_FROM` | for email | see above |
+| `RAZORPAY_KEY_ID`, `RAZORPAY_KEY_SECRET`, `RAZORPAY_WEBHOOK_SECRET` | optional, gateway payments | see above |
+| `PORTAL_RUN_WORKER` | optional | `1` (default) runs the diagnosis worker inside the web service, as the free tier needs |
 
-## Google sign-in and administrator routing
+Generate a Fernet key with `python -c "from cryptography.fernet import Fernet; print(Fernet.generate_key().decode())"`.
+Never commit secrets or runtime logs.
 
-Set the following secret environment variables on the portal service:
-- `GOOGLE_CLIENT_ID`
-- `GOOGLE_CLIENT_SECRET`
-- `GOOGLE_REDIRECT_URI=https://incident-agent-portal.onrender.com/auth/google/callback`
+## Tests
 
-Create a Google OAuth 2.0 **Web application** client in Google Cloud Console. Add the exact callback URI above to **Authorized redirect URIs**. The app validates the returned identity, audience, issuer, verified email, and the state cookie. Google passwords are never requested by this app.
-
-Set `ADMIN_EMAILS=naveenachandra371@gmail.com,pranavvrao1@gmail.com` in Render. Google sign-in for those exact verified email addresses is automatically recognized as administrator access; other verified Google accounts enter the normal customer flow. Keep password fallback disabled when using two admin addresses; remove both per-admin password environment variables after both Google accounts have been successfully verified. Do not delete fallback secrets until Google OAuth has been tested on the production domain and both administrators can sign in.
-
-## Email delivery
-
-Trial-request and decision messages use SMTP. For a provider such as Resend, create a verified sending domain/address and an SMTP/API credential, then configure:
-- `SMTP_HOST`
-- `SMTP_PORT`
-- `SMTP_USERNAME`
-- `SMTP_PASSWORD`
-- `EMAIL_FROM`
-
-The current mail sender uses STARTTLS (port 587 style). Use a STARTTLS-compatible host/port, or update the mail transport before configuring a provider that requires implicit TLS on port 465. The application must report delivery only if the SMTP server accepts the message; test messages in both administrator inboxes and check logs before relying on alerts.
-
-## Render deployment
-
-The root `render.yaml` defines the web service, a continuously running worker, a private paid Postgres database,
-and separate secret groups. Connect the repository to Render and create a Blueprint from this file. Render will
-prompt for `GROQ_API_KEY`, `ADMIN_EMAIL`, and `ADMIN_PASSWORD`; it generates the session and token-encryption
-secrets. Verify the generated `TOKEN_ENCRYPTION_KEY` is a valid Fernet key before onboarding customers. Online
-checkout is disabled; an administrator grants access after confirming a payment or approving a trial. Paid Postgres is specified
-so database recovery is available; on Render's Hobby workspace, its documented recovery window is three days.
-
-The hosted repair path is a supervised pilot. Post-merge health monitoring, automatic rollback, and heartbeat alerts
-remain unimplemented. Start with Pull request mode and review its changes. Auto mode is CI-gated and must be enabled
-only for repositories with working GitHub checks. Do not treat a passing CI check as proof that a production deployment
-is healthy.
-
-## Existing single-repository daemon
-
-The older `agent_daemon.py` pipeline reads a local log file, groups errors, gathers repository evidence, diagnoses
-an incident, and can open a fix pull request. It is not the portal worker and uses its own `repos.json` settings.
-Run it only against a repository that you explicitly configure:
-
-```bash
-python agent_daemon.py customer-app 60
+```
+pip install -r requirements.txt
+python -m pytest -q
 ```
 
-Customer code and customer tests must never run on the agent host. Fixes are limited to a small Python change and
-are saved as diffs. The daemon opens a PR; auto mode waits for the customer's GitHub checks and merges only when
-they pass. With no checks, failed checks, or unavailable CI, the PR stays open for human review. No code is pushed
-directly to the default branch.
+The suite covers sign-up, navigation, the trial rules, atomic approvals, manual and gateway payments, the webhook,
+email providers (mocked), the admin page, the zero-touch installer, and an end-to-end run of the monitoring client
+against a live local portal. PostgreSQL-specific paths are not covered by automated tests.
 
-The old daemon reads logs from a file on its machine, waits for at least five occurrences and thirty seconds, and
-has no multi-tenant scheduling. It is not currently connected to the portal's PostgreSQL project data.
+## Known limits
 
-## Administrator accounts, trial requests, and email
-
-Set `ADMIN_EMAILS` to a comma-separated allowlist of administrator addresses. Each administrator needs a distinct secret password in Render:
-- `ADMIN_PASSWORD_NAVEENACHANDRA371_GMAIL_COM`
-- `ADMIN_PASSWORD_PRANAVVRAO1_GMAIL_COM`
-
-Each password must contain at least 12 characters. Do not put administrator passwords in Git or send them in chat. The listed addresses are reserved and cannot be registered through public signup. If using this dual-admin setup, configure `ADMIN_EMAILS`; do not rely on the legacy single `ADMIN_EMAIL`.
-
-Trial requests are stored in PostgreSQL and visible in `/admin`. Approval grants one day from the time of approval; rejection and approval send a customer decision email when SMTP is configured. Trial-request notifications are sent to every address in `ADMIN_EMAILS`. The dashboard still stores the request if SMTP is unavailable and shows that delivery could not be confirmed.
-
-Configure SMTP using Render secret environment variables:
-- `SMTP_HOST` (for Gmail, `smtp.gmail.com`)
-- `SMTP_PORT` (usually `587`)
-- `SMTP_USERNAME`
-- `SMTP_PASSWORD` (use a provider app password where required)
-- `EMAIL_FROM` (verified sender address)
-
-A message is reported as sent only when the SMTP server accepts it. Check Render application logs for delivery errors; SMTP acceptance alone cannot guarantee inbox placement.
-
-## Subscription plans
-
-The billing page offers ₹100 monthly (30 days) and ₹1,000 yearly (365 days). Amounts are configured in paise using `RAZORPAY_MONTHLY_AMOUNT_PAISE` and `RAZORPAY_YEARLY_AMOUNT_PAISE`; defaults are `10000` and `100000`. Use `RAZORPAY_MODE=test` and `rzp_test_` credentials for validation first. Live checkout requires `RAZORPAY_MODE=live` with a matching `rzp_live_` key ID and secret; do not enable live mode until test checkout, server-side payment capture verification, and renewal behavior have been validated.
-
-## Development
-
-Install dependencies with `pip install -r requirements.txt`. Portal local development can use SQLite. For production,
-set `APP_ENV=production` and provide PostgreSQL through `DATABASE_URL`; the app refuses to start in production
-without it. Never commit `.env`, customer tokens, database files, or runtime logs.
-
-Useful modules:
-
-| File | Purpose |
-| --- | --- |
-| `web_app.py`, `portal_db.py` | Portal routes, sessions, tenant-scoped data and billing |
-| `portal_worker.py` | Subscription-gated, consent-gated hosted diagnosis worker |
-| `monitoring_installer.py` | Opens the customer's opt-in monitoring pull request |
-| `diagnose.py`, `run_diagnosis.py` | Legacy single-repository diagnosis flow |
-| `patcher.py`, `autofix.py`, `pr.py` | Constrained patch and CI-gated pull request workflow |
-| `agent_daemon.py`, `workflows.py` | Legacy local daemon and one-shot pipeline |
-
-
-
-## Manual UPI QR subscription flow (current status: unverified)
-
-The portal currently has a manual UPI payment submission path. Monthly is ₹100 for 30 days; yearly is ₹1,000 for 365 days. The customer page builds a UPI intent link and a QR image using the configured recipient UPI ID `7975291636@ptsbi`. On a compatible mobile device, the **Open UPI app** link attempts to launch an app registered for `upi://`; the QR is intended for scanning from another device. Device/browser support for UPI deep links varies, and the QR image provider is external.
-
-**Important:** this is not automatic payment verification. A static UPI QR does not send payment confirmation to this portal. The customer can submit a transaction/reference ID, but the app cannot prove that money was actually paid from that text alone. An administrator must independently check the transaction in the UPI/bank app before approving access. Do not describe this as automatic payment confirmation or automatically grant access based only on the submitted form. Do not use the reference ID alone as proof of payment.
-
-The admin payment queue has actions for **Grant 1 Month**, **Grant 1 Year**, and **Reject**. The latest corrective change validates that the selected grant duration matches the payment request's selected plan and amount. The general customer-access list was also changed so an active account shows **Revoke access** and an inactive account shows **Grant access**, rather than showing both actions at once. Trial requests remain a separate flow; a trial request is not active until an administrator approves it, and approval grants one day.
-
-The payment submission page tells customers to expect manual review (usually 1–2 hours), but this is an expectation rather than a guaranteed SLA. Admin and customer email delivery depends on correctly configured SMTP secrets in Render and still requires real inbox testing.
-
-### Known gaps and required verification
-
-- No verified gateway webhook or bank/UPI API is connected to confirm a static QR payment automatically.
-- Do not assume the QR/deep-link opens successfully on every Android browser or UPI app; test on real devices and verify the recipient and amount displayed by the UPI app before payment.
-- Email delivery to both administrator inboxes and customer decision emails has not been confirmed end to end.
-- The user reports that tests are failing. This repository snapshot has not been independently test-run as part of the manual UPI change; identify and fix the failing tests before relying on the release.
-- The live Render deployment and the production customer/admin flows must be checked after deployment; a GitHub merge is not proof that Render deployed successfully or that the app works.
-- The customer navigation currently has both **Dashboard** and **Access** destinations reported by the user as leading to the same or confusing experience. Inspect the route definitions and templates before deciding which one should be removed or repurposed.
-- The administrator workspace still needs a full UX and end-to-end audit. Avoid repeated/contradictory grant/revoke controls and verify that every state change updates the displayed state immediately after reload.
-- Customer monitoring, connected-project health, incident and fix/PR states, and human-review actions need an end-to-end check against actual project data rather than being treated as complete because a screen renders.
-
-### Suggested verification order
-
-1. Run the complete existing test suite and capture the exact failing test names, stack traces, and environment.
-2. Add/repair focused tests for payment page rendering, QR/deep-link amount and recipient, invalid and duplicate transaction references, pending state, plan/amount mismatch, admin approval/rejection, access expiry, and trial approval.
-3. Test email sending with the actual Render SMTP settings and confirm receipt in both admin inboxes and a customer inbox.
-4. Test sign-in, Dashboard vs Access navigation, trial request/approval, payment submission, admin verification, one-month/year access, revoke, and customer-visible status on the live deployment.
-5. Only then mark the release as verified.
-
+* Render's free PostgreSQL database expires after about 30 days. Move `DATABASE_URL` to a durable database before then.
+* Free web services sleep when idle. The built-in worker only runs while the service is awake (UptimeRobot pings `/health`).
+* Auto-fix only supports Python repositories. Auto-merge happens only when GitHub checks pass.

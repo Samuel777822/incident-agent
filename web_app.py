@@ -9,6 +9,7 @@ from __future__ import annotations
 
 import base64
 import hashlib
+import logging
 import hmac
 import html
 import json
@@ -20,7 +21,7 @@ from socketserver import ThreadingMixIn
 from datetime import datetime, timedelta, timezone
 from http import cookies
 from io import BytesIO
-from urllib.parse import parse_qs, urlencode, urlsplit
+from urllib.parse import parse_qs, quote, urlencode, urlsplit
 from urllib.error import HTTPError, URLError
 from urllib.request import Request as UrlRequest, urlopen
 from wsgiref.simple_server import WSGIServer, make_server
@@ -28,6 +29,7 @@ from wsgiref.simple_server import WSGIServer, make_server
 import httpx
 from urllib.parse import urlencode
 
+import notifications
 import portal_db
 from monitoring_installer import GitHubInstallError, open_monitoring_pr, validate_repository_access
 
@@ -60,6 +62,20 @@ a.card:hover{border-color:#4d6c9a;transform:translateY(-2px);text-decoration:non
 h1,h2,h3{line-height:1.2}
 @media(max-width:640px){.nav{height:auto;min-height:68px;align-items:flex-start;padding-top:16px;padding-bottom:16px;gap:12px}.navlinks{flex-wrap:wrap;justify-content:flex-end}.table{min-width:620px}.card{padding:18px}.section{padding-top:12px}}
 
+"""
+
+
+CSS += """
+.statgrid{display:grid;grid-template-columns:repeat(auto-fit,minmax(150px,1fr));gap:12px;margin:16px 0 8px}
+.stat{background:var(--panel);border:1px solid var(--line);border-radius:12px;padding:14px}
+.stat b{display:block;font-size:28px;line-height:1.1}.stat span{color:var(--muted);font-size:13px}
+.pill.red{background:#3a1820;color:#ff9aa8;border-color:#6a2b38}
+.ok{color:var(--green)}.bad{color:#ff9aa8}
+.qr{background:#fff;border-radius:14px;padding:14px;text-align:center;margin:18px 0}
+.qr img{display:block;margin:auto;max-width:100%;height:auto}.qr p{color:#222;margin:8px 0 0}
+.section h2{margin-top:32px}
+.inline{display:inline-flex;gap:8px;align-items:center;flex-wrap:wrap}
+select{background:#0d1426;color:var(--text);border:1px solid var(--line);border-radius:10px;padding:9px}
 """
 
 
@@ -249,10 +265,15 @@ def _is_admin(request: Request) -> bool:
 
 def _layout(title: str, body: str, request: Request | None = None) -> str:
     signed_in = bool(request and request.session)
-    links = ('<a href="/dashboard">Dashboard</a><a href="/billing">Access</a><form method="post" action="/logout" style="display:inline">'
-             f'<input type="hidden" name="csrf" value="{_csrf(request)}"><button class="button" type="submit">Sign out</button></form>') if signed_in else '<a href="/login">Sign in</a><a class="button" href="/signup">Create account</a>'
-    if signed_in and _is_admin(request):
-        links = '<a href="/admin">Admin</a>' + links
+    if signed_in:
+        signout = ('<form method="post" action="/logout" style="display:inline">'
+                   f'<input type="hidden" name="csrf" value="{_csrf(request)}"><button class="button" type="submit">Sign out</button></form>')
+        if _is_admin(request):
+            links = '<a href="/admin">Admin</a>' + signout
+        else:
+            links = '<a href="/dashboard">Projects</a><a href="/billing">Plan &amp; billing</a>' + signout
+    else:
+        links = '<a href="/login">Sign in</a><a class="button" href="/signup">Create account</a>'
     return f"""<!doctype html><html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><meta name="description" content="AI incident response for Python apps"><title>{_escape(title)} · {APP_NAME}</title><style>{CSS}</style></head><body><header class="wrap nav"><a class="brand" href="/"><span class="brand-mark">A</span>{APP_NAME}</a><nav class="navlinks">{links}</nav></header><main class="wrap">{body}</main><footer class="wrap footer">Agent Daemon · Your changes stay reviewable and reversible.</footer></body></html>"""
 
 
@@ -269,7 +290,7 @@ def _csrf(request: Request) -> str:
 def _response(body, request=None, status="200 OK", headers=None):
     defaults = [("Content-Type", "text/html; charset=utf-8"), ("Cache-Control", "no-store"),
                 ("X-Content-Type-Options", "nosniff"), ("Referrer-Policy", "same-origin"),
-                ("Content-Security-Policy", "default-src 'self'; style-src 'self' 'unsafe-inline'; form-action 'self'; frame-ancestors 'none'; base-uri 'none'")]
+                ("Content-Security-Policy", "default-src 'self'; style-src 'self' 'unsafe-inline'; img-src 'self' data:; form-action 'self'; frame-ancestors 'none'; base-uri 'none'")]
     response = Response(_layout("Agent Daemon", body, request), status, defaults + list(headers or []))
     if request and request.new_csrf_cookie:
         response.headers.append(request.new_csrf_cookie)
@@ -336,6 +357,179 @@ def _form(title: str, intro: str, fields: str, action: str, submit: str, csrf: s
     return f"<section class='card form-card'><h1>{title}</h1><p class='muted'>{intro}</p><form method='post' action='{action}'><input type='hidden' name='csrf' value='{_escape(csrf)}'>{fields}{submit}</form></section>"
 
 
+PLANS = {
+    "monthly": {"label": "Monthly", "rupees": 100, "days": 30},
+    "yearly": {"label": "Yearly", "rupees": 1000, "days": 365},
+}
+
+_INCIDENT_LABELS = {
+    "diagnosing": "Diagnosing", "queued": "Diagnosing", "processing": "Diagnosing",
+    "diagnosed": "Diagnosed · report ready", "pr_opened": "Fix PR opened · review it",
+    "needs_human": "Needs human review", "resolved": "Resolved",
+}
+
+
+def _base_url() -> str:
+    return os.getenv("PORTAL_BASE_URL", "https://incident-agent-portal.onrender.com").strip().rstrip("/")
+
+
+def _parse_iso(value):
+    if not value:
+        return None
+    try:
+        parsed = datetime.fromisoformat(str(value))
+    except ValueError:
+        return None
+    return parsed if parsed.tzinfo else parsed.replace(tzinfo=timezone.utc)
+
+
+def _fmt_time(value) -> str:
+    parsed = _parse_iso(value)
+    return parsed.astimezone(timezone.utc).strftime("%d %b %Y, %H:%M UTC") if parsed else "never"
+
+
+def _ago(value) -> str:
+    parsed = _parse_iso(value)
+    if not parsed:
+        return "never"
+    seconds = int((_now() - parsed).total_seconds())
+    if seconds < 60:
+        return "just now"
+    if seconds < 3600:
+        return f"{seconds // 60} min ago"
+    if seconds < 86400:
+        return f"{seconds // 3600} h ago"
+    return f"{seconds // 86400} d ago"
+
+
+def _remaining(value) -> str:
+    parsed = _parse_iso(value)
+    if not parsed:
+        return ""
+    seconds = int((parsed - _now()).total_seconds())
+    if seconds <= 0:
+        return "ended"
+    if seconds < 3600:
+        return f"{max(1, seconds // 60)} min left"
+    if seconds < 86400:
+        return f"{seconds // 3600} h left"
+    return f"{seconds // 86400} days left"
+
+
+def _pill(text, css="") -> str:
+    return f"<span class='pill {css}'>{_escape(text)}</span>"
+
+
+def _table(headers, rows, empty="Nothing here yet.") -> str:
+    if not rows:
+        return f"<div class='empty'>{_escape(empty)}</div>"
+    head = "".join(f"<th>{_escape(item)}</th>" for item in headers)
+    return f"<div class='table-wrap'><table class='table'><thead><tr>{head}</tr></thead><tbody>{''.join(rows)}</tbody></table></div>"
+
+
+def _incident_label(status: str) -> str:
+    return _INCIDENT_LABELS.get(status, str(status).replace("_", " ").title())
+
+
+def _access_state(user_id: str) -> dict:
+    until = portal_db.get_subscription_active_until(user_id) or ""
+    active = bool(until and until > _now().isoformat(timespec="seconds"))
+    kind = ""
+    if until:
+        conn = portal_db.get_connection()
+        try:
+            row = portal_db._execute(conn, "SELECT grant_type FROM subscriptions WHERE user_id=?", (user_id,)).fetchone()
+        finally:
+            conn.close()
+        kind = row["grant_type"] if row else ""
+    return {"active": active, "until": until, "kind": kind,
+            "remaining": _remaining(until) if active else "",
+            "trial": portal_db.user_trial_status(user_id)}
+
+
+def _project_state(project: dict, has_access=None):
+    if has_access is None:
+        until = project.get("active_until") or ""
+        has_access = bool(until and until > _now().isoformat(timespec="seconds"))
+    if not has_access:
+        return "Access ended", "amber"
+    if project.get("paused"):
+        return "Paused", "amber"
+    status = project.get("status", "")
+    beat = _parse_iso(project.get("last_heartbeat_at") or "")
+    if status == "connected":
+        if beat is None:
+            return "Connected", "green"
+        if (_now() - beat).total_seconds() <= 900:
+            return "Live", "green"
+        return "No recent check-in", "amber"
+    if status == "install_pr_open":
+        return "Waiting for monitoring to deploy", "amber"
+    return "Setup needed", "amber"
+
+
+def _razorpay_keys():
+    key_id = os.getenv("RAZORPAY_KEY_ID", "").strip()
+    secret = os.getenv("RAZORPAY_KEY_SECRET", "").strip()
+    if not key_id.startswith(("rzp_test_", "rzp_live_")) or not secret:
+        raise RuntimeError("Online payments are not configured yet.")
+    return key_id, secret
+
+
+def _gateway_ready() -> bool:
+    try:
+        _razorpay_keys()
+        return True
+    except RuntimeError:
+        return False
+
+
+def _razorpay_settings(plan: str = "yearly"):
+    if plan not in PLANS:
+        raise RuntimeError("Unknown subscription plan")
+    key_id, secret = _razorpay_keys()
+    raw = os.getenv(f"RAZORPAY_{plan.upper()}_AMOUNT_PAISE", "").strip()
+    amount = int(raw) if raw.isdigit() else PLANS[plan]["rupees"] * 100
+    if amount < 100:
+        raise RuntimeError("Subscription amount must be at least 100 paise")
+    return key_id, secret, amount
+
+
+def _upi_uri(plan: str) -> str:
+    vpa = os.getenv("UPI_ID", "7975291636@ptsbi").strip()
+    name = os.getenv("UPI_PAYEE_NAME", "Pranav V Rao").strip()
+    amount = PLANS[plan]["rupees"]
+    parts = {"pa": vpa, "pn": name, "am": f"{amount:.2f}", "cu": "INR", "tn": f"Agent Daemon {plan}"}
+    return "upi://pay?" + "&".join(f"{key}={quote(value, safe='@')}" for key, value in parts.items())
+
+
+def _qr_data_uri(text: str) -> str:
+    try:
+        import segno
+        return segno.make(text, error="m").svg_data_uri(scale=6, border=2, dark="#0b1020", light="#ffffff")
+    except Exception:
+        # Never fail silently: a missing 'segno' package would otherwise just hide the QR code.
+        logging.getLogger(__name__).exception("Could not generate a QR code (is 'segno' installed? pip install -r requirements.txt)")
+        return ""
+
+
+def _after_payment(order_id: str, payment_id: str) -> None:
+    order = portal_db.get_payment_order(order_id)
+    if not order:
+        return
+    email = portal_db.get_user_email(order["user_id"])
+    plan = PLANS.get(order["plan"], PLANS["yearly"])
+    if email:
+        notifications.notify_customer(
+            email, "Payment received - your Agent Daemon access is active",
+            f"Thanks! We received your payment of INR {plan['rupees']} for the {plan['label'].lower()} plan.\n"
+            f"Your access is active now: {_base_url()}/dashboard", "payment_customer")
+    notifications.notify_admins(
+        f"New paid subscription: {email or order['user_id']}",
+        f"{email} paid INR {plan['rupees']} ({plan['label'].lower()}). Access was activated automatically.\n"
+        f"{_base_url()}/admin", "payment_admin")
+
+
 def _page_home(request):
     if request.session:
         return _redirect("/admin" if _is_admin(request) else "/dashboard")
@@ -362,12 +556,6 @@ def _page_signup(request):
         return _response("<div class='alert'>This address is reserved for an administrator. Use administrator sign-in credentials.</div>", request, "403 Forbidden")
     try:
         user_id = portal_db.create_user(email, _password_hash(password))
-        conn = portal_db.get_connection()
-        try:
-            portal_db._execute(conn, "UPDATE users SET email_verified=0 WHERE id=?", (user_id,))
-            conn.commit()
-        finally:
-            conn.close()
     except Exception as exc:
         if "unique" in str(exc).lower() or "duplicate" in str(exc).lower():
             return _response("<div class='alert'>An account with that email already exists. Sign in instead.</div>", request, "409 Conflict")
@@ -402,6 +590,21 @@ def _page_login(request):
     return _redirect("/dashboard", _new_session(user["id"]))
 
 
+_ADMIN_MESSAGES = {
+    "trial_approved": ("green", "Trial approved. The customer has access for 1 day, starting now."),
+    "trial_rejected": ("amber", "Trial request rejected."),
+    "payment_confirmed": ("green", "Payment confirmed. The customer's paid access is active now."),
+    "payment_rejected": ("amber", "Payment rejected."),
+    "access_granted": ("green", "Access granted."),
+    "access_revoked": ("amber", "Access revoked. The customer's projects are paused until access is granted again."),
+    "already_done": ("amber", "That request was already handled by someone else. The list below is up to date."),
+    "not_found": ("red", "That customer no longer exists."),
+    "bad_request": ("red", "That action was not valid."),
+    "test_email_ok": ("green", "Test email accepted by the provider for every admin. Check both inboxes."),
+    "test_email_failed": ("red", "Test email failed. See the Email status table below for the exact reason."),
+}
+
+
 def _page_admin(request):
     if not request.session:
         return _redirect("/login")
@@ -410,134 +613,274 @@ def _page_admin(request):
     if request.method == "POST":
         if not _csrf_valid(request):
             return _response("<div class='alert'>This form expired. Refresh and try again.</div>", request, "403 Forbidden")
-        user_id = request.form.get("user_id", "")
-        action = request.form.get("action", "")
-        if action in ("approve_trial", "reject_trial"):
-            request_id = request.form.get("request_id", "")
-            decision = "approved" if action == "approve_trial" else "rejected"
-            trial = portal_db.admin_review_trial_request(request_id, decision, request.session["email"])
-            if not trial:
-                return _response("<div class='alert'>This trial request was already reviewed or no longer exists.</div>", request, "409 Conflict")
-            if decision == "approved":
-                portal_db.admin_grant_access(trial["user_id"], 1, "trial", request.session["email"])
-            import notifications
-            subject = "Your Agent Daemon trial is approved" if decision == "approved" else "Update on your Agent Daemon trial request"
-            until = portal_db.get_subscription_active_until(trial["user_id"]) if decision == "approved" else ""
-            message = (f"Your one-day trial is approved and expires at {until}. Sign in to connect your project: https://incident-agent-portal.onrender.com" if decision == "approved" else "Your trial request was not approved at this time.")
-            sent = notifications.notify_customer(trial["email"], subject, message)
-            return _redirect("/admin?updated=1&email=" + ("sent" if sent else "not-configured"))
+        return _admin_action(request)
+    return _admin_view(request)
 
-        if action in ("approve_payment_month", "approve_payment_year", "reject_payment"):
-            payment_id = request.form.get("payment_id", "")
-            decision = "rejected" if action == "reject_payment" else "approved"
-            if decision == "approved":
-                candidate = next((item for item in portal_db.admin_list_manual_payments() if item["id"] == payment_id and item["status"] == "pending"), None)
-                expected_plan = "monthly" if action == "approve_payment_month" else "yearly"
-                expected_amount = 100 if expected_plan == "monthly" else 1000
-                if not candidate:
-                    return _response("<div class='alert'>This payment request was already reviewed or no longer exists.</div>", request, "409 Conflict")
-                if candidate["plan"] != expected_plan or candidate["amount"] != expected_amount:
-                    return _response("<div class='alert'>The selected access duration does not match the submitted payment plan.</div>", request, "400 Bad Request")
-            payment = portal_db.admin_review_manual_payment(payment_id, decision, request.session["email"])
-            if not payment:
-                return _response("<div class='alert'>This payment request was already reviewed or no longer exists.</div>", request, "409 Conflict")
-            import notifications
-            if decision == "approved":
-                days = 30 if payment["plan"] == "monthly" else 365
-                portal_db.admin_grant_access(payment["user_id"], days, "paid", request.session["email"])
-                subject = "Agent Daemon subscription activated"
-                message = f"Your payment was verified by an administrator. Your paid access has been activated for {days} days. Sign in: https://incident-agent-portal.onrender.com"
-            else:
-                subject = "Agent Daemon payment needs attention"
-                message = "Your payment submission was not approved. Please contact support with your UPI transaction reference if you believe this is a mistake."
-            customer_sent = notifications.notify_customer(payment["email"], subject, message)
-            return _redirect("/admin?updated=1&payment_email=" + ("sent" if customer_sent else "not-configured"))
+
+def _admin_action(request):
+    form = request.form
+    actor = request.session["email"]
+    action = form.get("action", "")
+    done = lambda key: _redirect("/admin?msg=" + key)
+    if action == "approve_trial":
+        trial = portal_db.approve_trial_request(form.get("request_id", ""), actor)
+        if not trial:
+            return done("already_done")
+        notifications.notify_customer(
+            trial["email"], "Your Agent Daemon trial is approved",
+            f"Your 1-day free trial is active until {_fmt_time(trial['active_until'])}.\nConnect your project: {_base_url()}/dashboard",
+            "trial_approved")
+        return done("trial_approved")
+    if action == "reject_trial":
+        trial = portal_db.admin_review_trial_request(form.get("request_id", ""), "rejected", actor)
+        if not trial:
+            return done("already_done")
+        notifications.notify_customer(trial["email"], "Update on your Agent Daemon trial request",
+                                      "Your trial request was not approved this time. You can pick a plan any time: "
+                                      f"{_base_url()}/billing", "trial_rejected")
+        return done("trial_rejected")
+    if action == "confirm_payment":
+        try:
+            payment = portal_db.approve_manual_payment(form.get("payment_id", ""), actor)
+        except ValueError:
+            return done("bad_request")
+        if not payment:
+            return done("already_done")
+        notifications.notify_customer(
+            payment["email"], "Agent Daemon payment confirmed",
+            f"We confirmed your payment. Your paid access is active until {_fmt_time(payment['active_until'])}.\n{_base_url()}/dashboard",
+            "payment_confirmed")
+        return done("payment_confirmed")
+    if action == "reject_payment":
+        payment = portal_db.admin_review_manual_payment(form.get("payment_id", ""), "rejected", actor)
+        if not payment:
+            return done("already_done")
+        notifications.notify_customer(
+            payment["email"], "Agent Daemon payment could not be confirmed",
+            "We could not find your payment, so access was not activated. If you did pay, reply to this email with a screenshot "
+            "of the successful UPI receipt.", "payment_rejected")
+        return done("payment_rejected")
+    if action in ("grant", "revoke"):
+        user_id = form.get("user_id", "")
+        email = portal_db.get_user_email(user_id)
+        if not email:
+            return done("not_found")
         if action == "revoke":
             portal_db.admin_revoke_access(user_id)
-            return _redirect("/admin?updated=1")
-        grant_type = request.form.get("grant_type", "")
-        try:
-            days = int(request.form.get("days", ""))
-        except ValueError:
-            days = 0
-        if grant_type not in ("trial", "paid") or not 1 <= days <= 3650:
-            return _response("<div class='alert'>Choose trial or paid access and enter 1–3650 days.</div>", request, "400 Bad Request")
-        try:
-            until = portal_db.admin_grant_access(user_id, days, grant_type, request.session["email"])
-        except ValueError as exc:
-            return _response(f"<div class='alert'>{_escape(exc)}</div>", request, "400 Bad Request")
-        return _redirect("/admin?updated=1")
+            return done("access_revoked")
+        kind, _, days = form.get("grant", "").partition(":")
+        if kind not in ("trial", "paid") or not days.isdigit() or not 1 <= int(days) <= 3650:
+            return done("bad_request")
+        until = portal_db.admin_grant_access(user_id, int(days), kind, actor)
+        notifications.notify_customer(email, "Your Agent Daemon access is active",
+                                      f"Access is active until {_fmt_time(until)}.\n{_base_url()}/dashboard", "access_granted")
+        return done("access_granted")
+    if action == "send_test_email":
+        results = notifications.send_test_to_admins()
+        return done("test_email_ok" if results and all(ok for _, ok, _ in results) else "test_email_failed")
+    return done("bad_request")
+
+
+def _admin_view(request):
     csrf = _escape(_csrf(request))
-    trial_rows = []
-    for trial in portal_db.admin_list_trial_requests():
-        actions = ""
-        if trial["status"] == "pending":
-            actions = f"<form method='post' action='/admin' class='actions'><input type='hidden' name='csrf' value='{csrf}'><input type='hidden' name='request_id' value='{_escape(trial['id'])}'><button class='button primary' name='action' value='approve_trial' type='submit'>Approve 1-day trial</button><button class='button danger' name='action' value='reject_trial' type='submit'>Reject</button></form>"
-        trial_rows.append(f"<tr><td>{_escape(trial['email'])}</td><td>{_escape(trial['status'])}</td><td>{_escape(trial['requested_at'])}</td><td>{actions}</td></tr>")
-    trial_table = ("<div class='table-wrap'><table class='table'><thead><tr><th>Customer</th><th>Status</th><th>Requested</th><th>Decision</th></tr></thead><tbody>" + "".join(trial_rows) + "</tbody></table></div>") if trial_rows else "<div class='empty'>No trial requests yet.</div>"
-
-    payment_rows = []
-    for payment in portal_db.admin_list_manual_payments():
-        actions = ""
-        if payment["status"] == "pending":
-            actions = f"""<form method='post' action='/admin' class='actions'>
-<input type='hidden' name='csrf' value='{csrf}'><input type='hidden' name='payment_id' value='{_escape(payment['id'])}'>
-<button class='button primary' name='action' value='approve_payment_month' type='submit'>Grant 1 Month</button>
-<button class='button primary' name='action' value='approve_payment_year' type='submit'>Grant 1 Year</button>
-<button class='button danger' name='action' value='reject_payment' type='submit'>Reject</button></form>"""
-        payment_rows.append(f"<tr><td>{_escape(payment['email'])}</td><td>₹{_escape(payment['amount'])} · {_escape(payment['plan'])}</td><td>{_escape(payment['transaction_ref'])}</td><td>{_escape(payment['status'])}<br><small>{_escape(payment['created_at'])}</small></td><td>{actions}</td></tr>")
-    payment_table = ("<div class='table-wrap'><table class='table'><thead><tr><th>Customer</th><th>Claimed amount/plan</th><th>UPI reference</th><th>Status</th><th>Action</th></tr></thead><tbody>" + "".join(payment_rows) + "</tbody></table></div>") if payment_rows else "<div class='empty'>No payment submissions yet.</div>"
-
-    rows = []
+    admins = _admin_emails()
+    stats = portal_db.admin_stats(admins)
+    trials = portal_db.admin_list_trial_requests()
+    payments = portal_db.admin_list_manual_payments()
+    users = [u for u in portal_db.admin_list_users() if u["email"].lower() not in admins]
+    projects = portal_db.admin_projects()
     now = _now().isoformat(timespec="seconds")
-    for user in portal_db.admin_list_users():
-        if user["email"].lower() in _admin_emails():
-            continue
+    states = [_project_state(p) for p in projects]
+    live = sum(1 for state, _ in states if state in ("Live", "Connected"))
+    flash = ""
+    message = _ADMIN_MESSAGES.get(request.query.get("msg", [""])[0])
+    if message:
+        flash = f"<div class='{'pill ' if message[0] != 'red' else 'alert '}{message[0]}'>{_escape(message[1])}</div>"
+
+    def card(value, label):
+        return f"<div class='stat'><b>{_escape(value)}</b><span>{_escape(label)}</span></div>"
+    cards = "".join([
+        card(stats["customers"], "customers"),
+        card(f"{stats['active']}", f"active ({stats['paid_active']} paid, {stats['trial_active']} trial)"),
+        card(stats["inactive"], "without access"),
+        card(stats["pending_trials"], "trial requests to review"),
+        card(stats["pending_payments"], "UPI payments to confirm"),
+        card(f"{live}/{stats['projects']}", "apps live / connected"),
+        card(stats["open_incidents"], f"open incidents ({stats['needs_human']} need a human)"),
+    ])
+
+    pending_trials = [t for t in trials if t["status"] == "pending"]
+    trial_rows = [f"<tr><td>{_escape(t['email'])}</td><td>{_escape(_fmt_time(t['requested_at']))}</td><td>"
+                  f"<form method='post' action='/admin' class='actions'><input type='hidden' name='csrf' value='{csrf}'>"
+                  f"<input type='hidden' name='request_id' value='{_escape(t['id'])}'>"
+                  "<button class='button primary' name='action' value='approve_trial' type='submit'>Approve 1-day trial</button>"
+                  "<button class='button danger' name='action' value='reject_trial' type='submit'>Reject</button></form></td></tr>"
+                  for t in pending_trials]
+    pending_payments = [p for p in payments if p["status"] == "pending"]
+    payment_rows = [f"<tr><td>{_escape(p['email'])}</td><td>₹{_escape(p['amount'])} · {_escape(p['plan'])}</td>"
+                    f"<td><code>{_escape(p['transaction_ref'])}</code><br><small class='muted'>{_escape(_fmt_time(p['created_at']))}</small></td><td>"
+                    f"<form method='post' action='/admin' class='actions'><input type='hidden' name='csrf' value='{csrf}'>"
+                    f"<input type='hidden' name='payment_id' value='{_escape(p['id'])}'>"
+                    f"<button class='button primary' name='action' value='confirm_payment' type='submit'>I received ₹{_escape(p['amount'])} · grant {30 if p['plan'] == 'monthly' else 365} days</button>"
+                    "<button class='button danger' name='action' value='reject_payment' type='submit'>Not received</button></form></td></tr>"
+                    for p in pending_payments]
+    attention = ""
+    if trial_rows:
+        attention += "<h2>Trial requests</h2>" + _table(["Customer", "Requested", "Decision"], trial_rows)
+    if payment_rows:
+        attention += ("<h2>UPI payments to confirm</h2><p class='muted'>Open your Paytm app, find this exact reference and amount, "
+                      "then confirm. Confirm only money you can see.</p>" + _table(["Customer", "Claimed", "Reference", "Decision"], payment_rows))
+    if not attention:
+        attention = "<h2>Needs your attention</h2><div class='empty'>Nothing waiting. New trial requests and UPI payments show up here.</div>"
+
+    pending_trial_users = {t["user_id"] for t in pending_trials}
+    pending_payment_users = {p["user_id"] for p in pending_payments}
+    users.sort(key=lambda u: (0 if (u['id'] in pending_trial_users or u['id'] in pending_payment_users) else 1 if (u.get('active_until') or '') > now else 2))
+    customer_rows = []
+    for user in users:
         until = user.get("active_until") or ""
         active = bool(until and until > now)
-        state = f"Access active through {_escape(until)} · {_escape(user.get('grant_type') or 'approved')}" if active else "Awaiting approval or access expired"
-        csrf = _escape(_csrf(request))
         if active:
-            action_cell = f"""<p class='pill green'>Access active</p><form method='post' action='/admin' style='margin-top:8px'><input type='hidden' name='csrf' value='{csrf}'><input type='hidden' name='user_id' value='{_escape(user['id'])}'><button class='button danger' name='action' value='revoke' type='submit'>Revoke access</button></form>"""
+            kind = "Paid" if user.get("grant_type") == "paid" else "Trial"
+            status = _pill(f"{kind} · {_remaining(until)}", "green") + f"<br><small class='muted'>until {_escape(_fmt_time(until))}</small>"
+            action = (f"<form method='post' action='/admin'><input type='hidden' name='csrf' value='{csrf}'>"
+                      f"<input type='hidden' name='user_id' value='{_escape(user['id'])}'>"
+                      "<button class='button danger' name='action' value='revoke' type='submit'>Revoke access</button></form>")
         else:
-            action_cell = f"""<form method='post' action='/admin' style='min-width:250px'><input type='hidden' name='csrf' value='{csrf}'><input type='hidden' name='user_id' value='{_escape(user['id'])}'><div class='field'><label>Grant access</label><select name='grant_type'><option value='trial'>Trial</option><option value='paid'>Paid plan</option></select><input name='days' type='number' min='1' max='3650' value='1' required aria-label='Days of access'></div><button class='button primary' name='action' value='grant' type='submit'>Grant access</button></form>"""
-        rows.append(f"""<tr><td>{_escape(user['email'])}<br><small class='muted'>Joined {_escape(user['created_at'])}</small></td><td>{state}</td><td>{action_cell}</td></tr>""")
-    table = ("<table class='table'><thead><tr><th>Account</th><th>Permission</th><th>Admin action</th></tr></thead><tbody>" + "".join(rows) + "</tbody></table>") if rows else "<div class='empty'>No customer accounts yet.</div>"
-    info = "<div class='alert'>Grant Paid only after payment is confirmed. Grant Trial only after approving the requested trial. Revoking access pauses the customer’s projects.</div>"
-    if request.query.get("updated") == ["1"]:
-        info = "<div class='pill green'>Access list updated.</div>" + info
-    return _response(f"<section class='section'><div class='eyebrow'>Administrator workspace</div><h1>Operations overview</h1><p class='muted'>Signed in as {_escape(request.session['email'])}.</p><h2>Trial requests</h2>{trial_table}<h2>UPI payment submissions</h2><p class='muted'>Verify each payment in your bank/UPI app before granting access.</p>{payment_table}<h2>Customer access</h2>{info}{table}</section>", request)
+            if user["id"] in pending_trial_users:
+                status = _pill("Trial requested", "amber")
+            elif user["id"] in pending_payment_users:
+                status = _pill("Payment to confirm", "amber")
+            elif until:
+                status = _pill("Expired", "red") + f"<br><small class='muted'>{_escape(_fmt_time(until))}</small>"
+            else:
+                status = _pill("No access")
+            action = (f"<form method='post' action='/admin' class='inline'><input type='hidden' name='csrf' value='{csrf}'>"
+                      f"<input type='hidden' name='user_id' value='{_escape(user['id'])}'>"
+                      "<select name='grant' aria-label='Access to grant'><option value='trial:1'>Free trial · 1 day</option>"
+                      "<option value='paid:30'>Paid · 30 days</option><option value='paid:365'>Paid · 365 days</option></select>"
+                      "<button class='button primary' name='action' value='grant' type='submit'>Grant access</button></form>")
+        customer_rows.append(f"<tr><td>{_escape(user['email'])}<br><small class='muted'>Joined {_escape(_fmt_time(user['created_at']))}</small></td><td>{status}</td><td>{action}</td></tr>")
+
+    project_rows = []
+    for project, (state, css) in zip(projects, states):
+        project_rows.append(f"<tr><td>{_escape(project['name'])}<br><small class='muted'>{_escape(project['repo_owner'])}/{_escape(project['repo_name'])}</small></td>"
+                            f"<td>{_escape(project['owner_email'])}</td><td>{_pill(state, css)}</td>"
+                            f"<td>{_escape(_ago(project.get('last_heartbeat_at')))}</td><td>{_escape(project['open_incidents'])}</td></tr>")
+    incident_rows = []
+    for item in portal_db.admin_recent_incidents(10):
+        pr = f"<a href='{_escape(item['pr_url'])}' target='_blank' rel='noopener'>PR · CI {_escape(item['ci_status'])}</a>" if item.get("pr_url") else ""
+        incident_rows.append(f"<tr><td>{_escape(_ago(item['last_seen']))}</td><td>{_escape(item['project_name'])}<br><small class='muted'>{_escape(item['owner_email'])}</small></td>"
+                             f"<td>{_escape(item['signature'])}</td><td>{_escape(_incident_label(item['status']))}</td><td>{pr}</td></tr>")
+
+    worker_seen = portal_db.worker_last_seen()
+    worker_ok = bool(worker_seen and (_now() - _parse_iso(worker_seen)).total_seconds() < 180)
+    worker = (_pill(f"Worker running · seen {_ago(worker_seen)}", "green") if worker_ok else
+              _pill(f"Worker not seen recently ({_ago(worker_seen)})", "amber"))
+    provider = notifications.provider()
+    email_state = (_pill(f"Email: {provider}, from {notifications.sender()}", "green") if notifications.configured() else
+                   _pill("Email not configured. Set BREVO_API_KEY and EMAIL_FROM in Render", "red"))
+    payments_state = _pill("Instant payments on (Razorpay)", "green") if _gateway_ready() else _pill("Instant payments off: manual UPI confirmation", "amber")
+    notif_rows = []
+    for item in portal_db.recent_notifications(10):
+        result = _pill("accepted", "green") if item["ok"] else _pill("failed", "red")
+        notif_rows.append(f"<tr><td>{_escape(_ago(item['created_at']))}</td><td>{_escape(item['recipient'])}</td><td>{_escape(item['kind'])}</td>"
+                          f"<td>{result}<br><small class='muted'>{_escape(item['detail'])}</small></td></tr>")
+    system = (f"<h2>System</h2><div class='stats'>{worker}{email_state}{payments_state}{_pill('Database: ' + portal_db.database_kind())}</div>"
+              f"<form method='post' action='/admin' style='margin-top:12px'><input type='hidden' name='csrf' value='{csrf}'>"
+              "<button class='button' name='action' value='send_test_email' type='submit'>Send test email to both admins</button></form>"
+              "<h3>Email status</h3><p class='muted'>Accepted means the email provider took the message. It does not guarantee inbox delivery.</p>"
+              + _table(["When", "To", "Kind", "Result"], notif_rows, "No emails sent yet."))
+
+    body = (f"<section class='section'><div class='eyebrow'>Administrator</div><h1>Operations</h1>"
+            f"<p class='muted'>Signed in as {_escape(request.session['email'])}</p>{flash}<div class='statgrid'>{cards}</div>{attention}"
+            f"<h2>Customers</h2>{_table(['Customer', 'Access', 'Action'], customer_rows, 'No customer accounts yet.')}"
+            f"<h2>Applications</h2>{_table(['App', 'Owner', 'State', 'Last check-in', 'Open incidents'], project_rows, 'No applications connected yet.')}"
+            f"<h2>Recent incidents and fixes</h2>{_table(['When', 'App', 'Error', 'Agent status', 'Fix'], incident_rows, 'No incidents yet.')}"
+            f"{system}</section>")
+    return _response(body, request)
 
 
 def _page_trial_request(request):
     gate = _require_session(request)
     if gate:
         return gate
+    if _is_admin(request):
+        return _redirect("/admin")
     if request.method != "POST":
         return _response("Method not allowed", request, "405 Method Not Allowed")
     if not _csrf_valid(request):
         return _response("<div class='alert'>This form expired. Refresh and try again.</div>", request, "403 Forbidden")
-    existing = portal_db.create_trial_request(request.session["user_id"])
-    import notifications
-    results = notifications.notify_admins("New Agent Daemon trial request", f"Customer {request.session['email']} requested a one-day trial. Review it here: https://incident-agent-portal.onrender.com/admin")
-    sent = bool(results) and all(results.values())
-    message = "Trial request saved. Both administrators were notified by email." if sent else "Trial request saved, but email delivery is not confirmed. Administrators can still review it in the dashboard."
-    return _response(f"<section class='card form-card'><h1>Request received</h1><p>{_escape(message)}</p><p class='muted'>Status: {_escape(existing['status'])}</p><a class='button primary' href='/billing'>Back to account access</a></section>", request)
+    try:
+        trial = portal_db.create_trial_request(request.session["user_id"])
+    except ValueError as exc:
+        return _response(f"<section class='card form-card'><h1>Trial not available</h1><p>{_escape(exc)}</p><a class='button primary' href='/billing'>Choose a plan</a></section>", request, "409 Conflict")
+    if trial.get("created"):
+        notifications.notify_admins(
+            f"New trial request: {request.session['email']}",
+            f"{request.session['email']} requested a 1-day free trial.\nApprove or reject it here: {_base_url()}/admin", "trial_request")
+    return _response("<section class='card form-card'><h1>Request received</h1>"
+                     "<p>Your request is saved and waiting for approval. When an admin approves it your 1-day trial starts immediately; "
+                     "you will see it on your dashboard and get an email.</p>"
+                     "<a class='button primary' href='/billing'>Back to plan &amp; billing</a></section>", request)
 
 def _page_dashboard(request):
     if request.method != "GET":
         return _response("Method not allowed", request, "405 Method Not Allowed")
-    gate = _require_access(request)
+    gate = _require_session(request)
     if gate:
         return gate
-    projects = portal_db.list_projects(request.session["user_id"])
+    if _is_admin(request):
+        return _redirect("/admin")
+    user_id = request.session["user_id"]
+    access = _access_state(user_id)
+    projects = portal_db.list_projects_with_activity(user_id)
+    if access["active"]:
+        label = "Paid plan" if access["kind"] == "paid" else "Free trial"
+        banner = (f"<article class='card'><div class='row'><div><div class='eyebrow'>Your plan</div><h3>{label}</h3>"
+                  f"<p class='muted'>{_escape(access['remaining'])} · active until {_escape(_fmt_time(access['until']))}</p></div>"
+                  "<a class='button' href='/billing'>Plan &amp; billing</a></div></article>")
+    else:
+        if access["trial"] == "pending":
+            message, cta = "Your trial request is waiting for approval. Your projects stay paused until then.", "See request status"
+        elif access["until"]:
+            message, cta = "Your access has ended, so monitoring is paused. Choose a plan to switch it back on.", "Choose a plan"
+        else:
+            message, cta = "You do not have access yet. Request a free 1-day trial or pick a plan to start monitoring.", "Get access"
+        banner = (f"<article class='card'><div class='row'><div><div class='eyebrow'>Access needed</div><h3>Monitoring is off</h3>"
+                  f"<p class='muted'>{_escape(message)}</p></div><a class='button primary' href='/billing'>{cta}</a></div></article>")
     cards = []
     for project in projects:
-        status = "Paused" if project["paused"] else project["status"].replace("_", " ").title()
-        css = "amber" if project["paused"] or project["status"] != "connected" else "green"
-        cards.append(f"<a class='card' href='/projects/{_escape(project['id'])}'><div class='row'><h3>{_escape(project['name'])}</h3><span class='pill {css}'>{_escape(status)}</span></div><p class='muted'>{_escape(project['repo_owner'])}/{_escape(project['repo_name'])} · {_escape(project['branch'])}</p><p class='muted'>Mode: {_escape(project['mode'])}</p></a>")
+        state, css = _project_state(project, access["active"])
+        latest = project.get("latest_incident")
+        if latest:
+            pr = (f" · <a href='{_escape(latest['pr_url'])}' target='_blank' rel='noopener'>PR</a>" if latest.get("pr_url") else "")
+            activity = (f"<p class='muted'>Latest: <a href='/projects/{_escape(project['id'])}/incidents/{_escape(latest['id'])}'>{_escape(latest['signature'])}</a>"
+                        f" · {_escape(_incident_label(latest['status']))}{pr}</p>")
+        else:
+            activity = "<p class='muted'>No incidents yet. The agent is watching for errors.</p>" if css == "green" else ""
+        hint = ""
+        if state == "Setup needed":
+            hint = "<p class='muted'>Open the project to finish setup.</p>"
+        elif state == "Waiting for monitoring to deploy":
+            hint = "<p class='muted'>Monitoring was added to your repository. It starts when your app redeploys.</p>"
+        cards.append(f"<a class='card' href='/projects/{_escape(project['id'])}'><div class='row'><h3>{_escape(project['name'])}</h3>{_pill(state, css)}</div>"
+                     f"<p class='muted'>{_escape(project['repo_owner'])}/{_escape(project['repo_name'])} · {_escape(project['branch'])} · {_escape(project['mode'])} mode</p>"
+                     f"<p class='muted'>Last check-in: {_escape(_ago(project.get('last_heartbeat_at')))} · Open incidents: {project['incident_open']} of {project['incident_total']}</p>"
+                     f"{activity}{hint}</a>")
     listing = "".join(cards) or "<div class='empty'>No projects yet. Connect a Python app to start monitoring it.</div>"
-    body = f"<section class='section'><div class='row'><div><div class='eyebrow'>Workspace</div><h1>Projects</h1><p class='muted'>Signed in as {_escape(request.session['email'])}</p></div><a class='button primary' href='/projects/new'>Connect a project</a></div><div class='grid'>{listing}</div></section>"
+    connect = "<a class='button primary' href='/projects/new'>Connect a project</a>" if access["active"] else ""
+    feed_rows = []
+    for item in portal_db.recent_activity(user_id, 8):
+        pr = f"<a href='{_escape(item['pr_url'])}' target='_blank' rel='noopener'>Open PR</a>" if item.get("pr_url") else ""
+        feed_rows.append(f"<tr><td>{_escape(_ago(item['last_seen']))}</td><td>{_escape(item['project_name'])}</td>"
+                         f"<td><a href='/projects/{_escape(item['project_id'])}/incidents/{_escape(item['id'])}'>{_escape(item['signature'])}</a></td>"
+                         f"<td>{_escape(_incident_label(item['status']))}</td><td>{pr}</td></tr>")
+    feed = _table(["When", "Project", "Error", "What the agent did", "Fix"], feed_rows,
+                  "Nothing to report yet. When your app raises an error, the agent's diagnosis and fix appear here.")
+    body = (f"<section class='section'><div class='row'><div><div class='eyebrow'>Workspace</div><h1>Your projects</h1>"
+            f"<p class='muted'>Signed in as {_escape(request.session['email'])}</p></div>{connect}</div>{banner}"
+            f"<div class='grid'>{listing}</div><h2>Agent activity</h2>{feed}</section>")
     return _response(body, request)
 
 
@@ -601,7 +944,7 @@ def _page_new_project(request):
         return _response(f"<div class='alert'>{_escape(exc)}. Set it before connecting projects.</div>", request, "503 Service Unavailable")
     owner, repo = repo_match.group(1), repo_match.group(2)
     try:
-        validate_repository_access(owner=owner, repo=repo.removesuffix(".git"), token=token)
+        repo_info = validate_repository_access(owner=owner, repo=repo.removesuffix(".git"), token=token)
     except GitHubInstallError as exc:
         return _response(f"<div class='alert'>{_escape(exc)}</div>", request, "400 Bad Request")
     ingest_key = secrets.token_urlsafe(32)
@@ -609,13 +952,18 @@ def _page_new_project(request):
     project_id = portal_db.create_project(request.session["user_id"], name=name,
         repo_owner=owner, repo_name=repo.removesuffix(".git"), branch=branch, mode=mode,
         token_ciphertext=ciphertext, ingest_key_hash=ingest_hash,
-        app_url=request.form.get("app_url", "").strip(), ai_consent_at=portal_db._now())
+        app_url=request.form.get("app_url", "").strip(), ai_consent_at=portal_db._now(),
+        ingest_key_ciphertext=_encrypt_token(ingest_key))
     portal_db.audit(project_id, "project_connected", {"repo": f"{owner}/{repo}", "mode": mode})
     portal_db.audit(project_id, "ai_diagnosis_consent", {"scope": "selected logs, tracebacks, and repository source sent to Groq"})
     if mode in ("pr", "auto"):
         portal_db.audit(project_id, "remediation_consent", {"mode": mode, "auto_merge_requires_passing_github_checks": mode == "auto"})
-    notice = f"<div class='alert'>Save this ingest key now. It is shown once: <code>{_escape(ingest_key)}</code></div>"
-    return _response(notice + f"<section class='card'><h1>Project saved</h1><p class='muted'>The monitoring installer is the next step. Your project is pending until the monitoring pull request is merged and its first heartbeat arrives.</p><a class='button primary' href='/projects/{_escape(project_id)}'>View project</a></section>", request, "201 Created")
+    project = {"repo_owner": owner, "repo_name": repo.removesuffix(".git"), "branch": branch}
+    result = _install_monitoring(project_id, request.session["user_id"], project, token, ingest_key, bool(repo_info.get("private")))
+    key_for_env = "" if (result.get("ok") and result.get("embedded_key")) else ingest_key
+    summary = _install_summary(result, key_for_env, project_id)
+    return _response(f"<section class='card'><h1>Project saved</h1><p class='muted'>{_escape(name)} is connected. The agent starts watching as soon as monitoring is live.</p></section>{summary}"
+                     f"<p><a class='button primary' href='/projects/{_escape(project_id)}'>View project</a></p>", request, "201 Created")
 
 
 def _page_project(request, project_id):
@@ -643,9 +991,49 @@ def _page_project(request, project_id):
     table = f"<table class='table'><thead><tr><th>Incident</th><th>Status</th><th>Events</th><th>Last seen</th></tr></thead><tbody>{rows}</tbody></table>" if rows else "<div class='empty'>No incidents yet. Once monitoring is installed, incidents will appear here.</div>"
     paused = bool(project["paused"])
     button = ("Resume agent" if paused else "Pause agent")
-    install_card = (f"<article class='card'><h3>Monitoring pull request</h3><p class='muted'>Review the opt-in helper and merge it when ready.</p><a class='button primary' href='{_escape(project['install_pr_url'])}'>View installation PR</a></article>" if project.get("install_pr_url") else f"<article class='card'><h3>Install monitoring</h3><p class='muted'>Open a pull request with the opt-in Python error reporting helper. Secrets are not added to the repository.</p><form method='post' action='/projects/{_escape(project_id)}/install'><input type='hidden' name='csrf' value='{_escape(_csrf(request))}'><button class='button primary' type='submit'>Open monitoring PR</button></form></article>")
-    body = f"<section class='section'><p><a href='/dashboard'>← Projects</a></p><div class='row'><div><div class='eyebrow'>Project</div><h1>{_escape(project['name'])}</h1><p class='muted'><a href='https://github.com/{_escape(project['repo_owner'])}/{_escape(project['repo_name'])}'>{_escape(project['repo_owner'])}/{_escape(project['repo_name'])}</a> · {_escape(project['branch'])} · {_escape(project['mode']).title()} mode</p></div><form method='post'><input type='hidden' name='csrf' value='{_escape(_csrf(request))}'><input type='hidden' name='paused' value='{'no' if paused else 'yes'}'><button class='button {'primary' if paused else 'danger'}' type='submit'>{button}</button></form></div><div class='stats'><span class='pill {'amber' if paused else 'green'}'>{'Paused' if paused else _escape(project['status'].replace('_',' ').title())}</span><span class='pill'>Mode · {_escape(project['mode'])}</span></div><h2>Incident history</h2>{table}<section class='grid'>{install_card}<article class='card'><h3>Update GitHub token</h3><p class='muted'>Use a token authorized for this repository with Contents and Pull requests read/write access. The new token replaces the saved one and is never shown again.</p><form method='post' action='/projects/{_escape(project_id)}/github-token'><input type='hidden' name='csrf' value='{_escape(_csrf(request))}'><div class='field'><label>New GitHub token</label><input name='github_token' type='password' autocomplete='new-password' required minlength='20' maxlength='500'></div><button class='button primary' type='submit'>Validate and save token</button></form></article><article class='card'><h3>Ingest key</h3><p class='muted'>Rotate the project key if it is exposed. The new key appears once.</p><form method='post' action='/projects/{_escape(project_id)}/rotate-key'><input type='hidden' name='csrf' value='{_escape(_csrf(request))}'><button class='button' type='submit'>Rotate key</button></form></article><article class='card'><h3>Delete project data</h3><p class='muted'>Remove this project, its incidents, logs, fixes, and stored GitHub token.</p><form method='post' action='/projects/{_escape(project_id)}/delete'><input type='hidden' name='csrf' value='{_escape(_csrf(request))}'><div class='field'><label>Type DELETE to confirm</label><input name='confirm' required autocomplete='off'></div><button class='button danger' type='submit'>Delete project</button></form></article></section></section>"
+    install_card = (f"<article class='card'><h3>Monitoring pull request</h3><p class='muted'>Monitoring was added through this pull request. If it is not merged yet, merge it to switch monitoring on.</p><a class='button primary' href='{_escape(project['install_pr_url'])}'>View installation PR</a></article>" if project.get("install_pr_url") else f"<article class='card'><h3>Install monitoring</h3><p class='muted'>Adds monitoring to your repository through a pull request and merges it automatically when it can.</p><form method='post' action='/projects/{_escape(project_id)}/install'><input type='hidden' name='csrf' value='{_escape(_csrf(request))}'><button class='button primary' type='submit'>Install monitoring</button></form></article>")
+    body = f"<section class='section'><p><a href='/dashboard'>← Projects</a></p><div class='row'><div><div class='eyebrow'>Project</div><h1>{_escape(project['name'])}</h1><p class='muted'><a href='https://github.com/{_escape(project['repo_owner'])}/{_escape(project['repo_name'])}'>{_escape(project['repo_owner'])}/{_escape(project['repo_name'])}</a> · {_escape(project['branch'])} · {_escape(project['mode']).title()} mode</p></div><form method='post'><input type='hidden' name='csrf' value='{_escape(_csrf(request))}'><input type='hidden' name='paused' value='{'no' if paused else 'yes'}'><button class='button {'primary' if paused else 'danger'}' type='submit'>{button}</button></form></div><div class='stats'><span class='pill {'amber' if paused else 'green'}'>{'Paused' if paused else _escape(project['status'].replace('_',' ').title())}</span><span class='pill'>Mode · {_escape(project['mode'])}</span><span class='pill'>Last check-in · {_escape(_ago(project.get('last_heartbeat_at')))}</span></div><h2>Incident history</h2>{table}<section class='grid'>{install_card}<article class='card'><h3>Update GitHub token</h3><p class='muted'>Use a token authorized for this repository with Contents and Pull requests read/write access. The new token replaces the saved one and is never shown again.</p><form method='post' action='/projects/{_escape(project_id)}/github-token'><input type='hidden' name='csrf' value='{_escape(_csrf(request))}'><div class='field'><label>New GitHub token</label><input name='github_token' type='password' autocomplete='new-password' required minlength='20' maxlength='500'></div><button class='button primary' type='submit'>Validate and save token</button></form></article><article class='card'><h3>Ingest key</h3><p class='muted'>Rotate the project key if it is exposed. The new key appears once.</p><form method='post' action='/projects/{_escape(project_id)}/rotate-key'><input type='hidden' name='csrf' value='{_escape(_csrf(request))}'><button class='button' type='submit'>Rotate key</button></form></article><article class='card'><h3>Delete project data</h3><p class='muted'>Remove this project, its incidents, logs, fixes, and stored GitHub token.</p><form method='post' action='/projects/{_escape(project_id)}/delete'><input type='hidden' name='csrf' value='{_escape(_csrf(request))}'><div class='field'><label>Type DELETE to confirm</label><input name='confirm' required autocomplete='off'></div><button class='button danger' type='submit'>Delete project</button></form></article></section></section>"
     return _response(body, request)
+
+
+def _install_monitoring(project_id: str, user_id: str, project: dict, token: str, ingest_key: str, private: bool) -> dict:
+    """Open (and try to merge) the monitoring PR. The key is embedded only for private repositories."""
+    try:
+        result = open_monitoring_pr(
+            owner=project["repo_owner"], repo=project["repo_name"], base_branch=project["branch"],
+            project_id=project_id, token=token, ingest_url=_base_url() + "/ingest",
+            ingest_key=ingest_key if (private and ingest_key) else "", auto_merge=True)
+    except (GitHubInstallError, RuntimeError) as exc:
+        return {"ok": False, "error": str(exc)}
+    portal_db.record_install_pr(project_id, user_id, result["url"])
+    portal_db.audit(project_id, "monitoring_pr_opened", {"pr_url": result["url"], "merged": result["merged"],
+                                                          "patched_file": result["patched_file"], "key_embedded": result["embedded_key"]})
+    return dict(result, ok=True)
+
+
+def _install_summary(result: dict, ingest_key: str, project_id: str) -> str:
+    """Plain-language outcome of an install attempt, with the key only when the customer must use it."""
+    url = _base_url() + "/ingest"
+    env_help = (f"<div class='alert'>Set these two values in your app's hosting environment (they are not stored in your repository):"
+                f"<br>INCIDENT_AGENT_INGEST_URL = <code>{_escape(url)}</code><br>INCIDENT_AGENT_INGEST_KEY = <code>{_escape(ingest_key)}</code>"
+                "<br>This key is shown once.</div>") if ingest_key else ""
+    if not result.get("ok"):
+        return (f"<div class='alert'>Project saved, but monitoring could not be added yet: {_escape(result.get('error', 'unknown error'))}"
+                f" You can retry from the project page.</div>{env_help}")
+    notes = []
+    if result.get("patched_file"):
+        notes.append(f"One line was added to <code>{_escape(result['patched_file'])}</code> so monitoring starts with your app.")
+    else:
+        notes.append("We could not find your app's entry file. Add <code>import incident_agent_monitor</code> as the first import of it.")
+    if result.get("merged"):
+        notes.append("The change was merged automatically. Monitoring starts the next time your app deploys.")
+    else:
+        notes.append(f"Merge <a href='{_escape(result['url'])}' target='_blank' rel='noopener'>this pull request</a> to turn monitoring on (auto-merge was not possible, often because of branch protection).")
+    if result.get("embedded_key"):
+        notes.append("Your repository is private, so the connection details were added to it. Nothing else to configure.")
+    else:
+        notes.append("Your repository is public, so the connection key is not stored in it. Add it to your host's environment as shown below.")
+    return "<div class='card'><h3>Monitoring setup</h3><p class='muted'>" + "</p><p class='muted'>".join(notes) + "</p></div>" + (env_help if not result.get("embedded_key") else "")
 
 
 def _page_install_monitoring(request, project_id):
@@ -661,14 +1049,15 @@ def _page_install_monitoring(request, project_id):
         return _redirect(f"/projects/{project_id}")
     try:
         token = _decrypt_token(project["github_token_ciphertext"])
-        result = open_monitoring_pr(owner=project["repo_owner"], repo=project["repo_name"],
-                                    base_branch=project["branch"], project_id=project_id, token=token)
+        ingest_key = _decrypt_token(project["ingest_key_ciphertext"]) if project.get("ingest_key_ciphertext") else ""
+        info = validate_repository_access(owner=project["repo_owner"], repo=project["repo_name"], token=token)
     except (GitHubInstallError, RuntimeError) as exc:
         return _response(f"<div class='alert'>{_escape(exc)}</div><p><a href='/projects/{_escape(project_id)}'>Back to project</a></p>", request, "502 Bad Gateway")
-    if not portal_db.record_install_pr(project_id, request.session["user_id"], result["url"]):
-        return _response("<h1>Project not found</h1>", request, "404 Not Found")
-    portal_db.audit(project_id, "monitoring_pr_opened", {"pr_url": result["url"], "pr_number": result["number"]})
-    return _redirect(f"/projects/{project_id}")
+    result = _install_monitoring(project_id, request.session["user_id"], project, token, ingest_key, bool(info.get("private")))
+    if not result.get("ok"):
+        return _response(f"<div class='alert'>{_escape(result['error'])}</div><p><a href='/projects/{_escape(project_id)}'>Back to project</a></p>", request, "502 Bad Gateway")
+    key_for_env = "" if result.get("embedded_key") else ingest_key
+    return _response(_install_summary(result, key_for_env, project_id) + f"<p><a class='button primary' href='/projects/{_escape(project_id)}'>Back to project</a></p>", request)
 
 
 def _page_update_github_token(request, project_id):
@@ -708,7 +1097,7 @@ def _page_rotate_ingest_key(request, project_id):
         return _response("<h1>Project not found</h1>", request, "404 Not Found")
     key = secrets.token_urlsafe(32)
     key_hash = hashlib.sha256(key.encode("utf-8")).hexdigest()
-    if not portal_db.rotate_project_ingest_key(project_id, user_id, key_hash):
+    if not portal_db.rotate_project_ingest_key(project_id, user_id, key_hash, _encrypt_token(key)):
         return _response("<h1>Project not found</h1>", request, "404 Not Found")
     portal_db.audit(project_id, "ingest_key_rotated")
     body = f"<section class='card form-card'><h1>New ingest key</h1><p class='muted'>The previous key is invalid now. Copy this value into your app environment; it will not be shown again.</p><div class='alert'><code>{_escape(key)}</code></div><a class='button primary' href='/projects/{_escape(project_id)}'>Back to project</a></section>"
@@ -752,27 +1141,6 @@ def _page_incident(request, project_id, incident_id):
     return _response(body, request)
 
 
-def _razorpay_settings(plan: str = "yearly"):
-    if plan not in ("monthly", "yearly"):
-        raise RuntimeError("Unknown subscription plan")
-    key_id = os.getenv("RAZORPAY_KEY_ID", "").strip()
-    secret = os.getenv("RAZORPAY_KEY_SECRET", "").strip()
-    mode = os.getenv("RAZORPAY_MODE", "test").strip().lower()
-    if mode == "test" and not key_id.startswith("rzp_test_"):
-        raise RuntimeError("Configure a Razorpay test key beginning with rzp_test_")
-    if mode == "live" and not key_id.startswith("rzp_live_"):
-        raise RuntimeError("Live mode requires a Razorpay live key beginning with rzp_live_")
-    if mode not in ("test", "live") or not secret:
-        raise RuntimeError("Configure Razorpay mode and key credentials")
-    name = "RAZORPAY_MONTHLY_AMOUNT_PAISE" if plan == "monthly" else "RAZORPAY_YEARLY_AMOUNT_PAISE"
-    amount = os.getenv(name, "").strip() or ("10000" if plan == "monthly" else "100000")
-    try:
-        amount_paise = int(amount)
-    except ValueError as exc:
-        raise RuntimeError("Subscription amount must be a positive integer in paise") from exc
-    if amount_paise < 100:
-        raise RuntimeError("Subscription amount must be at least 100 paise")
-    return key_id, secret, amount_paise
 
 
 def _fetch_razorpay_payment(payment_id: str, key_id: str, secret: str):
@@ -793,27 +1161,52 @@ def _page_billing(request):
     gate = _require_session(request)
     if gate:
         return gate
+    if _is_admin(request):
+        return _redirect("/admin")
     user_id = request.session["user_id"]
-    active_until = portal_db.get_subscription_active_until(user_id)
-    active = bool(active_until and active_until > _now().isoformat(timespec="seconds"))
-    requests = [item for item in portal_db.admin_list_trial_requests() if item["user_id"] == user_id]
-    latest = requests[0] if requests else None
-    success = "<div class='pill green'>Payment verified and access activated.</div>" if request.query.get("success") == ["1"] else ""
-    if active:
-        info = f"<div class='alert'>Your access is active through {_escape(active_until)}.</div><p class='muted'>Your existing projects remain attached to your account.</p>"
+    access = _access_state(user_id)
+    csrf = _escape(_csrf(request))
+    gateway = _gateway_ready()
+    banner = "<div class='pill green'>Payment received. Your access is active.</div>" if request.query.get("success") == ["1"] else ""
+    if access["active"]:
+        label = "Paid plan" if access["kind"] == "paid" else "Free trial"
+        current = (f"<article class='card'><div class='eyebrow'>Current plan</div><h2>{label}</h2>"
+                   f"<p class='muted'>Active until {_escape(_fmt_time(access['until']))} · {_escape(access['remaining'])}</p>"
+                   "<a class='button' href='/dashboard'>Go to my projects</a></article>")
     else:
-        if latest and latest["status"] == "pending":
-            trial = "<div class='alert'>Your one-day trial request is pending administrator review.</div>"
-        elif latest and latest["status"] == "rejected":
-            trial = "<div class='alert'>Your latest trial request was not approved. You can still choose a paid plan.</div>"
+        current = ("<article class='card'><div class='eyebrow'>Current plan</div><h2>No active access</h2>"
+                   "<p class='muted'>Monitoring is paused. Your connected projects come back as soon as access starts.</p></article>")
+    trial = access["trial"]
+    trial_card = ""
+    if not (access["active"] and access["kind"] == "paid") and not access["active"]:
+        if trial == "pending":
+            trial_card = "<article class='card'><div class='eyebrow'>Free trial</div><h3>Waiting for approval</h3><p class='muted'>The admins have your request. Access starts the moment they approve it and you will see it here and on your dashboard.</p></article>"
+        elif trial == "approved":
+            trial_card = "<article class='card'><div class='eyebrow'>Free trial</div><h3>Trial used</h3><p class='muted'>Your 1-day trial has ended. Pick a plan below to continue.</p></article>"
         else:
-            trial = f"<form method='post' action='/billing/trial-request'><input type='hidden' name='csrf' value='{_escape(_csrf(request))}'><button class='button' type='submit'>Request a free 1-day trial</button></form>"
-        info = f"""{trial}
-<div class='grid'>
-<article class='card'><div class='eyebrow'>Monthly</div><h2>₹100 <small class='muted'>/ month</small></h2><p class='muted'>30 days of access.</p><a class='button primary' href='/billing/pay?plan=monthly'>Pay by UPI QR</a></article>
-<article class='card'><div class='eyebrow'>Yearly</div><h2>₹1,000 <small class='muted'>/ year</small></h2><p class='muted'>365 days of access.</p><a class='button primary' href='/billing/pay?plan=yearly'>Pay by UPI QR</a></article>
-</div><p class='muted'>Pay using any UPI app, then submit your transaction reference. Access starts only after an administrator verifies the payment.</p>"""
-    body = f"<section class='section'><div class='eyebrow'>Account access</div><h1>{'Your subscription' if active else 'Choose your access'}</h1>{success}{info}</section>"
+            note = "<p class='muted'>Your last request was not approved. You can ask again.</p>" if trial == "rejected" else "<p class='muted'>Try everything for one day. An admin approves each request.</p>"
+            trial_card = (f"<article class='card'><div class='eyebrow'>Free trial</div><h3>1 day, free</h3>{note}"
+                          f"<form method='post' action='/billing/trial-request'><input type='hidden' name='csrf' value='{csrf}'>"
+                          "<button class='button' type='submit'>Request free trial</button></form></article>")
+    plan_cards = []
+    for key, plan in PLANS.items():
+        if gateway:
+            action = (f"<form method='post' action='/billing/order'><input type='hidden' name='csrf' value='{csrf}'>"
+                      f"<input type='hidden' name='plan' value='{key}'><button class='button primary' type='submit'>Pay ₹{plan['rupees']:,}</button></form>"
+                      "<p class='muted'>UPI (Paytm, PhonePe, GPay), cards or netbanking. Access starts instantly.</p>")
+        else:
+            action = (f"<a class='button primary' href='/billing/pay?plan={key}'>Pay ₹{plan['rupees']:,} by UPI</a>"
+                      "<p class='muted'>After you pay, wait 1 to 2 hours. We check our Paytm account and switch your access on.</p>")
+        period = "month" if key == "monthly" else "year"
+        plan_cards.append(f"<article class='card'><div class='eyebrow'>{plan['label']}</div><h2>₹{plan['rupees']:,} <small class='muted'>/ {period}</small></h2>"
+                          f"<p class='muted'>{plan['days']} days of access.</p>{action}</article>")
+    payments = portal_db.user_manual_payments(user_id)
+    history = ""
+    if payments:
+        rows = [f"<tr><td>{_escape(_fmt_time(p['created_at']))}</td><td>₹{_escape(p['amount'])} {_escape(p['plan'])}</td><td>{_escape(p['transaction_ref'])}</td><td>{_escape(p['status'].title())}</td></tr>" for p in payments]
+        history = "<h2>Your UPI submissions</h2>" + _table(["Submitted", "Plan", "Reference", "Status"], rows)
+    body = (f"<section class='section'><div class='eyebrow'>Account</div><h1>Plan &amp; billing</h1>{banner}"
+            f"<div class='grid'>{current}{trial_card}</div><h2>Plans</h2><div class='grid'>{''.join(plan_cards)}</div>{history}</section>")
     return _response(body, request)
 
 
@@ -821,33 +1214,56 @@ def _page_manual_payment(request):
     gate = _require_session(request)
     if gate:
         return gate
+    if _is_admin(request) or _gateway_ready():
+        return _redirect("/admin" if _is_admin(request) else "/billing")
     if request.method == "POST":
         if not _csrf_valid(request):
             return _response("<div class='alert'>This form expired. Refresh and try again.</div>", request, "403 Forbidden")
         plan = str(request.form.get("plan", ""))
-        amount_raw = str(request.form.get("amount", ""))
-        txn = str(request.form.get("transaction_ref", "")).strip()
+        if plan not in PLANS:
+            return _response("<div class='alert'>Choose a valid plan.</div>", request, "400 Bad Request")
+        ref = str(request.form.get("transaction_ref", "")).strip()
         try:
-            amount = int(amount_raw)
-            payment = portal_db.create_manual_payment_request(request.session["user_id"], amount, plan, txn)
-        except (ValueError, TypeError) as exc:
-            return _response(f"<div class='alert'>{_escape(str(exc))}</div>", request, "400 Bad Request")
-        import notifications
-        results = notifications.notify_admins("URGENT: UPI payment submitted",
-            f"Customer: {request.session['email']}\\nClaimed amount: INR {amount}\\nPlan: {plan}\\nUPI transaction reference: {txn}\\nStatus: pending manual verification\\nReview: https://incident-agent-portal.onrender.com/admin")
-        sent = bool(results) and all(results.values())
-        notice = "Payment details submitted. Both administrators were notified by email." if sent else "Payment details saved, but email delivery is not confirmed. Please wait for administrator review."
-        return _response(f"<section class='card form-card'><h1>Payment submitted</h1><p>{_escape(notice)}</p><p class='muted'>Status: pending verification. Do not pay again unless an administrator asks you to.</p><a class='button primary' href='/billing'>Back to subscription</a></section>", request)
+            payment = portal_db.create_manual_payment_request(request.session["user_id"], PLANS[plan]["rupees"], plan, ref)
+        except ValueError as exc:
+            return _response(f"<div class='alert'>{_escape(exc)}</div><p><a href='/billing/pay?plan={plan}'>Back</a></p>", request, "400 Bad Request")
+        if payment.get("created_at") and payment["status"] == "pending":
+            notifications.notify_admins(
+                f"UPI payment to confirm: INR {PLANS[plan]['rupees']} from {request.session['email']}",
+                f"Customer: {request.session['email']}\nPlan: {plan} (INR {PLANS[plan]['rupees']})\nUPI reference: {ref}\n"
+                f"Open your Paytm app and look for a payment of INR {PLANS[plan]['rupees']} with this reference. If you see it, confirm it here: {_base_url()}/admin", "payment_submitted")
+            notifications.notify_customer(
+                request.session["email"], "We received your payment details",
+                f"Thanks! You told us you paid INR {PLANS[plan]['rupees']} (reference {ref}).\n"
+                "Please wait 1 to 2 hours. We check our Paytm account and switch your access on as soon as we see the payment. "
+                "You will get another email when it is active.", "payment_received")
+        return _response("<section class='card form-card'><h1>Payment submitted</h1>"
+                         "<p>Thanks! Please wait 1 to 2 hours. We check our Paytm account for your payment and your access starts as soon as we see it. "
+                         "You will see the status under Plan &amp; billing and get an email.</p>"
+                         "<p class='muted'>Do not pay again unless an admin asks you to.</p>"
+                         "<a class='button primary' href='/billing'>Back to plan &amp; billing</a></section>", request)
     plan = request.query.get("plan", ["monthly"])[0]
-    if plan not in ("monthly", "yearly"):
+    if plan not in PLANS:
         plan = "monthly"
-    amount = 100 if plan == "monthly" else 1000
-    upi_uri = "upi://pay?pa=7975291636%40ptsbi&pn=Pranav%20V%20Rao&am=" + str(amount) + "&cu=INR"
-    qr_src = "https://quickchart.io/qr?size=300&margin=2&text=" + urlencode({"text": upi_uri})[5:]
-    body = f"""<section class='card form-card'><div class='eyebrow'>Manual UPI payment</div><h1>Pay ₹{amount}</h1><p class='muted'>Plan: {'30 days' if plan == 'monthly' else '365 days'}. Use the button to open a compatible UPI app, or scan the QR code on another device. Confirm the recipient and amount before approving the payment.</p>
-<div style='text-align:center;background:#fff;padding:16px;border-radius:14px;margin:20px 0'><a href='{_escape(upi_uri)}' aria-label='Open payment in a UPI app' style='display:block'><img src='{_escape(qr_src)}' alt='UPI payment QR code for ₹{amount}' width='300' height='300' style='display:block;max-width:100%;height:auto;margin:auto'></a><p style='color:#222;margin:8px 0 0'>7975291636@ptsbi</p><a class='button primary' style='margin-top:12px' href='{_escape(upi_uri)}'>Open UPI app and pay ₹{amount}</a></div>
-<p class='alert'>After completing the payment in your UPI app, return here and enter the transaction reference from the successful transaction. This site cannot independently detect a static QR payment; an administrator must verify it before activating access.</p>
-<form method='post' action='/billing/pay'><input type='hidden' name='csrf' value='{_escape(_csrf(request))}'><input type='hidden' name='plan' value='{plan}'><input type='hidden' name='amount' value='{amount}'><div class='field'><label>UPI transaction/reference ID</label><input name='transaction_ref' maxlength='120' required placeholder='Enter reference from successful payment' autocomplete='off'><small>Do not submit until your UPI app shows the payment as successful. Access is not granted on this form submission.</small></div><button class='button primary' type='submit'>Submit payment for verification</button></form><p class='muted'>An administrator will review your payment, usually within 1–2 hours. Access remains pending until approval.</p></section>"""
+    rupees = PLANS[plan]["rupees"]
+    uri = _upi_uri(plan)
+    qr = _qr_data_uri(uri)
+    vpa = os.getenv("UPI_ID", "7975291636@ptsbi").strip()
+    qr_html = f"<img src='{_escape(qr)}' alt='UPI QR code for ₹{rupees}' width='260' height='260'>" if qr else "<p style='color:#222'>QR code unavailable. Use the button below.</p>"
+    plain_uri = "upi://pay?" + "&".join(f"{key}={quote(value, safe='@')}" for key, value in
+                                       {"pa": vpa, "pn": os.getenv("UPI_PAYEE_NAME", "Pranav V Rao").strip(), "cu": "INR"}.items())
+    plain_qr = _qr_data_uri(plain_uri)
+    plain_html = f"<img src='{_escape(plain_qr)}' alt='UPI QR code without an amount' width='220' height='220'>" if plain_qr else ""
+    body = (f"<section class='card form-card'><div class='eyebrow'>Pay by UPI</div><h1>Pay ₹{rupees:,}</h1>"
+            f"<p class='muted'>{PLANS[plan]['label']} plan · {PLANS[plan]['days']} days. On a phone tap the button to open your UPI app (Paytm, PhonePe, GPay). On a computer scan the QR code with your phone.</p>"
+            f"<div class='qr'><a href='{_escape(uri)}' aria-label='Open UPI app'>{qr_html}</a><p>{_escape(vpa)}</p>"
+            f"<a class='button primary' style='margin-top:12px' href='{_escape(uri)}'>Open UPI app and pay ₹{rupees:,}</a></div>"
+            f"<details><summary>Your app will not accept the amount? Scan this QR and type ₹{rupees:,} yourself.</summary><div class='qr'>{plain_html}<p>{_escape(vpa)}</p></div></details>"
+            f"<div class='alert'>Check that your UPI app shows exactly ₹{rupees:,}.00 before you pay. After you pay, enter the UPI reference number (UTR) from your receipt below and press the button. Then please wait 1 to 2 hours: we check our Paytm account for your payment and switch your access on. You will get an email.</div>"
+            f"<form method='post' action='/billing/pay'><input type='hidden' name='csrf' value='{_escape(_csrf(request))}'><input type='hidden' name='plan' value='{plan}'>"
+            "<div class='field'><label>UPI reference number (UTR)</label><input name='transaction_ref' maxlength='40' required autocomplete='off' placeholder='12-digit number from your payment receipt'>"
+            "<small>Only submit after your UPI app shows the payment as successful. Fake references are rejected when an admin checks.</small></div>"
+            "<button class='button primary' type='submit'>I have paid ₹" + f"{rupees:,}" + "</button></form></section>")
     return _response(body, request)
 
 
@@ -855,21 +1271,23 @@ def _page_create_order(request):
     gate = _require_session(request)
     if gate:
         return gate
+    if _is_admin(request):
+        return _redirect("/admin")
     if request.method != "POST":
         return _response("Method not allowed", request, "405 Method Not Allowed")
     if not _csrf_valid(request):
         return _response("<div class='alert'>This form expired. Refresh and try again.</div>", request, "403 Forbidden")
-    plan = str(request.form.get("plan", "yearly"))
-    if plan not in ("monthly", "yearly"):
+    plan = str(request.form.get("plan", ""))
+    if plan not in PLANS:
         return _response("<div class='alert'>Choose a valid subscription plan.</div>", request, "400 Bad Request")
     try:
         key_id, secret, amount = _razorpay_settings(plan)
     except RuntimeError as exc:
-        return _response(f"<div class='alert'>{_escape(exc)}</div>", request, "503 Service Unavailable")
+        return _response(f"<div class='alert'>{_escape(exc)}</div><p><a href='/billing/pay?plan={plan}'>Pay by UPI QR instead</a></p>", request, "503 Service Unavailable")
     user_id = request.session["user_id"]
     payload = json.dumps({"amount": amount, "currency": "INR",
-                          "receipt": "ad-" + user_id.replace("-", "")[:32],
-                          "notes": {"user_id": user_id}}).encode("utf-8")
+                          "receipt": "ad-" + secrets.token_hex(8),
+                          "notes": {"user_id": user_id, "plan": plan}}).encode("utf-8")
     basic = base64.b64encode(f"{key_id}:{secret}".encode("utf-8")).decode("ascii")
     api_request = UrlRequest("https://api.razorpay.com/v1/orders", data=payload,
         headers={"Authorization": f"Basic {basic}", "Content-Type": "application/json", "User-Agent": "AgentDaemon/1.0"}, method="POST")
@@ -877,20 +1295,29 @@ def _page_create_order(request):
         with urlopen(api_request, timeout=12) as result:
             order = json.loads(result.read().decode("utf-8"))
     except (HTTPError, URLError, TimeoutError, OSError, ValueError):
-        return _response("<div class='alert'>Razorpay could not create a test order. Check the test keys and retry.</div>", request, "502 Bad Gateway")
+        return _response("<div class='alert'>The payment provider could not start the payment. Nothing was charged. Try again in a minute.</div>", request, "502 Bad Gateway")
     order_id = str(order.get("id", ""))
     if not re.fullmatch(r"order_[A-Za-z0-9]+", order_id) or order.get("amount") != amount:
-        return _response("<div class='alert'>Razorpay returned an invalid order. No payment was started.</div>", request, "502 Bad Gateway")
+        return _response("<div class='alert'>The payment provider returned an invalid order. Nothing was charged.</div>", request, "502 Bad Gateway")
     portal_db.create_payment_order(user_id, order_id, amount, plan)
-    csrf = json.dumps(_csrf(request)).replace("</", "<\\/")
-    key = json.dumps(key_id)
-    order_value = json.dumps(order_id)
     nonce = secrets.token_urlsafe(18)
-    body = f"""<section class='card form-card'><h1>Complete test payment</h1><p class='muted'>Razorpay test checkout will open. No live charge is possible in this build.</p><button class='button primary' id='pay' type='button'>Open secure checkout</button><p id='result' class='muted'></p></section>
-<script src='https://checkout.razorpay.com/v1/checkout.js'></script><script nonce='{nonce}'>
-const options={{key:{key},amount:{amount},currency:'INR',name:'Agent Daemon',description:{json.dumps(plan)},order_id:{order_value},handler:async function(r){{const response=await fetch('/billing/verify',{{method:'POST',headers:{{'Content-Type':'application/json'}},credentials:'same-origin',body:JSON.stringify({{csrf:{csrf},order_id:r.razorpay_order_id,payment_id:r.razorpay_payment_id,signature:r.razorpay_signature}})}});const data=await response.json();if(response.ok)location.href='/billing?success=1';else document.getElementById('result').textContent=data.error||'Payment verification failed.';}},modal:{{ondismiss:function(){{document.getElementById('result').textContent='Checkout closed. No subscription was activated.';}}}}}};
-document.getElementById('pay').addEventListener('click',()=>new Razorpay(options).open());
-</script>"""
+    rupees = amount // 100
+    test_banner = "<div class='alert'>Test mode: no real money moves. Use Razorpay's test UPI id <code>success@razorpay</code>.</div>" if key_id.startswith("rzp_test_") else ""
+    script = r"""const options={key:__KEY__,amount:__AMOUNT__,currency:'INR',name:'Agent Daemon',description:__DESC__,order_id:__ORDER__,prefill:{email:__EMAIL__},theme:{color:'#75a7ff'},
+handler:async function(r){const out=document.getElementById('result');out.textContent='Confirming your payment...';try{const response=await fetch('/billing/verify',{method:'POST',headers:{'Content-Type':'application/json'},credentials:'same-origin',body:JSON.stringify({csrf:__CSRF__,order_id:r.razorpay_order_id,payment_id:r.razorpay_payment_id,signature:r.razorpay_signature})});const data=await response.json();if(response.ok){location.href='/billing?success=1';}else{out.textContent=data.error||'Payment verification failed.';}}catch(e){out.textContent='Could not confirm yet. If money was taken, your access switches on automatically within a minute.';}},
+modal:{ondismiss:function(){document.getElementById('result').textContent='Checkout closed. You have not been charged.';}}};
+const rzp=new Razorpay(options);rzp.on('payment.failed',function(r){document.getElementById('result').textContent=(r.error&&r.error.description)||'Payment failed. You can try again.';});
+document.getElementById('pay').addEventListener('click',function(){rzp.open();});rzp.open();"""
+    def js(value):
+        return json.dumps(value).replace("</", "<\\/")
+    for token, value in (("__KEY__", key_id), ("__AMOUNT__", amount), ("__DESC__", f"Agent Daemon {plan}"), ("__ORDER__", order_id),
+                         ("__EMAIL__", request.session["email"]), ("__CSRF__", _csrf(request))):
+        script = script.replace(token, js(value))
+    body = (f"<section class='card form-card'><div class='eyebrow'>Secure payment</div><h1>Pay ₹{rupees:,}</h1>"
+            f"<p class='muted'>{PLANS[plan]['label']} plan · {PLANS[plan]['days']} days. The amount is fixed by the server, so you can only pay ₹{rupees:,}. "
+            "Pay with any UPI app (Paytm, PhonePe, GPay), card or netbanking. Access starts the moment the payment succeeds.</p>"
+            f"{test_banner}<button class='button primary' id='pay' type='button'>Pay ₹{rupees:,}</button><p id='result' class='muted'></p></section>"
+            f"<script src='https://checkout.razorpay.com/v1/checkout.js'></script><script nonce='{nonce}'>{script}</script>")
     headers = [("Content-Type", "text/html; charset=utf-8"), ("Cache-Control", "no-store"),
         ("X-Content-Type-Options", "nosniff"), ("Referrer-Policy", "same-origin"),
         ("Content-Security-Policy", f"default-src 'self'; script-src 'self' https://checkout.razorpay.com 'nonce-{nonce}'; style-src 'self' 'unsafe-inline'; img-src 'self' data: https://*.razorpay.com; frame-src https://checkout.razorpay.com https://api.razorpay.com; connect-src 'self'; form-action 'self'; frame-ancestors 'none'; base-uri 'none'")]
@@ -926,6 +1353,7 @@ def _page_verify_payment(request):
     activated = portal_db.complete_payment_order(order_id, payment_id, int(payment["amount"]))
     if not activated:
         return Response(json.dumps({"error": "This payment was already processed or the order is invalid."}), "409 Conflict", [("Content-Type", "application/json")])
+    _after_payment(order_id, payment_id)
     return Response(json.dumps({"status": "active"}), "200 OK", [("Content-Type", "application/json"), ("Cache-Control", "no-store")])
 
 
@@ -989,6 +1417,7 @@ def _page_ingest(request):
     signature = _incident_signature(message, traceback, data)
     incident_id, inserted = portal_db.ingest_event(project["id"], timestamp=timestamp,
         level=level, message=message, traceback=traceback, signature=signature)
+    portal_db.set_project_connected(project["id"])
     return _json_response({"accepted": inserted, "duplicate": not inserted,
                            "incident_id": incident_id}, "202 Accepted" if inserted else "200 OK")
 
@@ -1020,11 +1449,18 @@ def _razorpay_webhook(request):
     try:
         event = json.loads(request.raw_body.decode("utf-8"))
         payment = event["payload"]["payment"]["entity"]
-        if event.get("event") == "payment.captured" and payment.get("status") == "captured" and payment.get("currency") == "INR":
-            # Payments are reviewed by the administrator before account access is granted.
-            pass
     except (KeyError, TypeError, ValueError, UnicodeDecodeError, json.JSONDecodeError):
         return Response(b"invalid event", "400 Bad Request", [("Content-Type", "text/plain")])
+    if event.get("event") == "payment.captured" and payment.get("status") == "captured" and payment.get("currency") == "INR":
+        order_id, payment_id = str(payment.get("order_id", "")), str(payment.get("id", ""))
+        if re.fullmatch(r"order_[A-Za-z0-9]+", order_id) and re.fullmatch(r"pay_[A-Za-z0-9]+", payment_id):
+            try:
+                amount = int(payment.get("amount", 0))
+            except (TypeError, ValueError):
+                amount = 0
+            # Safe to repeat: complete_payment_order applies each captured payment only once.
+            if portal_db.complete_payment_order(order_id, payment_id, amount):
+                _after_payment(order_id, payment_id)
     return Response(b"ok", "200 OK", [("Content-Type", "text/plain"), ("Cache-Control", "no-store")])
 
 

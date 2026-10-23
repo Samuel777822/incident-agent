@@ -6,7 +6,11 @@ import time
 import urllib.request
 from pathlib import Path
 
-from dotenv import load_dotenv
+try:
+    from dotenv import load_dotenv
+except ImportError:  # optional: only used to read a local .env file
+    def load_dotenv(*_args, **_kwargs):
+        return False
 
 from db import get_connection, resolve_incident
 

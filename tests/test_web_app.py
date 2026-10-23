@@ -21,10 +21,11 @@ def web_env(tmp_path, monkeypatch):
     web_app.portal_db.init_db()
 
 
-def _request(path, *, method="GET", form=None, cookie="", json_body=None, ingest_key=""):
+def _request(path, *, method="GET", form=None, cookie="", json_body=None, ingest_key="", headers=None, raw_body=None):
     values = {}
     setup_testing_defaults(values)
-    values.update({"PATH_INFO": path, "REQUEST_METHOD": method, "REMOTE_ADDR": "127.0.0.1",
+    path, _, query_string = path.partition("?")
+    values.update({"QUERY_STRING": query_string, "PATH_INFO": path, "REQUEST_METHOD": method, "REMOTE_ADDR": "127.0.0.1",
                    "HTTP_COOKIE": cookie, "wsgi.input": io.BytesIO()})
     if form is not None:
         encoded = urlencode(form).encode()
@@ -38,6 +39,11 @@ def _request(path, *, method="GET", form=None, cookie="", json_body=None, ingest
         values["wsgi.input"] = io.BytesIO(encoded)
     if ingest_key:
         values["HTTP_X_INGEST_KEY"] = ingest_key
+    if raw_body is not None:
+        values["CONTENT_LENGTH"] = str(len(raw_body))
+        values["CONTENT_TYPE"] = "application/json"
+        values["wsgi.input"] = io.BytesIO(raw_body)
+    values.update(headers or {})
     captured = {}
 
     def start_response(status, headers):

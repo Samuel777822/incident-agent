@@ -205,6 +205,10 @@ def main() -> None:
     next_merge_poll = 0.0
     while not _STOP:
         try:
+            portal_db.touch_worker()
+        except Exception:
+            LOG.exception("Could not record worker heartbeat")
+        try:
             worked = process_one()
         except Exception:
             LOG.exception("Worker loop failed")

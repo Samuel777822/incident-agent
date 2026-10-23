@@ -14,7 +14,11 @@ import urllib.error
 import urllib.request
 from pathlib import Path
 
-from dotenv import load_dotenv
+try:
+    from dotenv import load_dotenv
+except ImportError:  # optional: only used to read a local .env file
+    def load_dotenv(*_args, **_kwargs):
+        return False
 
 from config import get_repo_config
 from db import get_connection, init_db, record_incident, save_event

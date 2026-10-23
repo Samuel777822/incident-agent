@@ -2,10 +2,14 @@
 
 from __future__ import annotations
 
+import ast
+import base64
 import json
+import time
 import urllib.error
 import urllib.parse
 import urllib.request
+from pathlib import Path
 
 
 class GitHubInstallError(RuntimeError):
@@ -42,11 +46,11 @@ def _request(url: str, token: str, method: str = "GET", payload=None):
         raise GitHubInstallError("Could not reach GitHub to create the installation pull request.") from exc
 
 
-def validate_repository_access(*, owner: str, repo: str, token: str) -> None:
-    """Check that a token is accepted and can see the selected repository."""
+def validate_repository_access(*, owner: str, repo: str, token: str) -> dict:
+    """Check that a token is accepted and can see the repository. Returns GitHub's repo record."""
     owner_q = urllib.parse.quote(owner, safe="")
     repo_q = urllib.parse.quote(repo, safe="")
-    _request(f"https://api.github.com/repos/{owner_q}/{repo_q}", token)
+    return _request(f"https://api.github.com/repos/{owner_q}/{repo_q}", token)
 
 
 def _blob(api: str, token: str, content: str) -> str:
@@ -56,12 +60,79 @@ def _blob(api: str, token: str, content: str) -> str:
     })["sha"]
 
 
-def open_monitoring_pr(*, owner: str, repo: str, base_branch: str,
-                       project_id: str, token: str):
-    """Create a new branch and PR containing an opt-in Python logging hook.
+ENTRY_CANDIDATES = ("app.py", "main.py", "wsgi.py", "server.py", "run.py", "application.py", "manage.py", "index.py")
+IMPORT_LINE = "import incident_agent_monitor  # noqa: F401  (Agent Daemon error monitoring)"
 
-    The PR never includes an ingest secret. The customer configures that secret
-    in their own deployment environment after reviewing/merging the PR.
+
+def _client_source() -> str:
+    return Path(__file__).with_name("agent_monitor_client.py").read_text(encoding="utf-8")
+
+
+def _insert_import(source: str):
+    """Add the monitoring import as the first real statement. None means the file could not be parsed."""
+    if "incident_agent_monitor" in source:
+        return source
+    try:
+        tree = ast.parse(source)
+    except SyntaxError:
+        return None
+    lines = source.split("\n")
+    insert_at = 0
+    while insert_at < min(2, len(lines)) and lines[insert_at].startswith("#") and (
+            lines[insert_at].startswith("#!") or "coding" in lines[insert_at]):
+        insert_at += 1
+    body = list(tree.body)
+    if body and isinstance(body[0], ast.Expr) and isinstance(getattr(body[0], "value", None), ast.Constant) \
+            and isinstance(body[0].value.value, str):
+        insert_at = max(insert_at, body[0].end_lineno)
+        body = body[1:]
+    for node in body:
+        if isinstance(node, ast.ImportFrom) and node.module == "__future__":
+            insert_at = max(insert_at, node.end_lineno)
+        else:
+            break
+    lines.insert(insert_at, IMPORT_LINE)
+    return "\n".join(lines)
+
+
+def _find_entry_file(api: str, token: str, ref: str):
+    for name in ENTRY_CANDIDATES:
+        try:
+            data = _request(f"{api}/contents/{urllib.parse.quote(name)}?ref={urllib.parse.quote(ref, safe='')}", token)
+        except GitHubInstallError:
+            continue
+        if isinstance(data, dict) and data.get("encoding") == "base64" and data.get("content"):
+            try:
+                return name, base64.b64decode(data["content"]).decode("utf-8")
+            except (ValueError, UnicodeDecodeError):
+                continue
+    return None, None
+
+
+def _setup_guide(project_id: str, patched_file, embedded: bool) -> str:
+    lines = ["# Agent Daemon monitoring", "",
+             "This pull request was opened by Agent Daemon after you connected this repository.", "",
+             "- `incident_agent_monitor.py` reports unhandled exceptions and logged errors, and sends a heartbeat every 5 minutes.",
+             "- It never raises into your app and uses short timeouts.", ""]
+    if patched_file:
+        lines.append(f"- `{patched_file}` gets one added line, `{IMPORT_LINE}`, so monitoring starts with your app.")
+    else:
+        lines.append("- Add `import incident_agent_monitor` as the first import of your app's entry file.")
+    if embedded:
+        lines.append("- `incident_agent_config.json` holds this project's ingest URL and key. The key can only send events for this one project. Keep this repository private.")
+    else:
+        lines.append("- Set `INCIDENT_AGENT_INGEST_URL` and `INCIDENT_AGENT_INGEST_KEY` in your host's environment (shown on your Agent Daemon project page).")
+    lines += ["", f"Project: `{project_id}`", ""]
+    return "\n".join(lines)
+
+
+def open_monitoring_pr(*, owner: str, repo: str, base_branch: str, project_id: str, token: str,
+                       ingest_url: str = "", ingest_key: str = "", auto_merge: bool = True):
+    """Open (and try to merge) a PR that installs monitoring with no manual steps.
+
+    When ingest_key is given it is written to incident_agent_config.json. Callers
+    must only pass it for private repositories. If an entry file is found, one
+    import line is added to it so monitoring starts automatically.
     """
     owner_q = urllib.parse.quote(owner, safe="")
     repo_q = urllib.parse.quote(repo, safe="")
@@ -71,29 +142,31 @@ def open_monitoring_pr(*, owner: str, repo: str, base_branch: str,
     base = _request(f"{api}/git/ref/heads/{ref}", token)["object"]["sha"]
     base_commit = _request(f"{api}/git/commits/{base}", token)
     branch = f"agent-daemon/install-{project_id.replace('-', '')[:12]}"
-    module = '''"""Opt-in error reporting for Agent Daemon.\n\nCall report_exception() from an exception handler. No global hooks are installed.\n"""\nimport json\nimport os\nimport urllib.request\n\n\ndef report_exception(exc, *, context=None):\n    endpoint = os.environ.get("INCIDENT_AGENT_INGEST_URL", "").strip()\n    key = os.environ.get("INCIDENT_AGENT_INGEST_KEY", "").strip()\n    if not endpoint or not key:\n        return False\n    payload = {\n        "timestamp": __import__("datetime").datetime.now(__import__("datetime").timezone.utc).isoformat(),\n        "level": "ERROR",\n        "message": str(exc)[:4000],\n        "traceback": "".join(__import__("traceback").format_exception(type(exc), exc, exc.__traceback__))[-12000:],\n        "context": context or {},\n    }\n    request = urllib.request.Request(\n        endpoint, data=json.dumps(payload).encode("utf-8"),\n        headers={"Content-Type": "application/json", "X-Ingest-Key": key}, method="POST",\n    )\n    try:\n        with urllib.request.urlopen(request, timeout=2):\n            return True\n    except Exception:\n        # Monitoring must not replace or delay the application's error handling.\n        return False\n'''
-    guide = f'''# Agent Daemon monitoring setup\n\nThis pull request adds an explicit, opt-in Python error reporting helper. It does not install a global exception hook or change your application behavior.\n\n1. Review `incident_agent_monitor.py` and merge this pull request when ready.\n2. Add `INCIDENT_AGENT_INGEST_URL` using the `/ingest` URL shown by your Agent Daemon deployment.\n3. Add `INCIDENT_AGENT_INGEST_KEY` using the one-time project key from the Agent Daemon project setup. Do not commit either value.\n4. In an exception handler, call `report_exception(exc, context={{"route": request.path}})` and then keep your existing handling.\n5. Deploy and confirm the project receives a heartbeat/event.\n\nThe project identifier for this setup is `{project_id}`.\n'''
-    entries = []
-    for path, content in (("incident_agent_monitor.py", module), ("INCIDENT_AGENT_SETUP.md", guide)):
-        entries.append({"path": path, "mode": "100644", "type": "blob", "sha": _blob(api, token, content)})
-    tree = _request(api + "/git/trees", token, "POST", {
-        "base_tree": base_commit["tree"]["sha"], "tree": entries,
-    })["sha"]
+
+    files = {"incident_agent_monitor.py": _client_source()}
+    embedded = bool(ingest_key and ingest_url)
+    if embedded:
+        files["incident_agent_config.json"] = json.dumps({"ingest_url": ingest_url, "ingest_key": ingest_key}, indent=2) + "\n"
+    entry_name, entry_source = _find_entry_file(api, token, base_branch)
+    patched_file = None
+    if entry_name:
+        patched = _insert_import(entry_source)
+        if patched is not None and patched != entry_source:
+            files[entry_name] = patched
+            patched_file = entry_name
+    files["INCIDENT_AGENT_SETUP.md"] = _setup_guide(project_id, patched_file, embedded)
+
+    entries = [{"path": path, "mode": "100644", "type": "blob", "sha": _blob(api, token, content)}
+               for path, content in files.items()]
+    tree = _request(api + "/git/trees", token, "POST", {"base_tree": base_commit["tree"]["sha"], "tree": entries})["sha"]
     commit = _request(api + "/git/commits", token, "POST", {
-        "message": "chore: add opt-in Agent Daemon monitoring helper",
-        "tree": tree,
-        "parents": [base],
-    })["sha"]
-    _request(api + "/git/refs", token, "POST", {
-        "ref": f"refs/heads/{branch}", "sha": commit,
-    })
+        "message": "chore: add Agent Daemon error monitoring", "tree": tree, "parents": [base]})["sha"]
+    _request(api + "/git/refs", token, "POST", {"ref": f"refs/heads/{branch}", "sha": commit})
+    body = ("Adds Agent Daemon error monitoring. Merging this pull request is the only step needed: "
+            "monitoring starts the next time your app deploys.")
     try:
         pr = _request(api + "/pulls", token, "POST", {
-            "title": "Add opt-in Agent Daemon error monitoring",
-            "head": branch,
-            "base": base_branch,
-            "body": "Adds a small, opt-in helper for forwarding handled Python exceptions to Agent Daemon. No credentials are included; configure them as deployment secrets after reviewing this PR.",
-        })
+            "title": "Add Agent Daemon error monitoring", "head": branch, "base": base_branch, "body": body})
     except GitHubInstallError as exc:
         if "already exists" not in str(exc).lower():
             raise
@@ -102,4 +175,14 @@ def open_monitoring_pr(*, owner: str, repo: str, base_branch: str,
         if not existing:
             raise
         pr = existing[0]
-    return {"url": pr["html_url"], "number": pr["number"], "branch": branch}
+    merged = False
+    if auto_merge:
+        for attempt in range(3):
+            try:
+                _request(f"{api}/pulls/{pr['number']}/merge", token, "PUT", {"merge_method": "squash"})
+                merged = True
+                break
+            except GitHubInstallError:
+                time.sleep(1.5)
+    return {"url": pr["html_url"], "number": pr["number"], "branch": branch, "merged": merged,
+            "patched_file": patched_file, "embedded_key": embedded}

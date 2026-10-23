@@ -2,7 +2,11 @@ print("STEP 1: Script started")
 
 import os
 from pathlib import Path
-from dotenv import load_dotenv
+try:
+    from dotenv import load_dotenv
+except ImportError:  # optional: only used to read a local .env file
+    def load_dotenv(*_args, **_kwargs):
+        return False
 from groq import Groq
 
 load_dotenv(Path(__file__).parent / ".env")
