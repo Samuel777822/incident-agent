@@ -747,7 +747,7 @@ def list_auto_prs(limit: int = 20):
                     p.repo_owner,p.repo_name,p.github_token_ciphertext
           FROM incidents i JOIN projects p ON p.id=i.project_id
           WHERE p.mode='auto' AND p.paused=0 AND i.status='pr_opened'
-            AND i.pr_number IS NOT NULL AND i.ci_status IN ('pending','unknown','unavailable','success')
+            AND i.pr_number IS NOT NULL AND i.ci_status IN ('pending','unknown','unavailable','success','no_checks')
           ORDER BY i.created_at ASC LIMIT ?""", (max(1,min(int(limit),100)),)).fetchall()
         return [dict(row) for row in rows]
     finally:
