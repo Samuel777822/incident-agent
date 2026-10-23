@@ -421,7 +421,8 @@ def test_ingest_marks_project_connected(web_env):
 
 # --- zero-touch monitoring install ------------------------------------------------------------
 
-def _fake_github(monkeypatch, entry_source, private=True, mergeable=True, missing_branches=(), default_branch="main"):
+def _fake_github(monkeypatch, entry_source, private=True, mergeable=True, missing_branches=(), default_branch="main",
+                 existing_workflows=False, reject_workflow=False, branch_exists=False, same_tree=False):
     import base64
     import monitoring_installer as mi
     calls = {"blobs": {}, "tree": None, "merged": False}
@@ -433,6 +434,8 @@ def _fake_github(monkeypatch, entry_source, private=True, mergeable=True, missin
         calls.setdefault("urls", []).append(url)
         if "/contents/" in url:
             name = url.split("/contents/")[1].split("?")[0]
+            if name.startswith(".github/workflows") and existing_workflows:
+                return [{"name": "ci.yml"}]
             if name == "app.py" and entry_source is not None:
                 return {"encoding": "base64", "content": base64.b64encode(entry_source.encode()).decode()}
             raise mi.GitHubInstallError("not found")
@@ -442,14 +445,18 @@ def _fake_github(monkeypatch, entry_source, private=True, mergeable=True, missin
             return {"sha": sha}
         if url.endswith("/git/trees"):
             calls["tree"] = {e["path"]: calls["blobs"][e["sha"]] for e in payload["tree"]}
-            return {"sha": "tree1"}
+            return {"sha": "basetree" if same_tree else "tree1"}
         if url.endswith("/git/commits") and method == "POST":
             return {"sha": "commit1"}
         if "/git/commits/" in url:
             return {"tree": {"sha": "basetree"}}
+        if "/git/ref/heads/agent-daemon/" in url and not branch_exists:
+            raise mi.GitHubInstallError("GitHub could not find the branch for this token.")
         if "/git/ref/heads/" in url:
             return {"object": {"sha": "base1"}}
         if url.endswith("/git/refs"):
+            if reject_workflow and "agent-daemon-tests.yml" in " ".join(calls["tree"]):
+                raise mi.GitHubInstallError("GitHub denied this token.")
             return {}
         if url.endswith("/pulls") and method == "POST":
             return {"html_url": "https://github.com/demo/shop/pull/7", "number": 7}
@@ -470,7 +477,9 @@ def test_installer_patches_entry_file_embeds_key_and_merges(monkeypatch):
     result = mi.open_monitoring_pr(owner="demo", repo="shop", base_branch="main", project_id="11111111-2222-3333-4444-555555555555",
                                    token="t", ingest_url="https://portal/ingest", ingest_key="secret-key")
     files = calls["tree"]
-    assert set(files) == {"incident_agent_monitor.py", "incident_agent_config.json", "app.py", "INCIDENT_AGENT_SETUP.md"}
+    assert set(files) == {"incident_agent_monitor.py", "incident_agent_config.json", "app.py", "INCIDENT_AGENT_SETUP.md",
+                          mi.WORKFLOW_PATH}
+    assert result["workflow_added"] is True and result["had_ci"] is False
     assert json.loads(files["incident_agent_config.json"]) == {"ingest_url": "https://portal/ingest", "ingest_key": "secret-key"}
     assert files["app.py"].split("\n")[:4] == ['"""Shop."""', "from __future__ import annotations", mi.IMPORT_LINE, "import flask"]
     assert result["merged"] and result["patched_file"] == "app.py" and result["embedded_key"] and calls["merged"]
@@ -663,3 +672,41 @@ def test_retrying_install_repairs_a_project_saved_with_the_wrong_branch(web_env,
     assert seen["ingest_key"] == "q" * 40
     project = portal_db.get_project(project_id, user_id)
     assert project["branch"] == "master" and project["install_pr_url"].endswith("/pull/2")
+
+
+def test_installer_workflow_runs_syntax_check_and_tests_and_is_documented(monkeypatch):
+    mi, calls = _fake_github(monkeypatch, "import os\n")
+    mi.open_monitoring_pr(owner="demo", repo="shop", base_branch="main", project_id="11111111-2222-3333-4444-555555555555", token="t")
+    workflow = calls["tree"][mi.WORKFLOW_PATH]
+    assert "compileall" in workflow and "pytest" in workflow and "pull_request" in workflow
+    assert "exit 0" in workflow and "-eq 5" in workflow  # a repo without tests still gets a passing check
+    assert "agent-daemon-tests.yml" in calls["tree"]["INCIDENT_AGENT_SETUP.md"]
+
+
+def test_installer_does_not_touch_repositories_that_already_have_workflows(monkeypatch):
+    mi, calls = _fake_github(monkeypatch, "import os\n", existing_workflows=True)
+    result = mi.open_monitoring_pr(owner="demo", repo="shop", base_branch="main", project_id="11111111-2222-3333-4444-555555555555", token="t")
+    assert mi.WORKFLOW_PATH not in calls["tree"]
+    assert result["workflow_added"] is False and result["had_ci"] is True
+
+
+def test_installer_still_installs_monitoring_when_token_cannot_write_workflows(monkeypatch):
+    mi, calls = _fake_github(monkeypatch, "import os\n", reject_workflow=True)
+    result = mi.open_monitoring_pr(owner="demo", repo="shop", base_branch="main", project_id="11111111-2222-3333-4444-555555555555", token="t")
+    assert mi.WORKFLOW_PATH not in calls["tree"] and "incident_agent_monitor.py" in calls["tree"]
+    assert result["workflow_added"] is False and result["had_ci"] is False and result["number"] == 7
+    assert "Workflows" in calls["tree"]["INCIDENT_AGENT_SETUP.md"]
+
+
+def test_retry_after_permission_is_granted_uses_a_fresh_branch_and_adds_the_workflow(monkeypatch):
+    mi, calls = _fake_github(monkeypatch, "import os\n", branch_exists=True)  # the first attempt's branch is still there
+    result = mi.open_monitoring_pr(owner="demo", repo="shop", base_branch="main", project_id="11111111-2222-3333-4444-555555555555", token="t")
+    assert result["workflow_added"] is True and mi.WORKFLOW_PATH in calls["tree"]
+    assert result["branch"].startswith("agent-daemon/install-111111112222-") and result["branch"] != "agent-daemon/install-111111112222"
+
+
+def test_retry_with_nothing_to_change_reports_unchanged_instead_of_failing(monkeypatch):
+    mi, calls = _fake_github(monkeypatch, "import os\n", reject_workflow=True, same_tree=True)
+    result = mi.open_monitoring_pr(owner="demo", repo="shop", base_branch="main", project_id="11111111-2222-3333-4444-555555555555", token="t")
+    assert result["unchanged"] is True and result["workflow_added"] is False and result["had_ci"] is False
+    assert not calls.get("merged")  # no pull request was opened or merged

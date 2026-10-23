@@ -41,6 +41,7 @@ CREATE TABLE IF NOT EXISTS projects (
   app_url TEXT NOT NULL DEFAULT '',
   status TEXT NOT NULL DEFAULT 'pending_install',
   install_pr_url TEXT NOT NULL DEFAULT '',
+  ci_workflow TEXT NOT NULL DEFAULT '',
   ai_consent_at TEXT NOT NULL DEFAULT '',
   paused INTEGER NOT NULL DEFAULT 0,
   active_until TEXT,
@@ -232,6 +233,7 @@ def init_db() -> None:
         # Safe, repeatable migrations for databases created by older versions.
         additions = [
             ("projects", "install_pr_url", "TEXT NOT NULL DEFAULT ''"),
+            ("projects", "ci_workflow", "TEXT NOT NULL DEFAULT ''"),
             ("projects", "ai_consent_at", "TEXT NOT NULL DEFAULT ''"),
             ("projects", "last_heartbeat_at", "TEXT NOT NULL DEFAULT ''"),
             ("projects", "ingest_key_ciphertext", "TEXT NOT NULL DEFAULT ''"),
@@ -457,11 +459,22 @@ def set_project_connected(project_id: str) -> None:
         conn.close()
 
 
-def record_install_pr(project_id: str, user_id: str, pr_url: str) -> bool:
+def record_install_pr(project_id: str, user_id: str, pr_url: str, ci_workflow: str = "") -> bool:
+    """ci_workflow: 'added', 'existing' or 'missing' (no test workflow could be added, so Auto mode cannot merge)."""
     conn = get_connection()
     try:
-        cur = _execute(conn, "UPDATE projects SET status='install_pr_open',install_pr_url=? WHERE id=? AND user_id=?",
-                       (pr_url, project_id, user_id))
+        cur = _execute(conn, "UPDATE projects SET status='install_pr_open',install_pr_url=?,ci_workflow=? WHERE id=? AND user_id=?",
+                       (pr_url, ci_workflow, project_id, user_id))
+        conn.commit()
+        return cur.rowcount == 1
+    finally:
+        conn.close()
+
+
+def set_ci_workflow(project_id: str, user_id: str, ci_workflow: str) -> bool:
+    conn = get_connection()
+    try:
+        cur = _execute(conn, "UPDATE projects SET ci_workflow=? WHERE id=? AND user_id=?", (ci_workflow, project_id, user_id))
         conn.commit()
         return cur.rowcount == 1
     finally:

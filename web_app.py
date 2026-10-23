@@ -915,7 +915,7 @@ def _page_new_project(request):
     if request.method == "GET":
         fields = """<div class='field'><label>Project name</label><input name='name' required maxlength='80' placeholder='Checkout service'></div>
 <div class='field'><label>GitHub repository</label><input name='repo' required placeholder='owner/repository'><small>Use a fine-grained token limited to this repository.</small></div>
-<div class='field'><label>GitHub token</label><input name='github_token' type='password' autocomplete='off' required><small>Stored encrypted. It is never displayed after saving.</small></div>
+<div class='field'><label>GitHub token</label><input name='github_token' type='password' autocomplete='off' required><small>Stored encrypted. It is never displayed after saving. The token needs <b>Contents</b>, <b>Pull requests</b> and <b>Workflows</b> set to Read and write, so we can add monitoring and a test workflow.</small></div>
 <div class='field'><label>Branch (optional)</label><input name='branch' value='' placeholder='Leave empty to use your repository default' maxlength='100'></div>
 <div class='field'><label>Agent mode</label><select name='mode'><option value='report' selected>Report only</option><option value='pr'>Pull request</option><option value='auto'>Auto (merge only after passing CI)</option></select><small>Pull request mode opens a reviewable PR. Auto mode also merges only after GitHub reports at least one completed passing check and no failing or pending checks. With no checks, the PR stays open.</small></div>
 <div class='field'><label>App URL (optional)</label><input name='app_url' type='url' placeholder='https://app.example.com'></div>
@@ -997,8 +997,31 @@ def _page_project(request, project_id):
     paused = bool(project["paused"])
     button = ("Resume agent" if paused else "Pause agent")
     install_card = (f"<article class='card'><h3>Monitoring pull request</h3><p class='muted'>Monitoring was added through this pull request. If it is not merged yet, merge it to switch monitoring on.</p><a class='button primary' href='{_escape(project['install_pr_url'])}'>View installation PR</a></article>" if project.get("install_pr_url") else f"<article class='card'><h3>Install monitoring</h3><p class='muted'>Adds monitoring to your repository through a pull request and merges it automatically when it can.</p><form method='post' action='/projects/{_escape(project_id)}/install'><input type='hidden' name='csrf' value='{_escape(_csrf(request))}'><button class='button primary' type='submit'>Install monitoring</button></form></article>")
+    if project.get("ci_workflow") == "missing" and project.get("mode") == "auto":
+        install_card = _workflow_fix_card(project_id, request) + install_card
     body = f"<section class='section'><p><a href='/dashboard'>← Projects</a></p><div class='row'><div><div class='eyebrow'>Project</div><h1>{_escape(project['name'])}</h1><p class='muted'><a href='https://github.com/{_escape(project['repo_owner'])}/{_escape(project['repo_name'])}'>{_escape(project['repo_owner'])}/{_escape(project['repo_name'])}</a> · {_escape(project['branch'])} · {_escape(project['mode']).title()} mode</p></div><form method='post'><input type='hidden' name='csrf' value='{_escape(_csrf(request))}'><input type='hidden' name='paused' value='{'no' if paused else 'yes'}'><button class='button {'primary' if paused else 'danger'}' type='submit'>{button}</button></form></div><div class='stats'><span class='pill {'amber' if paused else 'green'}'>{'Paused' if paused else _escape(project['status'].replace('_',' ').title())}</span><span class='pill'>Mode · {_escape(project['mode'])}</span><span class='pill'>Last check-in · {_escape(_ago(project.get('last_heartbeat_at')))}</span></div><h2>Incident history</h2>{table}<section class='grid'>{install_card}<article class='card'><h3>Update GitHub token</h3><p class='muted'>Use a token authorized for this repository with Contents and Pull requests read/write access. The new token replaces the saved one and is never shown again.</p><form method='post' action='/projects/{_escape(project_id)}/github-token'><input type='hidden' name='csrf' value='{_escape(_csrf(request))}'><div class='field'><label>New GitHub token</label><input name='github_token' type='password' autocomplete='new-password' required minlength='20' maxlength='500'></div><button class='button primary' type='submit'>Validate and save token</button></form></article><article class='card'><h3>Ingest key</h3><p class='muted'>Rotate the project key if it is exposed. The new key appears once.</p><form method='post' action='/projects/{_escape(project_id)}/rotate-key'><input type='hidden' name='csrf' value='{_escape(_csrf(request))}'><button class='button' type='submit'>Rotate key</button></form></article><article class='card'><h3>Delete project data</h3><p class='muted'>Remove this project, its incidents, logs, fixes, and stored GitHub token.</p><form method='post' action='/projects/{_escape(project_id)}/delete'><input type='hidden' name='csrf' value='{_escape(_csrf(request))}'><div class='field'><label>Type DELETE to confirm</label><input name='confirm' required autocomplete='off'></div><button class='button danger' type='submit'>Delete project</button></form></article></section></section>"
     return _response(body, request)
+
+
+def _workflow_fix_steps() -> str:
+    """Why Auto mode cannot merge without a workflow, and how the customer fixes it."""
+    return ("<p class='muted'>Auto mode merges a fix only after a GitHub check passes. This repository has no GitHub Actions workflow, "
+            "so there is no check to pass and fixes stay as open pull requests. We could not add a workflow because your GitHub token "
+            "is not allowed to write workflow files. Monitoring itself is installed and working.</p>"
+            "<ol class='muted'>"
+            "<li>On GitHub open <b>Settings</b>, then <b>Developer settings</b>, then <b>Personal access tokens</b>, then <b>Fine-grained tokens</b>, "
+            "and open the token you gave us.</li>"
+            "<li>Under <b>Repository permissions</b> set <b>Workflows</b> to <b>Read and write</b>, then save. "
+            "(For a classic token, tick the <code>workflow</code> scope instead. If you made a brand new token, use "
+            "<b>Update GitHub token</b> on this page first.)</li>"
+            "<li>Come back to this project page and press <b>Install monitoring</b>. We will add the test workflow in a new pull request "
+            "and merge it.</li></ol>")
+
+
+def _workflow_fix_card(project_id: str, request) -> str:
+    return ("<article class='card'><h3>Auto mode needs a test workflow</h3>" + _workflow_fix_steps() +
+            f"<form method='post' action='/projects/{_escape(project_id)}/install'><input type='hidden' name='csrf' value='{_escape(_csrf(request))}'>"
+            "<button class='button primary' type='submit'>Install monitoring</button></form></article>")
 
 
 def _install_monitoring(project_id: str, user_id: str, project: dict, token: str, ingest_key: str) -> dict:
@@ -1016,9 +1039,15 @@ def _install_monitoring(project_id: str, user_id: str, project: dict, token: str
         return {"ok": False, "error": str(exc)}
     if result.get("base_branch") and result["base_branch"] != project["branch"]:
         portal_db.update_project_branch(project_id, user_id, result["base_branch"])
-    portal_db.record_install_pr(project_id, user_id, result["url"])
+    ci_state = "added" if result.get("workflow_added") else ("existing" if result.get("had_ci") else "missing")
+    if result.get("unchanged"):
+        portal_db.set_ci_workflow(project_id, user_id, ci_state)
+        portal_db.audit(project_id, "monitoring_reinstall_unchanged", {"ci_workflow": ci_state})
+        return dict(result, ok=True)
+    portal_db.record_install_pr(project_id, user_id, result["url"], ci_state)
     portal_db.audit(project_id, "monitoring_pr_opened", {"pr_url": result["url"], "merged": result["merged"],
-                                                          "patched_file": result["patched_file"], "key_embedded": result["embedded_key"]})
+                                                          "patched_file": result["patched_file"], "key_embedded": result["embedded_key"],
+                                                          "workflow_added": result.get("workflow_added"), "had_ci": result.get("had_ci")})
     return dict(result, ok=True)
 
 
@@ -1029,16 +1058,27 @@ def _install_summary(result: dict, project_id: str) -> str:
                 f"{_escape(result.get('error', 'unknown error'))} Nothing was changed in your repository. "
                 "Fix the problem, then press <b>Install monitoring</b> on the project page.</div>")
     notes = []
+    if result.get("unchanged"):
+        if result.get("had_ci"):
+            return "<div class='card'><h3>Monitoring setup</h3><p class='muted'>Everything is already installed, and this repository already has a GitHub Actions workflow.</p></div>"
+        return ("<div class='card'><h3>Nothing changed yet</h3><p class='muted'>GitHub still does not let this token write workflow files.</p>"
+                + _workflow_fix_steps() + "</div>")
     if result.get("patched_file"):
         notes.append(f"One line was added to <code>{_escape(result['patched_file'])}</code> so monitoring starts with your app.")
-    else:
+    elif not result.get("entry_file"):
         notes.append("We could not find your app's main file, so add <code>import incident_agent_monitor</code> as the first import of it.")
+    if result.get("workflow_added"):
+        notes.append("A GitHub Actions workflow was added that checks your code and runs your tests on every pull request. "
+                     "Auto mode merges a fix only after that check passes.")
     if result.get("merged"):
         notes.append("The change was merged automatically. Monitoring starts the next time your app deploys. Nothing else to configure.")
     else:
         notes.append(f"Merge <a href='{_escape(result['url'])}' target='_blank' rel='noopener'>this pull request</a> to turn monitoring on "
                      "(automatic merge was not possible, often because of branch protection). Nothing else to configure.")
-    return "<div class='card'><h3>Monitoring setup</h3><p class='muted'>" + "</p><p class='muted'>".join(notes) + "</p></div>"
+    card = "<div class='card'><h3>Monitoring setup</h3><p class='muted'>" + "</p><p class='muted'>".join(notes) + "</p></div>"
+    if not result.get("workflow_added") and not result.get("had_ci"):
+        card += "<div class='card'><h3>Auto mode needs a test workflow</h3>" + _workflow_fix_steps() + "</div>"
+    return card
 
 
 def _page_install_monitoring(request, project_id):
@@ -1050,7 +1090,7 @@ def _page_install_monitoring(request, project_id):
     project = portal_db.get_project(project_id, request.session["user_id"])
     if not project:
         return _response("<h1>Project not found</h1>", request, "404 Not Found")
-    if project.get("install_pr_url"):
+    if project.get("install_pr_url") and project.get("ci_workflow") != "missing":
         return _redirect(f"/projects/{project_id}")
     back = f"<p><a class='button primary' href='/projects/{_escape(project_id)}'>Back to project</a></p>"
     try:

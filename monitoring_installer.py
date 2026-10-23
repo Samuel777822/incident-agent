@@ -130,7 +130,47 @@ def _find_entry_file(api: str, token: str, ref: str):
     return None, None
 
 
-def _setup_guide(project_id: str, patched_file, embedded: bool) -> str:
+WORKFLOW_PATH = ".github/workflows/agent-daemon-tests.yml"
+# Works for any Python repo: syntax check always, pytest only when tests exist (exit code 5 = none collected).
+WORKFLOW_SOURCE = """name: tests
+on:
+  pull_request:
+  push:
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - name: Install dependencies
+        run: |
+          python -m pip install --upgrade pip
+          if [ -f requirements.txt ]; then pip install -r requirements.txt; fi
+          pip install pytest
+      - name: Syntax check
+        run: python -m compileall -q -x '/(\\.venv|venv|node_modules)/' .
+      - name: Run tests
+        run: |
+          code=0
+          python -m pytest -q || code=$?
+          if [ "$code" -eq 5 ]; then echo "No tests found; only the syntax check ran."; exit 0; fi
+          exit "$code"
+"""
+
+
+def _has_workflows(api: str, token: str, ref: str) -> bool:
+    """True when the repository already has at least one GitHub Actions workflow file."""
+    try:
+        data = _request(f"{api}/contents/.github/workflows?ref={urllib.parse.quote(ref, safe='')}", token)
+    except GitHubInstallError:
+        return False
+    return isinstance(data, list) and any(
+        isinstance(item, dict) and str(item.get("name", "")).endswith((".yml", ".yaml")) for item in data)
+
+
+def _setup_guide(project_id: str, patched_file, embedded: bool, workflow: bool = False, had_ci: bool = False) -> str:
     lines = ["# Agent Daemon monitoring", "",
              "This pull request was opened by Agent Daemon after you connected this repository.", "",
              "- `incident_agent_monitor.py` reports unhandled exceptions and logged errors, and sends a heartbeat every 5 minutes.",
@@ -143,6 +183,14 @@ def _setup_guide(project_id: str, patched_file, embedded: bool) -> str:
         lines.append("- `incident_agent_config.json` holds this project's ingest URL and key. The key can only send events for this one project. Keep this repository private.")
     else:
         lines.append("- Set `INCIDENT_AGENT_INGEST_URL` and `INCIDENT_AGENT_INGEST_KEY` in your host's environment (shown on your Agent Daemon project page).")
+    if workflow:
+        lines.append(f"- `{WORKFLOW_PATH}` runs a syntax check and your pytest tests on every pull request. "
+                     "Agent Daemon's Auto mode merges a fix only after this check passes.")
+    elif had_ci:
+        lines.append("- Your repository already has GitHub Actions workflows, so none was added. Auto mode relies on them.")
+    else:
+        lines.append("- No GitHub Actions workflow could be added (the token needs the Workflows read and write permission). "
+                     "Without a passing check, Auto mode will not merge fixes.")
     lines += ["", f"Project: `{project_id}`", ""]
     return "\n".join(lines)
 
@@ -164,28 +212,60 @@ def open_monitoring_pr(*, owner: str, repo: str, base_branch: str, project_id: s
     base = _request(f"{api}/git/ref/heads/{ref}", token)["object"]["sha"]
     base_commit = _request(f"{api}/git/commits/{base}", token)
     branch = f"agent-daemon/install-{project_id.replace('-', '')[:12]}"
+    try:
+        _request(f"{api}/git/ref/heads/{urllib.parse.quote(branch, safe='/')}", token)
+        branch += f"-{int(time.time())}"  # an earlier install branch exists (a retry): never collide with it
+    except GitHubInstallError:
+        pass
 
-    files = {"incident_agent_monitor.py": _client_source()}
+    base_files = {"incident_agent_monitor.py": _client_source()}
     embedded = bool(ingest_key and ingest_url)
     if embedded:
-        files["incident_agent_config.json"] = json.dumps({"ingest_url": ingest_url, "ingest_key": ingest_key}, indent=2) + "\n"
+        base_files["incident_agent_config.json"] = json.dumps({"ingest_url": ingest_url, "ingest_key": ingest_key}, indent=2) + "\n"
     entry_name, entry_source = _find_entry_file(api, token, base_branch)
     patched_file = None
     if entry_name:
         patched = _insert_import(entry_source)
         if patched is not None and patched != entry_source:
-            files[entry_name] = patched
+            base_files[entry_name] = patched
             patched_file = entry_name
-    files["INCIDENT_AGENT_SETUP.md"] = _setup_guide(project_id, patched_file, embedded)
+    had_ci = _has_workflows(api, token, base_branch)
 
-    entries = [{"path": path, "mode": "100644", "type": "blob", "sha": _blob(api, token, content)}
-               for path, content in files.items()]
-    tree = _request(api + "/git/trees", token, "POST", {"base_tree": base_commit["tree"]["sha"], "tree": entries})["sha"]
-    commit = _request(api + "/git/commits", token, "POST", {
-        "message": "chore: add Agent Daemon error monitoring", "tree": tree, "parents": [base]})["sha"]
-    _request(api + "/git/refs", token, "POST", {"ref": f"refs/heads/{branch}", "sha": commit})
+    def build_files(with_workflow: bool) -> dict:
+        out = dict(base_files)
+        if with_workflow:
+            out[WORKFLOW_PATH] = WORKFLOW_SOURCE
+        out["INCIDENT_AGENT_SETUP.md"] = _setup_guide(project_id, patched_file, embedded, with_workflow, had_ci)
+        return out
+
+    def push(file_map: dict) -> bool:
+        """Create the install branch. Returns False when it would change nothing."""
+        entries = [{"path": path, "mode": "100644", "type": "blob", "sha": _blob(api, token, content)}
+                   for path, content in file_map.items()]
+        tree = _request(api + "/git/trees", token, "POST", {"base_tree": base_commit["tree"]["sha"], "tree": entries})["sha"]
+        if tree == base_commit["tree"]["sha"]:
+            return False
+        commit = _request(api + "/git/commits", token, "POST", {
+            "message": "chore: add Agent Daemon error monitoring", "tree": tree, "parents": [base]})["sha"]
+        _request(api + "/git/refs", token, "POST", {"ref": f"refs/heads/{branch}", "sha": commit})
+        return True
+
+    workflow_added = not had_ci
+    try:
+        pushed = push(build_files(workflow_added))
+    except GitHubInstallError:
+        if not workflow_added:
+            raise
+        # Most likely the token lacks the Workflows permission: still install monitoring, without the workflow.
+        workflow_added = False
+        pushed = push(build_files(False))
+    if not pushed:  # a retry where everything is already installed and the workflow still cannot be added
+        return {"url": "", "number": 0, "branch": "", "base_branch": base_branch, "merged": False,
+                "patched_file": patched_file, "entry_file": entry_name, "embedded_key": embedded,
+                "workflow_added": False, "had_ci": had_ci, "unchanged": True}
     body = ("Adds Agent Daemon error monitoring. Merging this pull request is the only step needed: "
-            "monitoring starts the next time your app deploys.")
+            "monitoring starts the next time your app deploys. If your repository had no GitHub Actions workflow, one is "
+            "added so Auto mode has a passing check to wait for.")
     try:
         pr = _request(api + "/pulls", token, "POST", {
             "title": "Add Agent Daemon error monitoring", "head": branch, "base": base_branch, "body": body})
@@ -207,4 +287,5 @@ def open_monitoring_pr(*, owner: str, repo: str, base_branch: str, project_id: s
             except GitHubInstallError:
                 time.sleep(1.5)
     return {"url": pr["html_url"], "number": pr["number"], "branch": branch, "base_branch": base_branch, "merged": merged,
-            "patched_file": patched_file, "embedded_key": embedded}
+            "patched_file": patched_file, "entry_file": entry_name, "embedded_key": embedded,
+            "workflow_added": workflow_added, "had_ci": had_ci}

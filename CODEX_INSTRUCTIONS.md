@@ -118,7 +118,7 @@ inside the web service (`PORTAL_RUN_WORKER` default), so it only works while the
 4. Admin presses **Approve 1-day trial**: customer immediately sees "Free trial · … left" and the **Connect a project** button.
    The customer can never request a second trial.
 5. Admin page: "Customers" shows Grant access for inactive customers and only Revoke access for active ones; revoke then grant resumes the customer's projects.
-6. Connect a project using the demo repo `Samuel777822/cofee-shop` with a fine-grained GitHub token (Contents and Pull requests read/write).
+6. Connect a project using the demo repo `Samuel777822/cofee-shop` with a fine-grained GitHub token (Contents, Pull requests and Workflows read/write).
    Expected: a PR "Add Agent Daemon error monitoring" is opened and merged automatically; the cofee-shop service redeploys; within about 5 minutes the dashboard
    card shows **Live** with a recent "Last check-in". The customer is never asked to set environment variables. If the repo is public the project is switched to pull-request mode and the page says so.
 7. Break the coffee shop checkout, then watch an incident appear on the dashboard with the agent status and a fix PR link.
