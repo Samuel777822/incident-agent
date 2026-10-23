@@ -29,6 +29,7 @@ from wsgiref.simple_server import WSGIServer, make_server
 import httpx
 from urllib.parse import urlencode
 
+import incident_board
 import notifications
 import portal_db
 from monitoring_installer import resolve_branch, GitHubInstallError, open_monitoring_pr, validate_repository_access
@@ -992,8 +993,7 @@ def _page_project(request, project_id):
         portal_db.audit(project_id, "project_paused" if paused else "project_resumed")
         return _redirect(f"/projects/{project_id}")
     incidents = portal_db.list_incidents(project_id)
-    rows = "".join(f"<tr><td><a href='/projects/{_escape(project_id)}/incidents/{_escape(i['id'])}'>Incident {_escape(i['id'][:8])}</a></td><td>{_escape(i['status'].replace('_',' ').title())}</td><td>{_escape(i['occurrences'])}</td><td>{_escape(i['last_seen'])}</td></tr>" for i in incidents)
-    table = f"<table class='table'><thead><tr><th>Incident</th><th>Status</th><th>Events</th><th>Last seen</th></tr></thead><tbody>{rows}</tbody></table>" if rows else "<div class='empty'>No incidents yet. Once monitoring is installed, incidents will appear here.</div>"
+    table = incident_board.render_board_section(project_id, incidents, project["mode"])
     paused = bool(project["paused"])
     button = ("Resume agent" if paused else "Pause agent")
     install_card = (f"<article class='card'><h3>Monitoring pull request</h3><p class='muted'>Monitoring was added through this pull request. If it is not merged yet, merge it to switch monitoring on.</p><a class='button primary' href='{_escape(project['install_pr_url'])}'>View installation PR</a></article>" if project.get("install_pr_url") else f"<article class='card'><h3>Install monitoring</h3><p class='muted'>Adds monitoring to your repository through a pull request and merges it automatically when it can.</p><form method='post' action='/projects/{_escape(project_id)}/install'><input type='hidden' name='csrf' value='{_escape(_csrf(request))}'><button class='button primary' type='submit'>Install monitoring</button></form></article>")
@@ -1187,10 +1187,41 @@ def _page_incident(request, project_id, incident_id):
     diff = "".join(f"<article class='card'><div class='row'><strong>{_escape(f['file_path'])}</strong><span class='pill'>{_escape(f['ci_result'])}</span></div><pre style='overflow:auto;white-space:pre-wrap;color:#c7d2e4'>{_escape(f['diff'])}</pre></article>" for f in fixes) or "<div class='empty'>No proposed fix has been saved yet.</div>"
     pr_link = (f"<p><a class='button primary' href='{_escape(incident['pr_url'])}' target='_blank' rel='noopener'>Open fix pull request</a></p>"
                if incident.get("pr_url") else "")
-    body = f"<section class='section'><p><a href='/projects/{_escape(project_id)}'>← {_escape(project['name'])}</a></p><div class='eyebrow'>Incident</div><h1>{_escape(incident['signature'])}</h1><div class='stats'><span class='pill'>{_escape(incident['status'])}</span><span class='pill'>Occurrences · {_escape(incident['occurrences'])}</span><span class='pill'>CI · {_escape(incident['ci_status'])}</span></div>{pr_link}<article class='card'><h2>What happened</h2><p>{_escape(incident['root_cause']) or 'Diagnosis is pending.'}</p><p class='muted' style='white-space:pre-wrap'>{_escape(incident['report'])}</p></article><h2>Proposed changes</h2>{diff}</section>"
+    body = f"<section class='section'><p><a href='/projects/{_escape(project_id)}'>← {_escape(project['name'])}</a></p><div class='eyebrow'>Incident</div><h1>{_escape(incident['signature'])}</h1><div class='stats'><span class='pill'>{_escape(incident_board.stage_for(incident, project['mode'])['headline'])}</span><span class='pill'>Occurrences · {_escape(incident['occurrences'])}</span><span class='pill'>CI · {_escape(incident['ci_status'])}</span></div>{pr_link}<article class='card'><h2>What happened</h2><p>{_escape(incident['root_cause']) or 'Diagnosis is pending.'}</p><p class='muted' style='white-space:pre-wrap'>{_escape(incident['report'])}</p></article><h2>Proposed changes</h2>{diff}</section>"
     return _response(body, request)
 
 
+
+
+def _live_gate(request: Request):
+    """Gate for the background refresh calls: plain status codes, never a redirect page."""
+    plain = [("Content-Type", "text/plain; charset=utf-8"), ("Cache-Control", "no-store")]
+    if not request.session:
+        return Response("Sign in required", "401 Unauthorized", plain)
+    if not (_is_admin(request) or portal_db.user_has_active_access(request.session["user_id"])):
+        return Response("Plan required", "403 Forbidden", plain)
+    return None
+
+
+def _page_incident_board_live(request, project_id):
+    """HTML fragment of the incident board. The browser re-fetches it every few seconds."""
+    if request.method != "GET":
+        return Response("Method not allowed", "405 Method Not Allowed", [("Content-Type", "text/plain; charset=utf-8")])
+    gate = _live_gate(request)
+    if gate:
+        return gate
+    project = portal_db.get_project(project_id, request.session["user_id"])
+    if not project:
+        return Response("Project not found", "404 Not Found", [("Content-Type", "text/plain; charset=utf-8")])
+    body = incident_board.render_board(project_id, portal_db.list_incidents(project_id), project["mode"])
+    return Response(body, "200 OK", [("Content-Type", "text/html; charset=utf-8"), ("Cache-Control", "no-store"),
+                                     ("X-Content-Type-Options", "nosniff")])
+
+
+def _page_live_js(request):
+    return Response(incident_board.LIVE_JS, "200 OK",
+                    [("Content-Type", "application/javascript; charset=utf-8"),
+                     ("Cache-Control", "public, max-age=300"), ("X-Content-Type-Options", "nosniff")])
 
 
 def _fetch_razorpay_payment(payment_id: str, key_id: str, secret: str):
@@ -1558,6 +1589,11 @@ def _dispatch(request: Request) -> Response:
         return _page_heartbeat(request)
     if request.path == "/projects/new":
         return _page_new_project(request)
+    if request.path == "/assets/live.js":
+        return _page_live_js(request)
+    match = re.fullmatch(r"/projects/([0-9a-f-]{36})/incidents/live", request.path)
+    if match:
+        return _page_incident_board_live(request, match.group(1))
     match = re.fullmatch(r"/projects/([0-9a-f-]{36})/github-token", request.path)
     if match:
         return _page_update_github_token(request, match.group(1))
