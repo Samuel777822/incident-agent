@@ -3,6 +3,7 @@ from __future__ import annotations
 
 import ast
 import difflib
+import logging
 import os
 import tempfile
 from pathlib import Path
@@ -13,6 +14,8 @@ from cryptography.fernet import Fernet, InvalidToken
 
 import portal_db
 from patcher import apply_patch, generate_patch, validate_patch
+
+LOG = logging.getLogger("portal_remediation")
 
 
 class RemediationError(RuntimeError):
@@ -179,6 +182,7 @@ def process_auto_merges() -> int:
                 if not head_sha:
                     continue
                 status = _check_status(client, api, head_sha)
+                LOG.info("Auto-merge: PR #%s check status is %s", number, status)
                 portal_db.update_portal_pr_status(incident["incident_id"], status)
                 if status != "success":
                     continue
@@ -190,9 +194,15 @@ def process_auto_merges() -> int:
                               {"merge_method": "squash", "commit_title": f"Merge incident fix #{number}"})
                 if merged.get("merged") is True:
                     portal_db.update_portal_pr_status(incident["incident_id"], "merged", merged=True)
-        except Exception:
+                    LOG.info("Auto-merge: PR #%s merged", number)
+                else:
+                    LOG.warning("Auto-merge: PR #%s merge call returned merged=%r", number, merged.get("merged"))
+        except Exception as exc:
+            # RemediationError text is safe (no secrets); anything else logs only its class name.
+            reason = str(exc)[:200] if isinstance(exc, RemediationError) else exc.__class__.__name__
+            LOG.warning("Auto-merge deferred for PR #%s: %s", incident.get("pr_number"), reason)
             portal_db.audit(incident["project_id"], "auto_merge_deferred",
-                {"incident_id": incident["incident_id"], "reason": "GitHub check or merge request failed"})
+                {"incident_id": incident["incident_id"], "reason": reason})
         finally:
             token = ""
             headers["Authorization"] = ""
