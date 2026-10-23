@@ -421,12 +421,16 @@ def test_ingest_marks_project_connected(web_env):
 
 # --- zero-touch monitoring install ------------------------------------------------------------
 
-def _fake_github(monkeypatch, entry_source, private=True, mergeable=True):
+def _fake_github(monkeypatch, entry_source, private=True, mergeable=True, missing_branches=(), default_branch="main"):
     import base64
     import monitoring_installer as mi
     calls = {"blobs": {}, "tree": None, "merged": False}
 
     def fake_request(url, token, method="GET", payload=None):
+        for name in missing_branches:
+            if url.endswith("/branches/" + name) or url.endswith("/git/ref/heads/" + name):
+                raise mi.GitHubInstallError("GitHub could not find the branch for this token.")
+        calls.setdefault("urls", []).append(url)
         if "/contents/" in url:
             name = url.split("/contents/")[1].split("?")[0]
             if name == "app.py" and entry_source is not None:
@@ -454,7 +458,7 @@ def _fake_github(monkeypatch, entry_source, private=True, mergeable=True):
                 raise mi.GitHubInstallError("not mergeable")
             calls["merged"] = True
             return {}
-        return {"private": private}
+        return {"private": private, "default_branch": default_branch}
 
     monkeypatch.setattr(mi, "_request", fake_request)
     monkeypatch.setattr(mi.time, "sleep", lambda *_: None)
@@ -554,3 +558,108 @@ def test_admin_sees_customers_needing_action_first_with_their_plan_state(web_env
     assert body.index("z-payer@example.com") < body.index("a-active@example.com") < body.index("b-idle@example.com")
     assert "Payment to confirm" in body and "Paid · " in body and "No access" in body
     assert "I received ₹1000 · grant 365 days" in body
+
+
+# --- the install bug from the field: form said "main", the repository uses "master" ----------------------
+
+def test_wrong_branch_is_replaced_by_the_repository_default(monkeypatch):
+    mi, calls = _fake_github(monkeypatch, "import flask\n", missing_branches=("main",), default_branch="master")
+    result = mi.open_monitoring_pr(owner="demo", repo="shop", base_branch="main", project_id="11111111-2222-3333-4444-555555555555",
+                                   token="t", ingest_url="https://portal/ingest", ingest_key="k")
+    assert result["base_branch"] == "master" and result["merged"]
+    assert any(u.endswith("/git/ref/heads/master") for u in calls["urls"])
+
+
+def test_not_found_errors_say_what_was_not_found(monkeypatch):
+    import io
+    import urllib.error
+    import monitoring_installer as mi
+
+    def boom(request, timeout=0):
+        raise urllib.error.HTTPError(request.full_url, 404, "Not Found", {}, io.BytesIO(b"{}"))
+
+    monkeypatch.setattr(mi.urllib.request, "urlopen", boom)
+    for url, word in (("https://api.github.com/repos/o/r/git/ref/heads/main", "branch"),
+                      ("https://api.github.com/repos/o/r/branches/main", "branch"),
+                      ("https://api.github.com/repos/o/r", "repository")):
+        with pytest.raises(mi.GitHubInstallError) as info:
+            mi._request(url, "token")
+        assert f"could not find the {word}" in str(info.value)
+
+
+@pytest.fixture
+def fernet_env(monkeypatch):
+    from cryptography.fernet import Fernet
+    monkeypatch.setenv("TOKEN_ENCRYPTION_KEY", Fernet.generate_key().decode())
+
+
+def _connect_form(**extra):
+    form = {"repo": "demo/shop", "github_token": "github_pat_example", "name": "shop", "branch": "", "mode": "auto",
+            "allow_install": "yes", "allow_ai_processing": "yes", "allow_remediation": "yes"}
+    form.update(extra)
+    return form
+
+
+def test_connecting_a_project_needs_no_work_from_the_customer(web_env, fernet_env, monkeypatch):
+    user_id, csrf, cookie = make_session("c@example.com")
+    portal_db.admin_grant_access(user_id, 30, "paid", "admin1@example.com")
+    received = {}
+    monkeypatch.setattr(web_app, "validate_repository_access", lambda **kw: {"private": False, "default_branch": "master"})
+    monkeypatch.setattr(web_app, "resolve_branch", lambda **kw: "master")
+
+    def fake_open(**kw):
+        received.update(kw)
+        return {"url": "https://github.com/demo/shop/pull/1", "number": 1, "branch": "agent-daemon/install-x",
+                "base_branch": "master", "merged": True, "patched_file": "app.py", "embedded_key": True}
+
+    monkeypatch.setattr(web_app, "open_monitoring_pr", fake_open)
+    status, _, body = _request("/projects/new", method="POST", cookie=cookie, form={"csrf": csrf, **_connect_form()})
+    assert status == "201 Created"
+    assert "Nothing else to configure" in body
+    assert "INCIDENT_AGENT_INGEST_KEY" not in body and "hosting environment" not in body  # no chores for the customer
+    assert received["ingest_key"] and received["base_branch"] == "master"                  # key travels inside the install PR
+    project = portal_db.list_projects(user_id)[0]
+    assert project["branch"] == "master"
+    assert project["mode"] == "pr"                       # public repository: fixes are reviewed, never auto-merged
+    assert "pull requests for a person to review" in body
+
+
+def test_failed_install_explains_the_problem_and_adds_no_chores(web_env, fernet_env, monkeypatch):
+    user_id, csrf, cookie = make_session("c@example.com")
+    portal_db.admin_grant_access(user_id, 30, "paid", "admin1@example.com")
+    monkeypatch.setattr(web_app, "validate_repository_access", lambda **kw: {"private": True, "default_branch": "master"})
+    monkeypatch.setattr(web_app, "resolve_branch", lambda **kw: "master")
+
+    def refuse(**kw):
+        raise web_app.GitHubInstallError("GitHub denied this token. Confirm it can create branches and pull requests.")
+
+    monkeypatch.setattr(web_app, "open_monitoring_pr", refuse)
+    status, _, body = _request("/projects/new", method="POST", cookie=cookie, form={"csrf": csrf, **_connect_form(mode="pr")})
+    assert status == "201 Created"
+    assert "GitHub denied this token" in body and "Nothing was changed in your repository" in body
+    assert "INCIDENT_AGENT_INGEST" not in body and "hosting environment" not in body
+    assert len(portal_db.list_projects(user_id)) == 1
+
+
+def test_retrying_install_repairs_a_project_saved_with_the_wrong_branch(web_env, fernet_env, monkeypatch):
+    user_id, csrf, cookie = make_session("c@example.com")
+    portal_db.admin_grant_access(user_id, 30, "paid", "admin1@example.com")
+    project_id = new_project(user_id, "q" * 40, ingest_key_ciphertext=web_app._encrypt_token("q" * 40))
+    conn = portal_db.get_connection()
+    portal_db._execute(conn, "UPDATE projects SET github_token_ciphertext=?, branch='main' WHERE id=?",
+                       (web_app._encrypt_token("github_pat_example"), project_id))
+    conn.commit()
+    conn.close()
+    seen = {}
+
+    def fake_open(**kw):
+        seen.update(kw)
+        return {"url": "https://github.com/demo/shop/pull/2", "number": 2, "branch": "agent-daemon/install-y",
+                "base_branch": "master", "merged": True, "patched_file": "app.py", "embedded_key": True}
+
+    monkeypatch.setattr(web_app, "open_monitoring_pr", fake_open)
+    status, _, body = _request(f"/projects/{project_id}/install", method="POST", cookie=cookie, form={"csrf": csrf})
+    assert status == "200 OK" and "Nothing else to configure" in body
+    assert seen["ingest_key"] == "q" * 40
+    project = portal_db.get_project(project_id, user_id)
+    assert project["branch"] == "master" and project["install_pr_url"].endswith("/pull/2")

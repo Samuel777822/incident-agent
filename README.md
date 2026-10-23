@@ -55,11 +55,16 @@ SMTP (`SMTP_HOST`, `SMTP_PORT`, `SMTP_USERNAME`, `SMTP_PASSWORD`) still works on
 
 ## Automatic monitoring install
 
-When a project is connected, the portal opens a pull request that adds `incident_agent_monitor.py`, one import line in
-the app's entry file (`app.py`, `main.py`, `wsgi.py`, ...), and, for **private** repositories, the project's ingest URL
-and key in `incident_agent_config.json`. It then tries to merge the PR. The client reports unhandled exceptions, logged
-errors and a heartbeat every 5 minutes, never raises into the app, and uses short timeouts. For **public** repositories the key is
-not committed; the customer sets `INCIDENT_AGENT_INGEST_URL` and `INCIDENT_AGENT_INGEST_KEY` instead.
+Connecting a project asks the customer for nothing technical. The portal opens a pull request that adds `incident_agent_monitor.py`, one import
+line in the app's entry file (`app.py`, `main.py`, `wsgi.py`, ...) and `incident_agent_config.json` with the project's ingest URL and key, then merges it
+automatically when GitHub allows. The client reports unhandled exceptions, logged errors and a heartbeat every 5 minutes, never raises into the app, and
+uses short timeouts.
+
+* The branch is optional. If it is empty or does not exist, the repository's default branch is used and saved.
+* The key is stored in the repository for private and public repositories alike, so there are no environment variables to set. The key can only send
+  events for its own project. For **public** repositories the project is forced into pull-request mode (never auto-merge), because the key is visible
+  and anyone could send fake errors. A person always reviews fixes there.
+* If the install fails, the customer sees the specific reason (branch, repository, token permission) and presses **Install monitoring** again after fixing it.
 
 ## Environment variables
 

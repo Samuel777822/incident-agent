@@ -1260,3 +1260,13 @@ def admin_stats(admin_emails: set[str]) -> dict:
     finally:
         conn.close()
     return stats
+
+
+def update_project_branch(project_id: str, user_id: str, branch: str) -> bool:
+    conn = get_connection()
+    try:
+        cur = _execute(conn, "UPDATE projects SET branch=? WHERE id=? AND user_id=?", (branch[:100], project_id, user_id))
+        conn.commit()
+        return cur.rowcount == 1
+    finally:
+        conn.close()

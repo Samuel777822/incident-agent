@@ -1,7 +1,7 @@
 # Codex instructions: deploy and verify Agent Daemon (code is already written and tested)
 
 You are NOT here to redesign or rewrite this project. The code in this folder was written and tested by Claude:
-**75 automated tests pass** and a real-server smoke test passed (sign-up, trial request, admin approval, dashboard).
+**80 automated tests pass** and a real-server smoke test passed (sign-up, trial request, admin approval, dashboard).
 Your job is to put it into the GitHub repo, configure Render, and verify it works live. Follow the steps in order.
 Do not skip verification. Do not claim something works unless you saw it work.
 
@@ -40,7 +40,7 @@ DO NOT:
    (`render>=1.2.0` fails with "Could not find a version that satisfies the requirement render" and the code needs 3.10+).
    If your Python is older, install Python 3.12 or 3.13 and use that. Then create a FRESH virtual environment:
    `python -m venv .venv && source .venv/bin/activate` (Windows: `.venv\\Scripts\\activate`), then install **the test requirements**:
-   `python -m pip install -r requirements-test.txt` and run `python -m pytest -q`. **Expected: `75 passed`.**
+   `python -m pip install -r requirements-test.txt` and run `python -m pytest -q`. **Expected: `80 passed`.**
    - `requirements-test.txt` is everything the tests need. `requirements.txt` is the PRODUCTION list that Render installs, in a Python 3.13 image. Never edit it.
      If you also install `requirements.txt` and only the `render` line fails on a Python that IS 3.10+, ignore that package: only the legacy
      `workflows.py` imports it and no test needs it. Install the rest and go on.
@@ -48,7 +48,7 @@ DO NOT:
      not a code bug: install the requirements into the same Python that runs pytest (`which python`, `python -m pip list`). Do NOT edit code.
    - The two QR tests (`test_manual_upi_page_has_inline_qr_and_fixed_amounts` and `test_customer_is_told_to_wait_and_admins_are_emailed`)
      fail ONLY when `segno` is missing from that Python. `tests/test_environment.py` names the missing package. Install it and re-run.
-     Verified: with the test requirements installed, all 75 tests pass on Python 3.12 and 3.13.
+     Verified: with the test requirements installed, all 80 tests pass on Python 3.12 and 3.13.
    - `agent_daemon.py` and `resolve.py` start with a byte-order mark. That is harmless; do not touch them.
    - If the sandbox has no internet and `pip` cannot install, say so plainly and stop. Report the Python version, `python -m pip list`, and the exact
      pytest output. Do not claim the tests pass.
@@ -120,10 +120,10 @@ inside the web service (`PORTAL_RUN_WORKER` default), so it only works while the
 5. Admin page: "Customers" shows Grant access for inactive customers and only Revoke access for active ones; revoke then grant resumes the customer's projects.
 6. Connect a project using the demo repo `Samuel777822/cofee-shop` with a fine-grained GitHub token (Contents and Pull requests read/write).
    Expected: a PR "Add Agent Daemon error monitoring" is opened and merged automatically; the cofee-shop service redeploys; within about 5 minutes the dashboard
-   card shows **Live** with a recent "Last check-in". If the repo is public, expect the page to show the two environment variables to set instead.
+   card shows **Live** with a recent "Last check-in". The customer is never asked to set environment variables. If the repo is public the project is switched to pull-request mode and the page says so.
 7. Break the coffee shop checkout, then watch an incident appear on the dashboard with the agent status and a fix PR link.
 8. Payments: run the check at the end of section 4.
-9. Run `python -m pytest -q` once more on the deployed commit: 75 passed.
+9. Run `python -m pytest -q` once more on the deployed commit: 80 passed.
 
 ## 7. Known limits to tell the user (do not hide them)
 

@@ -38,12 +38,33 @@ def _request(url: str, token: str, method: str = "GET", payload=None):
         elif exc.code == 403:
             message = "GitHub denied this token. Confirm it is allowed to access this repository and can create branches and pull requests."
         elif exc.code == 404:
-            message = "GitHub could not find this repository for the saved token. Check the owner/repository name and the token's repository access."
+            if "/git/ref/heads/" in url or "/branches/" in url:
+                what = "branch"
+            elif "/pulls" in url:
+                what = "pull request"
+            else:
+                what = "repository"
+            message = (f"GitHub could not find the {what} for this token. "
+                       "Check the owner/repository name, the branch name, and that the token has access to this repository.")
         else:
             message = f"GitHub could not complete the request (HTTP {exc.code}). Try again later."
         raise GitHubInstallError(message) from None
     except urllib.error.URLError as exc:
         raise GitHubInstallError("Could not reach GitHub to create the installation pull request.") from exc
+
+
+def resolve_branch(*, owner: str, repo: str, token: str, requested: str = "", repo_info=None) -> str:
+    """Use the requested branch if it exists, otherwise the repository's default branch."""
+    api = f"https://api.github.com/repos/{urllib.parse.quote(owner, safe='')}/{urllib.parse.quote(repo, safe='')}"
+    requested = (requested or "").strip()
+    if requested:
+        try:
+            _request(f"{api}/branches/{urllib.parse.quote(requested, safe='/')}", token)
+            return requested
+        except GitHubInstallError:
+            pass
+    info = repo_info or _request(api, token)
+    return info.get("default_branch") or requested or "main"
 
 
 def validate_repository_access(*, owner: str, repo: str, token: str) -> dict:
@@ -137,7 +158,8 @@ def open_monitoring_pr(*, owner: str, repo: str, base_branch: str, project_id: s
     owner_q = urllib.parse.quote(owner, safe="")
     repo_q = urllib.parse.quote(repo, safe="")
     api = f"https://api.github.com/repos/{owner_q}/{repo_q}"
-    validate_repository_access(owner=owner, repo=repo, token=token)
+    info = validate_repository_access(owner=owner, repo=repo, token=token)
+    base_branch = resolve_branch(owner=owner, repo=repo, token=token, requested=base_branch, repo_info=info)
     ref = urllib.parse.quote(base_branch, safe="")
     base = _request(f"{api}/git/ref/heads/{ref}", token)["object"]["sha"]
     base_commit = _request(f"{api}/git/commits/{base}", token)
@@ -184,5 +206,5 @@ def open_monitoring_pr(*, owner: str, repo: str, base_branch: str, project_id: s
                 break
             except GitHubInstallError:
                 time.sleep(1.5)
-    return {"url": pr["html_url"], "number": pr["number"], "branch": branch, "merged": merged,
+    return {"url": pr["html_url"], "number": pr["number"], "branch": branch, "base_branch": base_branch, "merged": merged,
             "patched_file": patched_file, "embedded_key": embedded}

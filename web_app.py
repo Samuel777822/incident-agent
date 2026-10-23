@@ -31,7 +31,7 @@ from urllib.parse import urlencode
 
 import notifications
 import portal_db
-from monitoring_installer import GitHubInstallError, open_monitoring_pr, validate_repository_access
+from monitoring_installer import resolve_branch, GitHubInstallError, open_monitoring_pr, validate_repository_access
 
 APP_NAME = "Agent Daemon"
 SESSION_COOKIE = "agent_session"
@@ -916,7 +916,7 @@ def _page_new_project(request):
         fields = """<div class='field'><label>Project name</label><input name='name' required maxlength='80' placeholder='Checkout service'></div>
 <div class='field'><label>GitHub repository</label><input name='repo' required placeholder='owner/repository'><small>Use a fine-grained token limited to this repository.</small></div>
 <div class='field'><label>GitHub token</label><input name='github_token' type='password' autocomplete='off' required><small>Stored encrypted. It is never displayed after saving.</small></div>
-<div class='field'><label>Default branch</label><input name='branch' value='main' required maxlength='100'></div>
+<div class='field'><label>Branch (optional)</label><input name='branch' value='' placeholder='Leave empty to use your repository default' maxlength='100'></div>
 <div class='field'><label>Agent mode</label><select name='mode'><option value='report' selected>Report only</option><option value='pr'>Pull request</option><option value='auto'>Auto (merge only after passing CI)</option></select><small>Pull request mode opens a reviewable PR. Auto mode also merges only after GitHub reports at least one completed passing check and no failing or pending checks. With no checks, the PR stays open.</small></div>
 <div class='field'><label>App URL (optional)</label><input name='app_url' type='url' placeholder='https://app.example.com'></div>
 <div class='field'><label class='checkbox'><input name='allow_install' type='checkbox' value='yes' required><span>I authorize Agent Daemon to add its monitoring code to this repository through a reviewable pull request.</span></label></div>
@@ -933,8 +933,8 @@ def _page_new_project(request):
     token = request.form.get("github_token", "").strip()
     mode = request.form.get("mode", "report")
     name = request.form.get("name", "").strip()
-    branch = request.form.get("branch", "main").strip()
-    if not repo_match or not token or not name or not branch or mode not in ("report", "pr", "auto"):
+    branch = request.form.get("branch", "").strip()
+    if not repo_match or not token or not name or mode not in ("report", "pr", "auto"):
         return _response("<div class='alert'>Check the repository, token, project name, branch, and mode.</div>", request, "400 Bad Request")
     if mode in ("pr", "auto") and request.form.get("allow_remediation") != "yes":
         return _response("<div class='alert'>Authorize pull request remediation before selecting Pull request or Auto mode.</div>", request, "400 Bad Request")
@@ -947,6 +947,12 @@ def _page_new_project(request):
         repo_info = validate_repository_access(owner=owner, repo=repo.removesuffix(".git"), token=token)
     except GitHubInstallError as exc:
         return _response(f"<div class='alert'>{_escape(exc)}</div>", request, "400 Bad Request")
+    branch = resolve_branch(owner=owner, repo=repo.removesuffix(".git"), token=token, requested=branch, repo_info=repo_info)
+    mode_note = ""
+    if mode == "auto" and not repo_info.get("private"):
+        mode = "pr"
+        mode_note = ("<div class='alert'>This repository is public, so fixes are opened as pull requests for a person to review "
+                     "instead of merging automatically.</div>")
     ingest_key = secrets.token_urlsafe(32)
     ingest_hash = hashlib.sha256(ingest_key.encode()).hexdigest()
     project_id = portal_db.create_project(request.session["user_id"], name=name,
@@ -959,9 +965,8 @@ def _page_new_project(request):
     if mode in ("pr", "auto"):
         portal_db.audit(project_id, "remediation_consent", {"mode": mode, "auto_merge_requires_passing_github_checks": mode == "auto"})
     project = {"repo_owner": owner, "repo_name": repo.removesuffix(".git"), "branch": branch}
-    result = _install_monitoring(project_id, request.session["user_id"], project, token, ingest_key, bool(repo_info.get("private")))
-    key_for_env = "" if (result.get("ok") and result.get("embedded_key")) else ingest_key
-    summary = _install_summary(result, key_for_env, project_id)
+    result = _install_monitoring(project_id, request.session["user_id"], project, token, ingest_key)
+    summary = _install_summary(result, project_id) + mode_note
     return _response(f"<section class='card'><h1>Project saved</h1><p class='muted'>{_escape(name)} is connected. The agent starts watching as soon as monitoring is live.</p></section>{summary}"
                      f"<p><a class='button primary' href='/projects/{_escape(project_id)}'>View project</a></p>", request, "201 Created")
 
@@ -996,44 +1001,44 @@ def _page_project(request, project_id):
     return _response(body, request)
 
 
-def _install_monitoring(project_id: str, user_id: str, project: dict, token: str, ingest_key: str, private: bool) -> dict:
-    """Open (and try to merge) the monitoring PR. The key is embedded only for private repositories."""
+def _install_monitoring(project_id: str, user_id: str, project: dict, token: str, ingest_key: str) -> dict:
+    """Add monitoring to the customer's repository with no steps for the customer.
+
+    The connection details go into the repository through the install pull request, which is merged
+    automatically when GitHub allows it. If the branch name was wrong, the repository's default is used and saved.
+    """
     try:
         result = open_monitoring_pr(
             owner=project["repo_owner"], repo=project["repo_name"], base_branch=project["branch"],
             project_id=project_id, token=token, ingest_url=_base_url() + "/ingest",
-            ingest_key=ingest_key if (private and ingest_key) else "", auto_merge=True)
+            ingest_key=ingest_key, auto_merge=True)
     except (GitHubInstallError, RuntimeError) as exc:
         return {"ok": False, "error": str(exc)}
+    if result.get("base_branch") and result["base_branch"] != project["branch"]:
+        portal_db.update_project_branch(project_id, user_id, result["base_branch"])
     portal_db.record_install_pr(project_id, user_id, result["url"])
     portal_db.audit(project_id, "monitoring_pr_opened", {"pr_url": result["url"], "merged": result["merged"],
                                                           "patched_file": result["patched_file"], "key_embedded": result["embedded_key"]})
     return dict(result, ok=True)
 
 
-def _install_summary(result: dict, ingest_key: str, project_id: str) -> str:
-    """Plain-language outcome of an install attempt, with the key only when the customer must use it."""
-    url = _base_url() + "/ingest"
-    env_help = (f"<div class='alert'>Set these two values in your app's hosting environment (they are not stored in your repository):"
-                f"<br>INCIDENT_AGENT_INGEST_URL = <code>{_escape(url)}</code><br>INCIDENT_AGENT_INGEST_KEY = <code>{_escape(ingest_key)}</code>"
-                "<br>This key is shown once.</div>") if ingest_key else ""
+def _install_summary(result: dict, project_id: str) -> str:
+    """Plain-language outcome of an install attempt. The customer is never asked to do technical chores."""
     if not result.get("ok"):
-        return (f"<div class='alert'>Project saved, but monitoring could not be added yet: {_escape(result.get('error', 'unknown error'))}"
-                f" You can retry from the project page.</div>{env_help}")
+        return ("<div class='alert'>Your project is saved, but monitoring could not be added yet: "
+                f"{_escape(result.get('error', 'unknown error'))} Nothing was changed in your repository. "
+                "Fix the problem, then press <b>Install monitoring</b> on the project page.</div>")
     notes = []
     if result.get("patched_file"):
         notes.append(f"One line was added to <code>{_escape(result['patched_file'])}</code> so monitoring starts with your app.")
     else:
-        notes.append("We could not find your app's entry file. Add <code>import incident_agent_monitor</code> as the first import of it.")
+        notes.append("We could not find your app's main file, so add <code>import incident_agent_monitor</code> as the first import of it.")
     if result.get("merged"):
-        notes.append("The change was merged automatically. Monitoring starts the next time your app deploys.")
+        notes.append("The change was merged automatically. Monitoring starts the next time your app deploys. Nothing else to configure.")
     else:
-        notes.append(f"Merge <a href='{_escape(result['url'])}' target='_blank' rel='noopener'>this pull request</a> to turn monitoring on (auto-merge was not possible, often because of branch protection).")
-    if result.get("embedded_key"):
-        notes.append("Your repository is private, so the connection details were added to it. Nothing else to configure.")
-    else:
-        notes.append("Your repository is public, so the connection key is not stored in it. Add it to your host's environment as shown below.")
-    return "<div class='card'><h3>Monitoring setup</h3><p class='muted'>" + "</p><p class='muted'>".join(notes) + "</p></div>" + (env_help if not result.get("embedded_key") else "")
+        notes.append(f"Merge <a href='{_escape(result['url'])}' target='_blank' rel='noopener'>this pull request</a> to turn monitoring on "
+                     "(automatic merge was not possible, often because of branch protection). Nothing else to configure.")
+    return "<div class='card'><h3>Monitoring setup</h3><p class='muted'>" + "</p><p class='muted'>".join(notes) + "</p></div>"
 
 
 def _page_install_monitoring(request, project_id):
@@ -1047,17 +1052,22 @@ def _page_install_monitoring(request, project_id):
         return _response("<h1>Project not found</h1>", request, "404 Not Found")
     if project.get("install_pr_url"):
         return _redirect(f"/projects/{project_id}")
+    back = f"<p><a class='button primary' href='/projects/{_escape(project_id)}'>Back to project</a></p>"
     try:
         token = _decrypt_token(project["github_token_ciphertext"])
         ingest_key = _decrypt_token(project["ingest_key_ciphertext"]) if project.get("ingest_key_ciphertext") else ""
-        info = validate_repository_access(owner=project["repo_owner"], repo=project["repo_name"], token=token)
-    except (GitHubInstallError, RuntimeError) as exc:
-        return _response(f"<div class='alert'>{_escape(exc)}</div><p><a href='/projects/{_escape(project_id)}'>Back to project</a></p>", request, "502 Bad Gateway")
-    result = _install_monitoring(project_id, request.session["user_id"], project, token, ingest_key, bool(info.get("private")))
-    if not result.get("ok"):
-        return _response(f"<div class='alert'>{_escape(result['error'])}</div><p><a href='/projects/{_escape(project_id)}'>Back to project</a></p>", request, "502 Bad Gateway")
-    key_for_env = "" if result.get("embedded_key") else ingest_key
-    return _response(_install_summary(result, key_for_env, project_id) + f"<p><a class='button primary' href='/projects/{_escape(project_id)}'>Back to project</a></p>", request)
+    except RuntimeError as exc:
+        return _response(f"<div class='alert'>{_escape(exc)}</div>{back}", request, "503 Service Unavailable")
+    if not ingest_key:
+        return _response("<div class='alert'>This project has no stored connection key. Press <b>Rotate key</b> on the project page, then try again.</div>" + back,
+                         request, "409 Conflict")
+    result = _install_monitoring(project_id, request.session["user_id"], project, token, ingest_key)
+    status = "200 OK" if result.get("ok") else "502 Bad Gateway"
+    return _response(_install_summary(result, project_id) + back, request, status)
+
+
+
+
 
 
 def _page_update_github_token(request, project_id):
