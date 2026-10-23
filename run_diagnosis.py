@@ -53,7 +53,7 @@ def _window(text, line_no, max_chars):
 def _priority(path):
     name = path.lower()
     if "test" in name:
-        return 1
+        return 4
     if name.split("/")[-1] in MANIFESTS:
         return 2
     return 3

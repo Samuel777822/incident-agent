@@ -25,8 +25,9 @@ Required checks:
 1. Compare the failing code in the CURRENT files with the traceback. State whether the cause is still present in the current code ("yes", "no" or "unknown"). If "no", the incident looks already fixed: say so plainly and do not recommend a code change.
 2. Support every claim with a quoted line from a file, a traceback line, or a commit id. Do not use "a test exists" as proof of the cause.
 3. The recommended fix must be the smallest change that removes the cause. Mention optional improvements only inside the report, labelled OPTIONAL.
-4. If the cause is data, configuration, credentials, a database or an outside service, say so and do not propose a code change.
-5. Set "safe_to_auto_fix" to true when ALL of these hold: category is code_bug, still_present_in_current_code is "yes", confidence is "high", and the fix is a small edit (under 20 lines) to one non-test Python file. Otherwise set it to false.
+4. Name the file where the problem ORIGINATES, not just where it crashes. If code fails reading a key, value or setting that a recent commit renamed, removed or changed in a data, config or definition file, the cause and the fix belong in that originating file. Do not recommend a fallback, default value, or try/except in the reading code. Check the RECENT COMMITS evidence for such a change, and quote the commit id.
+5. If the cause is data, configuration, credentials, a database or an outside service, say so and do not propose a code change.
+6. Set "safe_to_auto_fix" to true when ALL of these hold: category is code_bug, still_present_in_current_code is "yes", confidence is "high", and the fix is a small edit (under 20 lines) to one non-test Python file. Otherwise set it to false.
 
 Return ONLY one JSON object, with no text before or after it, using exactly these keys:
 {
@@ -37,7 +38,7 @@ Return ONLY one JSON object, with no text before or after it, using exactly thes
   "evidence": ["short quoted proof", "..."],
   "recommended_fix": "the smallest change, or 'no code change needed'",
   "safe_to_auto_fix": true | false,
-  "report": "A 2-minute read structured in exactly these six sections, separated by blank lines:\n\n1. SUMMARY: One sentence — what broke, since when, and how many times.\n\n2. WHAT HAPPENED: Two or three plain sentences with no jargon. Explain it as you would to a non-technical founder.\n\n3. LIKELY CAUSE: State your confidence level, name the exact file and line number, and quote the commit if one is responsible.\n\n4. WHAT THE AGENT DID: State what action was taken (or why no action was taken).\n\n5. WHAT YOU NEED TO DO: Numbered steps in order. Each step must be a single, concrete, actionable instruction.\n\n6. WHAT I COULD NOT CHECK: List any blind spots — database state, third-party APIs, environment variables, deployment health."
+  "report": "A 2-minute read structured in exactly these six sections, separated by blank lines:\n\n1. SUMMARY: One sentence — what broke, since when, and how many times.\n\n2. WHAT HAPPENED: Two or three plain sentences with no jargon. Explain it as you would to a non-technical founder.\n\n3. LIKELY CAUSE: State your confidence level, name the exact file and line number, and quote the commit if one is responsible.\n\n4. WHAT THE AGENT DID: Say only that the incident was diagnosed from the repository evidence. Do not say whether a fix, pull request or merge was made, because the system adds the real outcome after this report.\n\n5. WHAT YOU NEED TO DO: Numbered steps in order. Each step must be a single, concrete, actionable instruction.\n\n6. WHAT I COULD NOT CHECK: List any blind spots — database state, third-party APIs, environment variables, deployment health."
 }"""
 
 

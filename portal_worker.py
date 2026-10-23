@@ -63,7 +63,7 @@ def _repository_evidence(project: dict, traceback: str) -> tuple[str, dict[str, 
         "X-GitHub-Api-Version": "2022-11-28",
     }
     source_files = {}
-    excluded = {".git", ".github", "tests", "test", "venv", ".venv", "node_modules"}
+    excluded = {".git", ".github", "venv", ".venv", "node_modules"}
     try:
         with httpx.Client(headers=headers, timeout=httpx.Timeout(15, connect=8), follow_redirects=False) as client:
             tree_response = client.get(f"{api}/git/trees/{quote(branch, safe='')}?recursive=1")
