@@ -46,6 +46,27 @@ def _decrypt_token(ciphertext: str) -> str:
         raise WorkerError("Saved GitHub credential could not be decrypted") from None
 
 
+def _recent_diffs(client, api, shas, max_commits=2, per_file=1200, total=3000):
+    """Diffs of the newest commits' .py files, so the model sees WHAT changed, not just the commit title."""
+    out, used = [], 0
+    for full_sha in shas[:max_commits]:
+        if not full_sha:
+            continue
+        resp = client.get(f"{api}/commits/{quote(full_sha, safe='')}")
+        if resp.status_code != 200:
+            continue
+        for item in (resp.json().get("files") or [])[:5]:
+            name, patch = str(item.get("filename", "")), str(item.get("patch") or "")
+            if not patch or not name.endswith(".py"):
+                continue
+            block = f"--- commit {full_sha[:12]} changed {name} ---\n{patch[:per_file]}\n"
+            if used + len(block) > total:
+                return "\n".join(out)
+            out.append(block)
+            used += len(block)
+    return "\n".join(out)
+
+
 def _repository_evidence(project: dict, traceback: str) -> tuple[str, dict[str, str]]:
     """Read a bounded set of source files and commit summaries through GitHub's API."""
     owner = str(project.get("repo_owner", ""))
@@ -116,12 +137,16 @@ def _repository_evidence(project: dict, traceback: str) -> tuple[str, dict[str, 
 
             commits_response = client.get(f"{api}/commits?sha={quote(branch, safe='')}&per_page=5")
             commits = []
+            full_shas = []
             if commits_response.status_code == 200:
                 for commit in commits_response.json():
-                    sha = str(commit.get("sha", ""))[:12]
+                    full_sha = str(commit.get("sha", ""))
+                    full_shas.append(full_sha)
+                    sha = full_sha[:12]
                     message = str(commit.get("commit", {}).get("message", "")).splitlines()[0][:180]
                     date = str(commit.get("commit", {}).get("author", {}).get("date", ""))[:10]
                     commits.append(f"{sha} | {date} | {message}")
+            recent_diffs = _recent_diffs(client, api, full_shas)
     except WorkerError:
         raise
     except (httpx.TimeoutException, httpx.NetworkError):
@@ -133,6 +158,8 @@ def _repository_evidence(project: dict, traceback: str) -> tuple[str, dict[str, 
         token = ""
 
     git_text = "RECENT COMMITS (newest first):\n" + ("\n".join(commits) if commits else "No commit history available.")
+    if recent_diffs:
+        git_text += "\n\nWHAT THE NEWEST COMMITS CHANGED (diffs):\n" + recent_diffs
     evidence, _skipped = build_evidence_text(source_files, git_text, traceback)
     return evidence, source_files
 

@@ -28,7 +28,7 @@ Required checks:
 4. Name the file where the problem ORIGINATES, not just where it crashes. If code fails reading a key, value or setting that a recent commit renamed, removed or changed in a data, config or definition file, the cause and the fix belong in that originating file. Do not recommend a fallback, default value, or try/except in the reading code. Check the RECENT COMMITS evidence for such a change, and quote the commit id.
 5. If the cause is data, configuration, credentials, a database or an outside service, say so and do not propose a code change.
 6. Set "safe_to_auto_fix" to true when ALL of these hold: category is code_bug, still_present_in_current_code is "yes", confidence is "high", and the fix is a small edit (under 20 lines) to one non-test Python file. Otherwise set it to false.
-
+REGRESSION RULE: If the errors began right after a recent commit that renamed, removed or changed a key, constant, config value or function in some file, and other code still uses the old form, that commit caused the bug. The fix is to REVERT that change in the file the commit modified. Do not change the code that still uses the old form. The recommended fix must name the file to edit.
 Return ONLY one JSON object, with no text before or after it, using exactly these keys:
 {
   "category": "code_bug" | "bad_data" | "config_or_secret" | "database" | "external_service" | "unknown",
