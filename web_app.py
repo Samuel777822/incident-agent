@@ -70,8 +70,8 @@ CSS += """
 .statgrid{display:grid;grid-template-columns:repeat(auto-fit,minmax(150px,1fr));gap:12px;margin:16px 0 8px}
 .stat{background:var(--panel);border:1px solid var(--line);border-radius:12px;padding:14px}
 .stat b{display:block;font-size:28px;line-height:1.1}.stat span{color:var(--muted);font-size:13px}
-.pill.red{background:#3a1820;color:#ff9aa8;border-color:#6a2b38}
-.ok{color:var(--green)}.bad{color:#ff9aa8}
+.pill.red{background:#3a1820;color:#ff8a7a;border-color:#6a2b38}
+.ok{color:var(--green)}.bad{color:#ff8a7a}
 .qr{background:#fff;border-radius:14px;padding:14px;text-align:center;margin:18px 0}
 .qr img{display:block;margin:auto;max-width:100%;height:auto}.qr p{color:#222;margin:8px 0 0}
 .section h2{margin-top:32px}
@@ -80,7 +80,69 @@ select{background:#0d1426;color:var(--text);border:1px solid var(--line);border-
 """
 
 
+CSS += """
+/* ===== Agent Daemon theme: fallen angel, crimson left / violet right ===== */
+@font-face{font-family:"Gloock";src:url(/assets/daemon-gloock.woff?v=1) format("woff");font-weight:400;font-style:normal;font-display:swap}
+@font-face{font-family:"Instrument Sans";src:url(/assets/daemon-sans-400.woff?v=1) format("woff");font-weight:400;font-style:normal;font-display:swap}
+@font-face{font-family:"Instrument Sans";src:url(/assets/daemon-sans-700.woff?v=1) format("woff");font-weight:700;font-style:normal;font-display:swap}
+:root{--bg:#07050b;--panel:#120a1b;--line:#3a2338;--muted:#a99dbb;--text:#f2edf7;--blue:#ff6655;--green:#6fe0b0;--amber:#e3bd74;--crimson:#e11d2a;--violet:#9a4dff;--silver:#e9e4ee;--serif:"Cinzel","Gloock","Palatino Linotype",Palatino,Georgia,serif;--display:"Cinzel Decorative","Cinzel","Gloock",Georgia,serif}
+html{background:#07050b;scrollbar-color:#5b2a5a #07050b}
+body{position:relative;background:transparent;font-family:"Instrument Sans",Inter,ui-sans-serif,system-ui,-apple-system,"Segoe UI",sans-serif;font-size:16px}
+h1,h2,.brand,.stat b,.hero h1,.steps.big li::before{font-weight:700}h3{font-weight:500}h1,h2,h3{letter-spacing:.02em}
+::selection{background:#9a4dff66;color:#fff}
+body::before{content:"";position:fixed;top:0;width:max(100vw,125vh);left:calc(50% - max(100vw,125vh)/2);height:calc(max(100vw,125vh)*.59);z-index:-3;background:url(/assets/daemon-bg.webp?v=1) 50% 0/100% 100% no-repeat;opacity:.45;-webkit-mask-image:linear-gradient(180deg,#000 35%,transparent 100%);mask-image:linear-gradient(180deg,#000 35%,transparent 100%);animation:daemon-rise 1.8s ease-out both}
+body:has(.hero)::before{opacity:.95;-webkit-mask-image:linear-gradient(180deg,#000 38%,transparent 100%);mask-image:linear-gradient(180deg,#000 38%,transparent 100%)}
+body::after{content:"";position:fixed;inset:0;z-index:-2;pointer-events:none;background:radial-gradient(60% 50% at 8% 6%,#e11d2a38,transparent 70%),radial-gradient(60% 50% at 92% 6%,#9a4dff38,transparent 70%),radial-gradient(90% 60% at 50% 110%,#07050b,transparent 70%);animation:daemon-breathe 7s ease-in-out infinite alternate}
+html::before{content:"";position:fixed;left:0;right:0;top:0;height:200vh;z-index:-1;pointer-events:none;opacity:.55;background:radial-gradient(circle,#ff4a3a 0 1.2px,transparent 2px) 0 0/330px 50vh,radial-gradient(circle,#b98aff 0 1px,transparent 1.8px) 140px 24vh/410px 50vh;animation:daemon-embers 38s linear infinite;will-change:transform}
+@keyframes daemon-rise{from{opacity:0;transform:scale(1.04)}}
+@keyframes daemon-breathe{from{opacity:.65}to{opacity:1}}
+@keyframes daemon-embers{to{transform:translate3d(0,-50vh,0)}}
+a{color:var(--blue)}
+.nav{border-bottom:1px solid;border-image:linear-gradient(90deg,#e11d2a77,#9a4dff77 60%,transparent) 1}
+.brand{white-space:nowrap;font-family:var(--display);font-size:19px;font-weight:700;letter-spacing:.05em;color:var(--silver);display:inline-flex;align-items:center;text-shadow:0 0 18px #e11d2a66}
+.brand:hover{text-decoration:none}
+.brand-mark{width:36px;height:36px;margin-right:11px;font-size:0;color:transparent;background:url(/assets/daemon-crest.webp?v=1) center/cover;border-radius:50%;border:1px solid #c9a15a88;box-shadow:0 0 14px #e11d2a88,0 0 26px #9a4dff55}
+.navlinks a:not(.button){color:#cdbfe0}.navlinks a:not(.button):hover{color:#fff;text-decoration:none}
+.button{border-radius:8px;background:#ffffff0a;border:1px solid #ffffff2b;font-weight:600;letter-spacing:.02em;backdrop-filter:blur(6px)}
+.button.primary{background:linear-gradient(120deg,#d1121f 0%,#a3162b 42%,#5b1fa8 100%);border-color:#ff4a3a99;color:#fff;box-shadow:0 8px 28px #d1121f55,inset 0 1px 0 #ffffff2e}
+.button.primary:hover{box-shadow:0 8px 34px #d1121f99,0 0 22px #9a4dff66,inset 0 1px 0 #ffffff2e}
+.button.danger{color:#ff7a6a;border-color:#ff4a3a55}
+.hero{max-width:none;display:flex;flex-direction:column;justify-content:flex-start;align-items:center;text-align:center;padding:min(38vh,380px) 0 56px}
+.hero h1{font-family:var(--display);font-weight:700;font-size:clamp(30px,5.2vw,54px);line-height:1.16;letter-spacing:.015em;background:linear-gradient(180deg,#fff,#d4cadf 55%,#8e8499);-webkit-background-clip:text;background-clip:text;color:transparent;filter:drop-shadow(0 4px 18px #000) drop-shadow(0 0 26px #e11d2a44)}
+.hero p{color:#d3c9e0;margin-inline:auto;text-shadow:0 2px 14px #000}
+.hero .actions{justify-content:center}
+.eyebrow{display:inline-flex;align-items:center;gap:9px;color:#ff6655;text-transform:none;font-variant:small-caps;letter-spacing:.16em;font-size:14px}
+.eyebrow{text-shadow:0 0 10px #000,0 2px 8px #000}
+.eyebrow::before{content:"";width:7px;height:7px;background:var(--crimson);transform:rotate(45deg);box-shadow:0 0 10px var(--crimson)}
+h1,h2,h3{font-family:var(--serif)}
+.card,.stat,.table-wrap,.empty{background:linear-gradient(160deg,#1a0e22c7,#0b0710d1) padding-box,linear-gradient(135deg,#e11d2a99,#3a2338 38%,#3a2338 62%,#9a4dff99) border-box;border:1px solid transparent;-webkit-backdrop-filter:blur(10px) saturate(1.2);backdrop-filter:blur(10px) saturate(1.2);box-shadow:0 20px 60px #0009,inset 0 1px 0 #ffffff0d}
+.card{border-radius:12px}
+a.card:hover{box-shadow:0 20px 60px #0009,0 0 28px #9a4dff44;transform:translateY(-2px)}
+.stat{border-radius:10px;padding:16px}
+.stat b{font-family:var(--display);font-size:32px;background:linear-gradient(180deg,#fff,#b8aac9);-webkit-background-clip:text;background-clip:text;color:transparent}
+.stat span{color:var(--muted)}
+.table th{text-transform:none;letter-spacing:.04em;font-size:13px;color:#c9a15a}
+.table th,.table td{border-bottom-color:#2e1c31}
+.field input,.field select,select{background:#0a0610d9;border:1px solid #3d2a45;border-radius:8px}
+.field input:focus,.field select:focus{border-color:var(--crimson);box-shadow:0 0 0 3px #e11d2a2e,0 0 18px #9a4dff33}
+.button:focus-visible,a:focus-visible,input:focus-visible,select:focus-visible{outline:3px solid #ff6655}
+.pill{background:#21132e;color:#d6c8ea;border:1px solid #3a2a4f}
+.pill.green{background:#0f2f27;color:#8ce4c0;border-color:#1f5a49}
+.pill.amber{background:#33270f;color:#f0cf8a;border-color:#6b5320}
+.pill.red{background:#3a0d0d;color:#ff8a7a;border-color:#7a1f1f}
+.alert{background:#2a1e0cdd;border-color:#8a6a2c;color:#f6dca0;border-radius:10px}
+.footer{border-top:1px solid;border-image:linear-gradient(90deg,#e11d2a55,#9a4dff55 60%,transparent) 1}
+.form-card{margin-top:min(26vh,200px)}
+.form-card .form-card{margin:22px 0 0;max-width:none;padding:0;border:0;background:none;box-shadow:none;-webkit-backdrop-filter:none;backdrop-filter:none}
+.steps{padding-left:22px}.steps li{margin:8px 0}.steps.big{counter-reset:s;list-style:none;padding:0;display:grid;gap:12px;grid-template-columns:repeat(auto-fit,minmax(230px,1fr))}.steps.big li{counter-increment:s;margin:0;padding:18px 18px 18px 56px;position:relative;border:1px solid #3a2338;border-radius:12px;background:#120a1bb8;-webkit-backdrop-filter:blur(8px);backdrop-filter:blur(8px)}.steps.big li::before{content:counter(s);position:absolute;left:16px;top:16px;width:28px;height:28px;border-radius:50%;display:grid;place-items:center;font-family:var(--serif);font-weight:700;color:#fff;background:linear-gradient(120deg,#d1121f 0%,#a3162b 42%,#5b1fa8 100%);box-shadow:0 0 14px #e11d2a66}.guide h3{margin:22px 0 6px}.guide code{background:#2a1736;padding:1px 6px;border-radius:5px;color:#ffb0a3}.guide{margin-bottom:22px}
+@media(max-width:640px){.brand{font-size:17px}.stat b{font-size:28px}}
+@media(prefers-reduced-motion:reduce){body::before,body::after,html::before{animation:none}}
+"""
+
+
 def _escape(value) -> str:
+    if isinstance(value, int) and not isinstance(value, bool):
+        return str(value)
     return html.escape(str(value or ""), quote=True)
 
 
@@ -274,8 +336,8 @@ def _layout(title: str, body: str, request: Request | None = None) -> str:
         else:
             links = '<a href="/dashboard">Projects</a><a href="/billing">Plan &amp; billing</a>' + signout
     else:
-        links = '<a href="/login">Sign in</a><a class="button" href="/signup">Create account</a>'
-    return f"""<!doctype html><html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><meta name="description" content="AI incident response for Python apps"><title>{_escape(title)} · {APP_NAME}</title><style>{CSS}</style></head><body><header class="wrap nav"><a class="brand" href="/"><span class="brand-mark">A</span>{APP_NAME}</a><nav class="navlinks">{links}</nav></header><main class="wrap">{body}</main><footer class="wrap footer">Agent Daemon · Your changes stay reviewable and reversible.</footer></body></html>"""
+        links = '<a class="button primary" href="/login">Sign in with Google</a>'
+    return f"""<!doctype html><html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><meta name="description" content="AI incident response for Python apps"><title>{_escape(title)} · {APP_NAME}</title><link rel="preconnect" href="https://fonts.googleapis.com"><link rel="preconnect" href="https://fonts.gstatic.com" crossorigin><link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Cinzel:wght@500;700&amp;family=Cinzel+Decorative:wght@700&amp;display=swap"><style>{CSS}</style></head><body><header class="wrap nav"><a class="brand" href="/"><span class="brand-mark">A</span>{APP_NAME}</a><nav class="navlinks">{links}</nav></header><main class="wrap">{body}</main><footer class="wrap footer">Agent Daemon · Your changes stay reviewable and reversible.</footer></body></html>"""
 
 
 def _csrf(request: Request) -> str:
@@ -291,7 +353,7 @@ def _csrf(request: Request) -> str:
 def _response(body, request=None, status="200 OK", headers=None):
     defaults = [("Content-Type", "text/html; charset=utf-8"), ("Cache-Control", "no-store"),
                 ("X-Content-Type-Options", "nosniff"), ("Referrer-Policy", "same-origin"),
-                ("Content-Security-Policy", "default-src 'self'; style-src 'self' 'unsafe-inline'; img-src 'self' data:; form-action 'self'; frame-ancestors 'none'; base-uri 'none'")]
+                ("Content-Security-Policy", "default-src 'self'; style-src 'self' 'unsafe-inline' https://fonts.googleapis.com; font-src 'self' https://fonts.gstatic.com; img-src 'self' data:; form-action 'self'; frame-ancestors 'none'; base-uri 'none'")]
     response = Response(_layout("Agent Daemon", body, request), status, defaults + list(headers or []))
     if request and request.new_csrf_cookie:
         response.headers.append(request.new_csrf_cookie)
@@ -531,64 +593,61 @@ def _after_payment(order_id: str, payment_id: str) -> None:
         f"{_base_url()}/admin", "payment_admin")
 
 
+def _github_setup_guide() -> str:
+    """What a customer needs on GitHub before connecting a repository (shown on the home and connect pages)."""
+    return (
+        "<section class='card guide'><h2>Before you connect a repository</h2>"
+        "<p class='muted'>Agent Daemon talks to GitHub with a <b>classic</b> personal access token. "
+        "Fine-grained tokens are not supported. Two things to do first:</p>"
+        "<h3>1. Make your repository private</h3>"
+        "<p class='muted'>We read your source files and error logs to diagnose problems, and Auto mode only merges fixes in private repositories. "
+        "A private repository keeps your code and logs away from the public.</p>"
+        "<ol class='steps muted'>"
+        "<li>Open your repository on <b>github.com</b> in a browser.</li>"
+        "<li>Tap or click the <b>Settings</b> tab of the repository (not your profile settings).</li>"
+        "<li>Stay on <b>General</b> and scroll to the very bottom, to the <b>Danger Zone</b>.</li>"
+        "<li>Press <b>Change visibility</b>, then <b>Change to private</b>.</li>"
+        "<li>Read the warnings, type the repository name when GitHub asks, and confirm.</li></ol>"
+        "<h3>2. Create a classic token</h3>"
+        "<ol class='steps muted'>"
+        "<li>On GitHub press your profile picture, then <b>Settings</b>.</li>"
+        "<li>At the bottom of the left menu open <b>Developer settings</b>, then <b>Personal access tokens</b>, then <b>Tokens (classic)</b>.</li>"
+        "<li>Press <b>Generate new token</b>, then <b>Generate new token (classic)</b>.</li>"
+        "<li>Name it <b>Agent Daemon</b> and pick how long it should last. When it expires, use <b>Update GitHub token</b> on your project page.</li>"
+        "<li>Tick exactly two boxes: <code>repo</code> and <code>workflow</code>. Leave everything else unticked.</li>"
+        "<li>Press <b>Generate token</b> and copy it right away. GitHub shows it only once. Paste it into the connect form.</li></ol>"
+        "<h3>What the agent uses each permission for</h3>"
+        "<ul class='muted'>"
+        "<li><code>repo</code>: read your code, create a branch and open pull requests. Nothing is merged unless you choose Auto mode.</li>"
+        "<li><code>workflow</code>: add a small test workflow file, so Auto mode has a check that must pass before merging.</li></ul>"
+        "<p class='muted'>Classic tokens are not limited to one repository, so keep yours secret. "
+        "You can delete the token on GitHub at any time to cut our access immediately.</p></section>")
+
+
 def _page_home(request):
     if request.session:
         return _redirect("/admin" if _is_admin(request) else "/dashboard")
-    body = """<section class="hero"><div class="eyebrow">Incident response for Python services</div><h1>When production breaks, get to the cause faster.</h1><p>Agent Daemon groups recurring error logs and explains likely causes in a project-scoped incident report. Create an account to request access; projects unlock after trial approval or payment confirmation.</p><div class="actions"><a class="button primary" href="/signup">Create account</a><a class="button" href="/login">Sign in</a></div></section><section class="grid"><article class="card"><h3>See what happened</h3><p class="muted">Turn repeated error logs into incidents with a clear timeline and diagnosis.</p></article><article class="card"><h3>Keep your code in your control</h3><p class="muted">The hosted diagnosis worker reads repository files as evidence. It does not run your code or tests or change your repository.</p></article><article class="card"><h3>Keep control</h3><p class="muted">Pause monitoring or remove the project and its stored data from your dashboard.</p></article></section>"""
+    body = ("""<section class="hero"><div class="eyebrow">Incident response for Python services</div><h1>When production breaks, get to the cause faster.</h1><p>Agent Daemon watches the error logs of your Python app, groups repeated errors into incidents, explains the likely cause, and can open a pull request with a fix for you to review.</p><div class="actions"><a class="button primary" href="/login">Continue with Google</a></div></section>
+<section class="section"><h2>How it works</h2><ol class="steps big"><li><b>Sign in with Google.</b> No password to create or remember.</li><li><b>Get access.</b> Ask for a free trial or choose a plan. An administrator approves trials, and paid plans open as soon as payment is confirmed.</li><li><b>Connect your repository.</b> You give us a GitHub token and we open one pull request that adds monitoring. You review and merge it.</li><li><b>The agent watches.</b> Repeated errors become incidents with a timeline and a diagnosis. In Pull request mode it also proposes a fix.</li></ol></section>
+<section class="grid"><article class="card"><h3>See what happened</h3><p class="muted">Turn repeated error logs into incidents with a clear timeline and diagnosis.</p></article><article class="card"><h3>Keep your code in your control</h3><p class="muted">The hosted diagnosis worker reads repository files as evidence. It does not run your code or tests or change your repository.</p></article><article class="card"><h3>Choose how much it does</h3><p class="muted">Report only, Pull request, or Auto, which merges only after your GitHub checks pass. Pause monitoring or remove a project and its stored data from your dashboard any time.</p></article></section>
+""" + _github_setup_guide())
     return _response(body, request)
 
 
 def _page_signup(request):
-    if request.method == "GET":
-        body = _form("Create your account", "Sign up with Google to request a trial or plan.",
-          "<p class='muted'>Use your verified Google account to continue. Email and password sign-up is also available.</p><div class='field'><label>Email</label><input name='email' type='email' autocomplete='email' required maxlength='254'></div><div class='field'><label>Password</label><input name='password' type='password' autocomplete='new-password' minlength='12' required><small>Use at least 12 characters.</small></div>",
-          "/signup", "<button class='button primary' type='submit'>Create account</button>", _csrf(request))
-        google_button = "<a class='button' href='/auth/google'>Continue with Google</a><div class='divider'>or use email and password</div>"
-        return _response("<section class='card form-card'>" + google_button + body + "</section>", request)
-    if not _csrf_valid(request):
-        return _response("<div class='alert'>This form expired. Refresh and try again.</div>", request, "403 Forbidden")
-    email, password = request.form.get("email", "").strip().lower(), request.form.get("password", "")
-    rate_key = "signup:" + hashlib.sha256(request.remote.encode()).hexdigest()
-    if not portal_db.check_login_rate_limit(rate_key, maximum=5):
-        return _response("<div class='alert'>Too many attempts. Try again in a few minutes.</div>", request, "429 Too Many Requests")
-    if not EMAIL_RE.fullmatch(email) or len(password) < 12 or len(password) > 1024:
-        return _response("<div class='alert'>Enter a valid email and a password with at least 12 characters.</div>", request, "400 Bad Request")
-    if email in _admin_emails():
-        return _response("<div class='alert'>This address is reserved for an administrator. Use administrator sign-in credentials.</div>", request, "403 Forbidden")
-    try:
-        user_id = portal_db.create_user(email, _password_hash(password))
-    except Exception as exc:
-        if "unique" in str(exc).lower() or "duplicate" in str(exc).lower():
-            return _response("<div class='alert'>An account with that email already exists. Sign in instead.</div>", request, "409 Conflict")
-        raise
-    return _redirect("/dashboard", _new_session(user_id))
+    # Accounts are created through Google sign-in only. Old email links land on the sign-in page.
+    return _redirect("/login")
 
 
 def _page_login(request):
-    if request.method == "GET":
-        body = _form("Welcome back", "Sign in to view your monitored projects.",
-          "<div class='field'><label>Email</label><input name='email' type='email' autocomplete='email' required maxlength='254'></div><div class='field'><label>Password</label><input name='password' type='password' autocomplete='current-password' required></div>",
-          "/login", "<button class='button primary' type='submit'>Sign in with email</button>", _csrf(request))
-        google_button = "<a class='button primary' href='/auth/google'>Continue with Google</a><div class='divider'>or sign in with email</div>"
-        return _response("<section class='card form-card'>" + google_button + body + "</section>", request)
-    if not _csrf_valid(request):
-        return _response("<div class='alert'>This form expired. Refresh and try again.</div>", request, "403 Forbidden")
-    email = request.form.get("email", "").strip().lower()
-    rate_key = "login:" + hashlib.sha256((request.remote + "\0" + email).encode()).hexdigest()
-    if not portal_db.check_login_rate_limit(rate_key):
-        return _response("<div class='alert'>Too many sign-in attempts. Try again in a few minutes.</div>", request, "429 Too Many Requests")
-    submitted_password = request.form.get("password", "")
-    if email in _admin_emails():
-        admin_password = _admin_password_env(email)
-        if len(admin_password) < 12 or not hmac.compare_digest(submitted_password, admin_password):
-            return _response("<div class='alert'>Administrator credentials are not configured or are incorrect.</div>", request, "401 Unauthorized")
-        user = portal_db.get_user_by_email(email)
-        user_id = user["id"] if user else portal_db.create_user(email, _password_hash(admin_password))
-        return _redirect("/admin", _new_session(user_id))
-    user = portal_db.get_user_by_email(email)
-    if not user or not _password_matches(submitted_password, user["password_hash"]):
-        return _response("<div class='alert'>Email or password is incorrect.</div>", request, "401 Unauthorized")
-    return _redirect("/dashboard", _new_session(user["id"]))
+    if request.method != "GET":
+        return _redirect("/login")
+    body = ("<section class='card form-card'><h1>Sign in to Agent Daemon</h1>"
+            "<p class='muted'>Agent Daemon turns your app's error logs into incident reports and, if you allow it, reviewable pull requests with fixes. "
+            "Sign in with your Google account. New accounts are created automatically.</p>"
+            "<div class='actions'><a class='button primary' href='/auth/google'>Continue with Google</a></div>"
+            "<p class='muted'><small>We only use your verified Google email address. We never see your Google password.</small></p></section>")
+    return _response(body, request)
 
 
 _ADMIN_MESSAGES = {
@@ -915,15 +974,15 @@ def _page_new_project(request):
         return gate
     if request.method == "GET":
         fields = """<div class='field'><label>Project name</label><input name='name' required maxlength='80' placeholder='Checkout service'></div>
-<div class='field'><label>GitHub repository</label><input name='repo' required placeholder='owner/repository'><small>Use a fine-grained token limited to this repository.</small></div>
-<div class='field'><label>GitHub token</label><input name='github_token' type='password' autocomplete='off' required><small>Stored encrypted. It is never displayed after saving. The token needs <b>Contents</b>, <b>Pull requests</b> and <b>Workflows</b> set to Read and write, so we can add monitoring and a test workflow.</small></div>
+<div class='field'><label>GitHub repository</label><input name='repo' required placeholder='owner/repository'><small>Make sure this repository is private first. The steps are at the top of this page.</small></div>
+<div class='field'><label>GitHub token</label><input name='github_token' type='password' autocomplete='off' required><small>Stored encrypted. It is never displayed after saving. Paste a <b>classic</b> token with the <code>repo</code> and <code>workflow</code> scopes ticked. Fine-grained tokens are not supported.</small></div>
 <div class='field'><label>Branch (optional)</label><input name='branch' value='' placeholder='Leave empty to use your repository default' maxlength='100'></div>
 <div class='field'><label>Agent mode</label><select name='mode'><option value='report' selected>Report only</option><option value='pr'>Pull request</option><option value='auto'>Auto (merge only after passing CI)</option></select><small>Pull request mode opens a reviewable PR. Auto mode also merges only after GitHub reports at least one completed passing check and no failing or pending checks. With no checks, the PR stays open.</small></div>
 <div class='field'><label>App URL (optional)</label><input name='app_url' type='url' placeholder='https://app.example.com'></div>
 <div class='field'><label class='checkbox'><input name='allow_install' type='checkbox' value='yes' required><span>I authorize Agent Daemon to add its monitoring code to this repository through a reviewable pull request.</span></label></div>
 <div class='field'><label class='checkbox'><input name='allow_ai_processing' type='checkbox' value='yes' required><span>I understand that selected error logs, tracebacks, and relevant repository source files will be sent to Groq for AI diagnosis.</span></label></div>
 <div class='field'><label class='checkbox'><input name='allow_remediation' type='checkbox' value='yes'><span>For Pull request or Auto mode, I authorize small, high-confidence Python fixes as pull requests. The agent will not run my code or tests. Auto mode may merge only after all GitHub checks it can see pass; no checks, failed checks, or unavailable checks leave the PR open.</span></label></div>"""
-        body = _form("Connect a project", "We only monitor after you authorize the installation.", fields,
+        body = _github_setup_guide() + _form("Connect a project", "We only monitor after you authorize the installation.", fields,
                      "/projects/new", "<button class='button primary' type='submit'>Save project</button>", _csrf(request))
         return _response(body, request)
     if not _csrf_valid(request):
@@ -999,7 +1058,7 @@ def _page_project(request, project_id):
     install_card = (f"<article class='card'><h3>Monitoring pull request</h3><p class='muted'>Monitoring was added through this pull request. If it is not merged yet, merge it to switch monitoring on.</p><a class='button primary' href='{_escape(project['install_pr_url'])}'>View installation PR</a></article>" if project.get("install_pr_url") else f"<article class='card'><h3>Install monitoring</h3><p class='muted'>Adds monitoring to your repository through a pull request and merges it automatically when it can.</p><form method='post' action='/projects/{_escape(project_id)}/install'><input type='hidden' name='csrf' value='{_escape(_csrf(request))}'><button class='button primary' type='submit'>Install monitoring</button></form></article>")
     if project.get("ci_workflow") == "missing" and project.get("mode") == "auto":
         install_card = _workflow_fix_card(project_id, request) + install_card
-    body = f"<section class='section'><p><a href='/dashboard'>← Projects</a></p><div class='row'><div><div class='eyebrow'>Project</div><h1>{_escape(project['name'])}</h1><p class='muted'><a href='https://github.com/{_escape(project['repo_owner'])}/{_escape(project['repo_name'])}'>{_escape(project['repo_owner'])}/{_escape(project['repo_name'])}</a> · {_escape(project['branch'])} · {_escape(project['mode']).title()} mode</p></div><form method='post'><input type='hidden' name='csrf' value='{_escape(_csrf(request))}'><input type='hidden' name='paused' value='{'no' if paused else 'yes'}'><button class='button {'primary' if paused else 'danger'}' type='submit'>{button}</button></form></div><div class='stats'><span class='pill {'amber' if paused else 'green'}'>{'Paused' if paused else _escape(project['status'].replace('_',' ').title())}</span><span class='pill'>Mode · {_escape(project['mode'])}</span><span class='pill'>Last check-in · {_escape(_ago(project.get('last_heartbeat_at')))}</span></div><h2>Incident history</h2>{table}<section class='grid'>{install_card}<article class='card'><h3>Update GitHub token</h3><p class='muted'>Use a token authorized for this repository with Contents and Pull requests read/write access. The new token replaces the saved one and is never shown again.</p><form method='post' action='/projects/{_escape(project_id)}/github-token'><input type='hidden' name='csrf' value='{_escape(_csrf(request))}'><div class='field'><label>New GitHub token</label><input name='github_token' type='password' autocomplete='new-password' required minlength='20' maxlength='500'></div><button class='button primary' type='submit'>Validate and save token</button></form></article><article class='card'><h3>Ingest key</h3><p class='muted'>Rotate the project key if it is exposed. The new key appears once.</p><form method='post' action='/projects/{_escape(project_id)}/rotate-key'><input type='hidden' name='csrf' value='{_escape(_csrf(request))}'><button class='button' type='submit'>Rotate key</button></form></article><article class='card'><h3>Delete project data</h3><p class='muted'>Remove this project, its incidents, logs, fixes, and stored GitHub token.</p><form method='post' action='/projects/{_escape(project_id)}/delete'><input type='hidden' name='csrf' value='{_escape(_csrf(request))}'><div class='field'><label>Type DELETE to confirm</label><input name='confirm' required autocomplete='off'></div><button class='button danger' type='submit'>Delete project</button></form></article></section></section>"
+    body = f"<section class='section'><p><a href='/dashboard'>← Projects</a></p><div class='row'><div><div class='eyebrow'>Project</div><h1>{_escape(project['name'])}</h1><p class='muted'><a href='https://github.com/{_escape(project['repo_owner'])}/{_escape(project['repo_name'])}'>{_escape(project['repo_owner'])}/{_escape(project['repo_name'])}</a> · {_escape(project['branch'])} · {_escape(project['mode']).title()} mode</p></div><form method='post'><input type='hidden' name='csrf' value='{_escape(_csrf(request))}'><input type='hidden' name='paused' value='{'no' if paused else 'yes'}'><button class='button {'primary' if paused else 'danger'}' type='submit'>{button}</button></form></div><div class='stats'><span class='pill {'amber' if paused else 'green'}'>{'Paused' if paused else _escape(project['status'].replace('_',' ').title())}</span><span class='pill'>Mode · {_escape(project['mode'])}</span><span class='pill'>Last check-in · {_escape(_ago(project.get('last_heartbeat_at')))}</span></div><h2>Incident history</h2>{table}<section class='grid'>{install_card}<article class='card'><h3>Update GitHub token</h3><p class='muted'>Use a classic token with the repo and workflow scopes ticked. The new token replaces the saved one and is never shown again.</p><form method='post' action='/projects/{_escape(project_id)}/github-token'><input type='hidden' name='csrf' value='{_escape(_csrf(request))}'><div class='field'><label>New GitHub token</label><input name='github_token' type='password' autocomplete='new-password' required minlength='20' maxlength='500'></div><button class='button primary' type='submit'>Validate and save token</button></form></article><article class='card'><h3>Ingest key</h3><p class='muted'>Rotate the project key if it is exposed. The new key appears once.</p><form method='post' action='/projects/{_escape(project_id)}/rotate-key'><input type='hidden' name='csrf' value='{_escape(_csrf(request))}'><button class='button' type='submit'>Rotate key</button></form></article><article class='card'><h3>Delete project data</h3><p class='muted'>Remove this project, its incidents, logs, fixes, and stored GitHub token.</p><form method='post' action='/projects/{_escape(project_id)}/delete'><input type='hidden' name='csrf' value='{_escape(_csrf(request))}'><div class='field'><label>Type DELETE to confirm</label><input name='confirm' required autocomplete='off'></div><button class='button danger' type='submit'>Delete project</button></form></article></section></section>"
     return _response(body, request)
 
 
@@ -1009,11 +1068,10 @@ def _workflow_fix_steps() -> str:
             "so there is no check to pass and fixes stay as open pull requests. We could not add a workflow because your GitHub token "
             "is not allowed to write workflow files. Monitoring itself is installed and working.</p>"
             "<ol class='muted'>"
-            "<li>On GitHub open <b>Settings</b>, then <b>Developer settings</b>, then <b>Personal access tokens</b>, then <b>Fine-grained tokens</b>, "
+            "<li>On GitHub open <b>Settings</b>, then <b>Developer settings</b>, then <b>Personal access tokens</b>, then <b>Tokens (classic)</b>, "
             "and open the token you gave us.</li>"
-            "<li>Under <b>Repository permissions</b> set <b>Workflows</b> to <b>Read and write</b>, then save. "
-            "(For a classic token, tick the <code>workflow</code> scope instead. If you made a brand new token, use "
-            "<b>Update GitHub token</b> on this page first.)</li>"
+            "<li>Tick the <code>workflow</code> scope and save. If you make a brand new token, tick <code>repo</code> and <code>workflow</code>, "
+            "then use <b>Update GitHub token</b> on this page first.</li>"
             "<li>Come back to this project page and press <b>Install monitoring</b>. We will add the test workflow in a new pull request "
             "and merge it.</li></ol>")
 
@@ -1218,6 +1276,24 @@ def _page_incident_board_live(request, project_id):
                                      ("X-Content-Type-Options", "nosniff")])
 
 
+ASSET_DIR = os.path.join(os.path.dirname(os.path.abspath(__file__)), "assets")
+ASSET_TYPES = {".webp": "image/webp", ".woff": "font/woff"}
+ASSET_FILES = {"daemon-bg.webp", "daemon-crest.webp", "daemon-gloock.woff", "daemon-sans-400.woff", "daemon-sans-700.woff"}
+
+
+def _page_asset(request):
+    name = request.path.rsplit("/", 1)[-1]
+    if request.method not in ("GET", "HEAD") or name not in ASSET_FILES:
+        return Response(b"Not found", "404 Not Found", [("Content-Type", "text/plain; charset=utf-8")])
+    try:
+        with open(os.path.join(ASSET_DIR, name), "rb") as handle:
+            data = handle.read()
+    except OSError:
+        return Response(b"Not found", "404 Not Found", [("Content-Type", "text/plain; charset=utf-8")])
+    return Response(data, "200 OK", [("Content-Type", ASSET_TYPES[os.path.splitext(name)[1]]), ("Cache-Control", "public, max-age=604800"),
+                                     ("X-Content-Type-Options", "nosniff")])
+
+
 def _page_live_js(request):
     return Response(incident_board.LIVE_JS, "200 OK",
                     [("Content-Type", "application/javascript; charset=utf-8"),
@@ -1401,7 +1477,7 @@ document.getElementById('pay').addEventListener('click',function(){rzp.open();})
             f"<script src='https://checkout.razorpay.com/v1/checkout.js'></script><script nonce='{nonce}'>{script}</script>")
     headers = [("Content-Type", "text/html; charset=utf-8"), ("Cache-Control", "no-store"),
         ("X-Content-Type-Options", "nosniff"), ("Referrer-Policy", "same-origin"),
-        ("Content-Security-Policy", f"default-src 'self'; script-src 'self' https://checkout.razorpay.com 'nonce-{nonce}'; style-src 'self' 'unsafe-inline'; img-src 'self' data: https://*.razorpay.com; frame-src https://checkout.razorpay.com https://api.razorpay.com; connect-src 'self'; form-action 'self'; frame-ancestors 'none'; base-uri 'none'")]
+        ("Content-Security-Policy", f"default-src 'self'; script-src 'self' https://checkout.razorpay.com 'nonce-{nonce}'; style-src 'self' 'unsafe-inline' https://fonts.googleapis.com; font-src 'self' https://fonts.gstatic.com; img-src 'self' data: https://*.razorpay.com; frame-src https://checkout.razorpay.com https://api.razorpay.com; connect-src 'self'; form-action 'self'; frame-ancestors 'none'; base-uri 'none'")]
     return Response(_layout("Checkout", body, request), "200 OK", headers)
 
 
@@ -1591,6 +1667,8 @@ def _dispatch(request: Request) -> Response:
         return _page_new_project(request)
     if request.path == "/assets/live.js":
         return _page_live_js(request)
+    if re.fullmatch(r"/assets/daemon-[a-z0-9-]+\.(?:webp|woff)", request.path):
+        return _page_asset(request)
     match = re.fullmatch(r"/projects/([0-9a-f-]{36})/incidents/live", request.path)
     if match:
         return _page_incident_board_live(request, match.group(1))

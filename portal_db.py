@@ -286,7 +286,9 @@ def get_or_create_google_user(email: str, google_sub: str, email_verified: bool)
             return dict(row)
         by_email = _execute(conn, 'SELECT * FROM users WHERE email=?', (email,)).fetchone()
         if by_email:
-            raise ValueError('An account with this email already exists. Sign in using its current method; account linking must be completed separately.')
+            # Google has verified this address, so the person owns it. Sign in to the existing account
+            # (keeping its id, projects and billing) instead of refusing, which used to lock people out.
+            return dict(by_email)
         _execute(conn, 'INSERT INTO users(id,email,password_hash,created_at) VALUES(?,?,?,?)', (google_sub, email, '', _now()))
         conn.commit()
         return dict(_execute(conn, 'SELECT * FROM users WHERE id=?', (google_sub,)).fetchone())

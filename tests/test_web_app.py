@@ -64,38 +64,38 @@ def _cookie_value(headers, name):
     return ""
 
 
-def test_anonymous_form_uses_signed_csrf_cookie(web_env):
-    status, headers, body = _request("/signup")
-    csrf_cookie = _cookie_value(headers, web_app.CSRF_COOKIE)
-    csrf = re.search(r"name='csrf' value='([^']+)'", body).group(1)
-
-    assert status == "200 OK"
-    assert csrf_cookie
-    assert web_app._verify_cookie(csrf_cookie) == csrf
-    assert "Content-Security-Policy" in dict(headers)
+def test_login_page_offers_google_only(web_env):
+    for path in ("/login", "/"):
+        status, headers, body = _request(path)
+        assert status == "200 OK"
+        assert "Continue with Google" in body
+        assert "type='password'" not in body and 'type="password"' not in body
+        assert "Content-Security-Policy" in dict(headers)
 
 
-def test_signup_creates_account_and_authenticated_session(web_env):
-    _, headers, body = _request("/signup")
-    csrf_cookie = _cookie_value(headers, web_app.CSRF_COOKIE)
-    csrf = re.search(r"name='csrf' value='([^']+)'", body).group(1)
-    status, headers, _ = _request("/signup", method="POST", cookie=f"{web_app.CSRF_COOKIE}={csrf_cookie}",
-        form={"csrf": csrf, "email": "person@example.com", "password": "a-long-test-password"})
+def test_home_page_explains_the_product_and_the_github_token(web_env):
+    _, _, body = _request("/")
+    for text in ("How it works", "Make your repository private", "Tokens (classic)", "<code>repo</code>", "<code>workflow</code>"):
+        assert text in body
 
-    assert status == "303 See Other"
-    session_cookie = _cookie_value(headers, web_app.SESSION_COOKIE)
-    session_id = web_app._verify_cookie(session_cookie)
-    assert session_id
-    assert web_app.portal_db.get_session(session_id)["email"] == "person@example.com"
+
+def test_email_signup_and_login_are_gone(web_env):
+    for path in ("/signup", "/login"):
+        status, headers, _ = _request(path, method="POST",
+                                      form={"csrf": "x", "email": "person@example.com", "password": "a-long-test-password"})
+        assert status == "303 See Other"
+        assert dict(headers)["Location"] == "/login"
+        assert not _cookie_value(headers, web_app.SESSION_COOKIE)
+    assert web_app.portal_db.get_user_by_email("person@example.com") is None
+    status, headers, _ = _request("/signup")
+    assert status == "303 See Other" and dict(headers)["Location"] == "/login"
 
 
 def test_logout_requires_csrf_token(web_env):
-    _, headers, body = _request("/signup")
-    csrf_cookie = _cookie_value(headers, web_app.CSRF_COOKIE)
-    csrf = re.search(r"name='csrf' value='([^']+)'", body).group(1)
-    _, headers, _ = _request("/signup", method="POST", cookie=f"{web_app.CSRF_COOKIE}={csrf_cookie}",
-        form={"csrf": csrf, "email": "person@example.com", "password": "a-long-test-password"})
-    session_cookie = _cookie_value(headers, web_app.SESSION_COOKIE)
+    from datetime import timedelta
+    user_id = web_app.portal_db.create_user("person@example.com", "")
+    session_id = web_app.portal_db.create_session(user_id, "csrf-token-1", (web_app._now() + timedelta(days=1)).isoformat(timespec="seconds"))
+    session_cookie = web_app._signed_cookie(session_id)
 
     status, _, _ = _request("/logout", method="POST", cookie=f"{web_app.SESSION_COOKIE}={session_cookie}", form={})
     assert status == "403 Forbidden"
@@ -208,3 +208,11 @@ def test_google_user_is_created_and_reused_by_stable_subject(web_env):
     assert user2["email"] == "google@example.com"
     with pytest.raises(ValueError, match="verified Google identity"):
         web_app.portal_db.get_or_create_google_user("unverified@example.com", "google-sub-456", False)
+
+
+def test_google_sign_in_links_to_an_existing_account_with_the_same_email(web_env):
+    old_id = web_app.portal_db.create_user("admin2@example.com", "old-password-hash")
+    user = web_app.portal_db.get_or_create_google_user("Admin2@Example.com", "google-sub-777", True)
+    assert user["id"] == old_id and user["email"] == "admin2@example.com"
+    again = web_app.portal_db.get_or_create_google_user("admin2@example.com", "google-sub-777", True)
+    assert again["id"] == old_id

@@ -80,15 +80,18 @@ def test_admins_go_to_admin_not_customer_pages(web_env):
         assert status == "303 See Other" and location(headers) == "/admin"
 
 
-def test_admin_email_cannot_be_registered_publicly(web_env):
-    _, headers, body = _request("/signup")
-    csrf = re.search(r"name='csrf' value='([^']+)'", body).group(1)
-    cookie = f"{web_app.CSRF_COOKIE}={web_app._cookie_value(headers, web_app.CSRF_COOKIE) if hasattr(web_app, '_cookie_value') else ''}"
-    from test_web_app import _cookie_value
-    cookie = f"{web_app.CSRF_COOKIE}={_cookie_value(headers, web_app.CSRF_COOKIE)}"
-    status, _, _ = _request("/signup", method="POST", cookie=cookie,
-                            form={"csrf": csrf, "email": "admin1@example.com", "password": "a-long-test-password"})
-    assert status == "403 Forbidden"
+def test_admin_email_cannot_be_registered_by_email_and_password(web_env):
+    status, _, _ = _request("/signup", method="POST",
+                            form={"csrf": "x", "email": "admin1@example.com", "password": "a-long-test-password"})
+    assert status == "303 See Other"
+    assert portal_db.get_user_by_email("admin1@example.com") is None
+
+
+def test_admin_signs_in_with_google_even_if_an_old_account_exists(web_env):
+    old_id = portal_db.create_user("admin2@example.com", "old-hash")
+    user = portal_db.get_or_create_google_user("admin2@example.com", "google-sub-admin2", True)
+    assert user["id"] == old_id
+    assert web_app._is_admin(type("R", (), {"session": {"email": user["email"]}})())
 
 
 # --- trial: one request, one decision, one use --------------------------------
