@@ -76,7 +76,7 @@ services:
       - key: WORKER_POLL_SECONDS
         value: "5"
       - key: WORKER_MIN_OCCURRENCES
-        value: "5"
+        value: "1"
       - key: WORKER_MIN_AGE_SECONDS
         value: "30"
 

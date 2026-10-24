@@ -20,7 +20,7 @@ from resolve_merged import resolve_merged_prs
 from run_diagnosis import run as run_diagnosis
 from sync_and_tail import sync_and_tail
 
-MIN_OCCURRENCES = 5       # errors needed before the agent acts
+MIN_OCCURRENCES = 1       # errors needed before the agent acts
 MIN_AGE_SECONDS = 30      # seconds since the first error (lets the bug reach GitHub)
 COOLDOWN_SECONDS = 180    # do not retry the same incident sooner than this
 

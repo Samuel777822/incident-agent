@@ -166,7 +166,7 @@ def _repository_evidence(project: dict, traceback: str) -> tuple[str, dict[str, 
 
 def process_one() -> bool:
     incident = portal_db.claim_next_incident(
-        min_occurrences=int(os.getenv("WORKER_MIN_OCCURRENCES", "5")),
+        min_occurrences=int(os.getenv("WORKER_MIN_OCCURRENCES", "1")),
         min_age_seconds=int(os.getenv("WORKER_MIN_AGE_SECONDS", "30")),
         lease_seconds=int(os.getenv("WORKER_LEASE_SECONDS", "600")),
         max_attempts=int(os.getenv("WORKER_MAX_ATTEMPTS", "3")),
