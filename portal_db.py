@@ -18,6 +18,7 @@ SCHEMA = """
 CREATE TABLE IF NOT EXISTS users (
   id TEXT PRIMARY KEY,
   email TEXT NOT NULL UNIQUE,
+  name TEXT NOT NULL DEFAULT '',
   password_hash TEXT NOT NULL DEFAULT '',
   created_at TEXT NOT NULL
 );
@@ -232,6 +233,7 @@ def init_db() -> None:
                 _execute(conn, statement)
         # Safe, repeatable migrations for databases created by older versions.
         additions = [
+            ("users", "name", "TEXT NOT NULL DEFAULT ''"),
             ("projects", "install_pr_url", "TEXT NOT NULL DEFAULT ''"),
             ("projects", "ci_workflow", "TEXT NOT NULL DEFAULT ''"),
             ("projects", "ai_consent_at", "TEXT NOT NULL DEFAULT ''"),
@@ -260,22 +262,32 @@ def init_db() -> None:
         conn.close()
 
 
-def create_user(email: str, password_hash: str) -> str:
+def create_user(email: str, password_hash: str, name: str = "") -> str:
     user_id = _id()
     conn = get_connection()
     try:
-        _execute(conn, "INSERT INTO users(id,email,password_hash,created_at) VALUES(?,?,?,?)",
-                 (user_id, email.lower().strip(), password_hash, _now()))
+        _execute(conn, "INSERT INTO users(id,email,name,password_hash,created_at) VALUES(?,?,?,?,?)",
+                 (user_id, email.lower().strip(), name.strip(), password_hash, _now()))
         conn.commit()
         return user_id
     finally:
         conn.close()
 
 
-def get_or_create_google_user(email: str, google_sub: str, email_verified: bool) -> dict:
+def update_user_name(user_id: str, name: str) -> None:
+    conn = get_connection()
+    try:
+        _execute(conn, "UPDATE users SET name=? WHERE id=?", (name.strip(), user_id))
+        conn.commit()
+    finally:
+        conn.close()
+
+
+def get_or_create_google_user(email: str, google_sub: str, email_verified: bool, name: str = "") -> dict:
     email = email.lower().strip()
     if not email or not google_sub or not email_verified:
         raise ValueError('A verified Google identity is required')
+    name = (name or "").strip()
     # Use the verified Google subject as the internal ID to avoid altering existing production schema.
     conn = get_connection()
     try:
@@ -283,13 +295,21 @@ def get_or_create_google_user(email: str, google_sub: str, email_verified: bool)
         if row:
             if row['email'].lower() != email:
                 raise ValueError('This Google account email changed. Contact support to update it safely.')
+            if name and not row['name']:
+                _execute(conn, 'UPDATE users SET name=? WHERE id=?', (name, google_sub))
+                conn.commit()
+                row = _execute(conn, 'SELECT * FROM users WHERE id=?', (google_sub,)).fetchone()
             return dict(row)
         by_email = _execute(conn, 'SELECT * FROM users WHERE email=?', (email,)).fetchone()
         if by_email:
             # Google has verified this address, so the person owns it. Sign in to the existing account
             # (keeping its id, projects and billing) instead of refusing, which used to lock people out.
+            if name and not by_email['name']:
+                _execute(conn, 'UPDATE users SET name=? WHERE id=?', (name, by_email['id']))
+                conn.commit()
+                by_email = _execute(conn, 'SELECT * FROM users WHERE id=?', (by_email['id'],)).fetchone()
             return dict(by_email)
-        _execute(conn, 'INSERT INTO users(id,email,password_hash,created_at) VALUES(?,?,?,?)', (google_sub, email, '', _now()))
+        _execute(conn, 'INSERT INTO users(id,email,name,password_hash,created_at) VALUES(?,?,?,?,?)', (google_sub, email, name, '', _now()))
         conn.commit()
         return dict(_execute(conn, 'SELECT * FROM users WHERE id=?', (google_sub,)).fetchone())
     finally:
@@ -330,7 +350,7 @@ def get_session(session_id: str):
     conn = get_connection()
     try:
         row = _execute(conn,
-            "SELECT s.*,u.email FROM sessions s JOIN users u ON u.id=s.user_id WHERE s.id=? AND s.expires_at>?",
+            "SELECT s.*,u.email,u.name FROM sessions s JOIN users u ON u.id=s.user_id WHERE s.id=? AND s.expires_at>?",
             (session_id, _now())).fetchone()
         return dict(row) if row else None
     finally:
@@ -857,7 +877,7 @@ def user_has_active_access(user_id: str) -> bool:
 def admin_list_users():
     conn = get_connection()
     try:
-        rows = _execute(conn, """SELECT u.id,u.email,u.created_at,s.active_until,
+        rows = _execute(conn, """SELECT u.id,u.email,u.name,u.created_at,s.active_until,
             COALESCE(s.grant_type,'') AS grant_type
             FROM users u LEFT JOIN subscriptions s ON s.user_id=u.id
             ORDER BY u.created_at DESC""").fetchall()

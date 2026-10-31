@@ -254,3 +254,27 @@ def test_about_page_and_founder_assets(web_env):
     assert captured["status"] == "200 OK"
     assert any(h == ("Content-Type", "image/webp") for h in captured["headers"])
     assert len(raw_pranav) > 1000
+
+
+def test_onboarding_name_prompt_flow(web_env):
+    from datetime import timedelta
+    user_id = web_app.portal_db.create_user("newuser@example.com", "")
+    session_id = web_app.portal_db.create_session(user_id, "csrf-token-123", (web_app._now() + timedelta(days=1)).isoformat(timespec="seconds"))
+    cookie = f"{web_app.SESSION_COOKIE}={web_app._signed_cookie(session_id)}"
+    csrf = "csrf-token-123"
+
+    # GET /onboarding/name
+    status, _, body = _request("/onboarding/name", cookie=cookie)
+    assert status == "200 OK"
+    assert "What is your name?" in body
+    assert "Continue" in body
+
+    # POST /onboarding/name to set the name
+    status, headers, _ = _request("/onboarding/name", method="POST", form={"csrf": csrf, "name": "Jane Developer"}, cookie=cookie)
+    assert status == "303 See Other"
+    assert dict(headers)["Location"] == "/dashboard"
+
+    # Dashboard reflects the name
+    status, _, body = _request("/dashboard", cookie=cookie)
+    assert status == "200 OK"
+    assert "Jane Developer" in body

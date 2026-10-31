@@ -296,7 +296,8 @@ def _verified_google_identity(code: str, state: str, request: Request) -> dict:
     email = claims.get("email")
     if not isinstance(email, str) or not EMAIL_RE.fullmatch(email):
         raise ValueError("Google did not provide a valid email address.")
-    return {"email": email.lower().strip(), "google_sub": str(claims["sub"]), "email_verified": True}
+    name = (claims.get("name") or "").strip()
+    return {"email": email.lower().strip(), "google_sub": str(claims["sub"]), "email_verified": True, "name": name}
 
 
 def _google_begin(request: Request):
@@ -323,13 +324,20 @@ def _google_callback(request: Request):
                          headers=[clear_state])
     try:
         identity = _verified_google_identity(code, state, request)
-        user = portal_db.get_or_create_google_user(identity["email"], identity["google_sub"], identity["email_verified"])
+        user = portal_db.get_or_create_google_user(identity["email"], identity["google_sub"], identity["email_verified"], identity.get("name", ""))
     except (ValueError, RuntimeError) as exc:
         return _response(f"<div class='alert'>{_escape(exc)}</div>", request, "400 Bad Request",
                          headers=[clear_state])
     session_headers = _new_session(user["id"])
     session_headers.append(clear_state)
-    return _redirect("/admin" if identity["email"] in _admin_emails() else "/dashboard", session_headers)
+    target = "/admin" if identity["email"] in _admin_emails() else "/dashboard"
+    if not user.get("name"):
+        suggested = identity.get("name", "")
+        dest = "/onboarding/name"
+        if suggested:
+            dest += f"?suggested={quote(suggested)}"
+        return _redirect(dest, session_headers)
+    return _redirect(target, session_headers)
 
 
 def _admin_emails() -> set[str]:
@@ -732,6 +740,46 @@ def _page_about(request):
     return _response(body, request)
 
 
+def _page_onboarding_name(request: Request):
+    gate = _require_session(request)
+    if gate:
+        return gate
+    user_id = request.session["user_id"]
+    next_dest = "/admin" if _is_admin(request) else "/dashboard"
+
+    if request.method == "POST":
+        if not _csrf_valid(request):
+            return _response("<div class='alert'>This form expired. Please try again.</div>", request, "403 Forbidden")
+        name = request.form.get("name", "").strip()
+        if name:
+            portal_db.update_user_name(user_id, name)
+            request.session["name"] = name
+        return _redirect(next_dest)
+
+    # GET
+    current_name = request.session.get("name", "") or request.query.get("suggested", [""])[0]
+    body = (
+        "<section class='card form-card'>"
+        "<div class='eyebrow'>Welcome to Agent Daemon</div>"
+        "<h1>What is your name?</h1>"
+        "<p class='muted'>Tell us your name so your dashboard, notifications, and projects reflect who you are.</p>"
+        "<form method='post' action='/onboarding/name'>"
+        f"<input type='hidden' name='csrf' value='{_csrf(request)}'>"
+        "<div class='field'>"
+        "<label for='name'>Full Name</label>"
+        f"<input id='name' name='name' type='text' placeholder='e.g. Alex Smith' value='{_escape(current_name)}' maxlength='120' autofocus required>"
+        "<small>Your name helps personalize your incident management experience.</small>"
+        "</div>"
+        "<div class='actions'>"
+        "<button class='button primary' type='submit'>Continue</button>"
+        f"<a class='button' href='{next_dest}'>Skip for now</a>"
+        "</div>"
+        "</form>"
+        "</section>"
+    )
+    return _response(body, request)
+
+
 def _page_home(request):
     if request.session:
         return _redirect("/admin" if _is_admin(request) else "/dashboard")
@@ -928,7 +976,8 @@ def _admin_view(request):
                       "<select name='grant' aria-label='Access to grant'><option value='trial:1'>Free trial · 1 day</option>"
                       "<option value='paid:30'>Paid · 30 days</option><option value='paid:365'>Paid · 365 days</option></select>"
                       "<button class='button primary' name='action' value='grant' type='submit'>Grant access</button></form>")
-        customer_rows.append(f"<tr><td>{_escape(user['email'])}<br><small class='muted'>Joined {_escape(_fmt_time(user['created_at']))}</small></td><td>{status}</td><td>{action}</td></tr>")
+        cust_label = f"<b>{_escape(user['name'])}</b><br><small class='muted'>{_escape(user['email'])}</small>" if user.get('name') else _escape(user['email'])
+        customer_rows.append(f"<tr><td>{cust_label}<br><small class='muted'>Joined {_escape(_fmt_time(user['created_at']))}</small></td><td>{status}</td><td>{action}</td></tr>")
 
     project_rows = []
     for project, (state, css) in zip(projects, states):
@@ -1046,8 +1095,10 @@ def _page_dashboard(request):
                          f"<td>{_escape(_incident_label(item['status']))}</td><td>{pr}</td></tr>")
     feed = _table(["When", "Project", "Error", "What the agent did", "Fix"], feed_rows,
                   "Nothing to report yet. When your app raises an error, the agent's diagnosis and fix appear here.")
+    name_val = request.session.get('name', '').strip()
+    signed_label = f"Signed in as <b>{_escape(name_val)}</b> ({_escape(request.session['email'])}) · <a href='/onboarding/name'>Edit name</a>" if name_val else f"Signed in as {_escape(request.session['email'])} · <a href='/onboarding/name'>Add your name</a>"
     body = (f"<section class='section'><div class='row'><div><div class='eyebrow'>Workspace</div><h1>Your projects</h1>"
-            f"<p class='muted'>Signed in as {_escape(request.session['email'])}</p></div>{connect}</div>{banner}"
+            f"<p class='muted'>{signed_label}</p></div>{connect}</div>{banner}"
             f"<div class='grid'>{listing}</div><h2>Agent activity</h2>{feed}</section>")
     return _response(body, request)
 
@@ -1743,6 +1794,8 @@ def _dispatch(request: Request) -> Response:
         return _page_home(request)
     if request.method == "GET" and request.path in ("/about", "/about-us"):
         return _page_about(request)
+    if request.path in ("/onboarding/name", "/profile/name"):
+        return _page_onboarding_name(request)
     if request.path == "/auth/google":
         if request.method != "GET":
             return _response("Method not allowed", request, "405 Method Not Allowed")
