@@ -137,6 +137,28 @@ a.card:hover{box-shadow:0 20px 60px #0009,0 0 28px #9a4dff44;transform:translate
 .steps{padding-left:22px}.steps li{margin:8px 0}.steps.big{counter-reset:s;list-style:none;padding:0;display:grid;gap:12px;grid-template-columns:repeat(auto-fit,minmax(230px,1fr))}.steps.big li{counter-increment:s;margin:0;padding:18px 18px 18px 56px;position:relative;border:1px solid #3a2338;border-radius:12px;background:#120a1bb8;-webkit-backdrop-filter:blur(8px);backdrop-filter:blur(8px)}.steps.big li::before{content:counter(s);position:absolute;left:16px;top:16px;width:28px;height:28px;border-radius:50%;display:grid;place-items:center;font-family:var(--serif);font-weight:700;color:#fff;background:linear-gradient(120deg,#d1121f 0%,#a3162b 42%,#5b1fa8 100%);box-shadow:0 0 14px #e11d2a66}.guide h3{margin:22px 0 6px}.guide code{background:#2a1736;padding:1px 6px;border-radius:5px;color:#ffb0a3}.guide{margin-bottom:22px}
 @media(max-width:640px){.brand{font-size:17px}.stat b{font-size:28px}}
 @media(prefers-reduced-motion:reduce){body::before,body::after,html::before{animation:none}}
+
+/* ===== About Us / Co-Founders Page ===== */
+.about-hero{text-align:center;padding:min(14vh,110px) 0 30px;max-width:820px;margin:0 auto}
+.about-hero h1{font-family:var(--display);font-size:clamp(30px,4.5vw,48px);margin:12px 0 16px;background:linear-gradient(180deg,#fff,#d4cadf 55%,#8e8499);-webkit-background-clip:text;background-clip:text;color:transparent}
+.about-hero p{font-size:18px;line-height:1.6;color:var(--muted);margin:0}
+.founders-grid{display:grid;grid-template-columns:repeat(auto-fit,minmax(320px,1fr));gap:28px;margin:36px 0 60px}
+.founder-card{display:flex;flex-direction:column;padding:32px 28px;border-radius:16px;position:relative;overflow:hidden}
+.founder-card::before{content:"";position:absolute;top:0;left:0;right:0;height:3px;background:linear-gradient(90deg,var(--crimson),var(--violet))}
+.founder-header{display:flex;align-items:center;gap:20px;margin-bottom:20px}
+.founder-avatar-wrap{position:relative;width:108px;height:108px;flex-shrink:0;border-radius:50%;padding:3px;background:linear-gradient(135deg,var(--crimson),var(--violet));box-shadow:0 0 20px #e11d2a44,0 0 35px #9a4dff33}
+.founder-avatar{width:100%;height:100%;border-radius:50%;object-fit:cover;display:block;background:#190e25}
+.founder-names h2{font-size:23px;margin:0 0 6px;color:var(--text);font-family:var(--serif)}
+.founder-role{display:inline-block;color:#ff8a7a;font-size:13px;font-weight:600;letter-spacing:.08em;text-transform:uppercase}
+.founder-bio{color:#d3c9e0;font-size:15px;line-height:1.65;margin:0 0 24px;flex-grow:1}
+.founder-bio p{margin:0 0 12px}.founder-bio p:last-child{margin-bottom:0}
+.founder-links{display:flex;flex-wrap:wrap;gap:10px;padding-top:16px;border-top:1px solid #3a2338}
+.founder-link{display:inline-flex;align-items:center;gap:7px;padding:7px 14px;border-radius:8px;background:#ffffff0a;border:1px solid #ffffff1a;color:#f2edf7;font-size:13px;font-weight:500;transition:all .18s ease}
+.founder-link:hover{background:#ffffff18;border-color:#ff665588;color:#fff;text-decoration:none;box-shadow:0 0 14px #e11d2a33}
+.mission-card{text-align:center;padding:38px 28px;margin-bottom:50px}
+.mission-card h3{font-size:24px;margin:0 0 12px;color:var(--silver)}
+.mission-card p{max-width:680px;margin:0 auto 22px;color:var(--muted);font-size:16px;line-height:1.6}
+
 """
 
 
@@ -332,12 +354,12 @@ def _layout(title: str, body: str, request: Request | None = None) -> str:
         signout = ('<form method="post" action="/logout" style="display:inline">'
                    f'<input type="hidden" name="csrf" value="{_csrf(request)}"><button class="button" type="submit">Sign out</button></form>')
         if _is_admin(request):
-            links = '<a href="/admin">Admin</a>' + signout
+            links = '<a href="/about">About us</a><a href="/admin">Admin</a>' + signout
         else:
-            links = '<a href="/dashboard">Projects</a><a href="/billing">Plan &amp; billing</a>' + signout
+            links = '<a href="/about">About us</a><a href="/dashboard">Projects</a><a href="/billing">Plan &amp; billing</a>' + signout
     else:
-        links = '<a class="button primary" href="/login">Sign in with Google</a>'
-    return f"""<!doctype html><html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><meta name="description" content="AI incident response for Python apps"><title>{_escape(title)} · {APP_NAME}</title><link rel="preconnect" href="https://fonts.googleapis.com"><link rel="preconnect" href="https://fonts.gstatic.com" crossorigin><link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Cinzel:wght@500;700&amp;family=Cinzel+Decorative:wght@700&amp;display=swap"><style>{CSS}</style></head><body><header class="wrap nav"><a class="brand" href="/"><span class="brand-mark">A</span>{APP_NAME}</a><nav class="navlinks">{links}</nav></header><main class="wrap">{body}</main><footer class="wrap footer">Agent Daemon · Your changes stay reviewable and reversible.</footer></body></html>"""
+        links = '<a href="/about">About us</a><a class="button primary" href="/login">Sign in with Google</a>'
+    return f"""<!doctype html><html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><meta name="description" content="AI incident response for Python apps"><title>{_escape(title)} · {APP_NAME}</title><link rel="preconnect" href="https://fonts.googleapis.com"><link rel="preconnect" href="https://fonts.gstatic.com" crossorigin><link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Cinzel:wght@500;700&amp;family=Cinzel+Decorative:wght@700&amp;display=swap"><style>{CSS}</style></head><body><header class="wrap nav"><a class="brand" href="/"><span class="brand-mark">A</span>{APP_NAME}</a><nav class="navlinks">{links}</nav></header><main class="wrap">{body}</main><footer class="wrap footer"><div style="display:flex;justify-content:space-between;align-items:center;flex-wrap:wrap;gap:12px"><span>Agent Daemon · Your changes stay reviewable and reversible.</span><span><a href="/about">About us / Co-Founders</a> · <a href="https://github.com/Samuel777822/incident-agent" target="_blank" rel="noopener">GitHub</a></span></div></footer></body></html>"""
 
 
 def _csrf(request: Request) -> str:
@@ -622,6 +644,92 @@ def _github_setup_guide() -> str:
         "<li><code>workflow</code>: add a small test workflow file, so Auto mode has a check that must pass before merging.</li></ul>"
         "<p class='muted'>Classic tokens are not limited to one repository, so keep yours secret. "
         "You can delete the token on GitHub at any time to cut our access immediately.</p></section>")
+
+
+def _page_about(request):
+    body = ("""<section class="about-hero">
+<div class="eyebrow">Meet the Creators</div>
+<h1>About Us &amp; Co-Founders</h1>
+<p>Agent Daemon is created by systems builders and software engineers dedicated to giving developer teams automated, reliable on-call intelligence without the chaos of 3 AM emergencies.</p>
+</section>
+
+<section class="founders-grid">
+  <article class="card founder-card">
+    <div class="founder-header">
+      <div class="founder-avatar-wrap">
+        <img class="founder-avatar" src="/assets/daemon-founder-abhay.webp" alt="Abhay Samuel H" width="108" height="108" loading="lazy">
+      </div>
+      <div class="founder-names">
+        <h2>Abhay Samuel H</h2>
+        <span class="founder-role">Co-Founder &amp; CTO</span>
+      </div>
+    </div>
+    <div class="founder-bio">
+      <p>Abhay is a Computer Science Engineering student at BMSCE, Bangalore, and the technical co-founder of Agent Daemon. He built the core of the product: the monitoring client that reports errors from a customer's app, the incident pipeline, the automated fix pull requests, and the customer and admin portal.</p>
+      <p>He also owns testing and quality, with more than 90 automated tests covering the flows end to end. His mission with Agent Daemon is to give small teams without a dedicated on-call engineer an AI one that spots problems, finds the cause, and proposes a fix for a human to review.</p>
+    </div>
+    <div class="founder-links">
+      <a class="founder-link" href="https://github.com/Samuel777822" target="_blank" rel="noopener">
+        <svg width="15" height="15" viewBox="0 0 16 16" fill="currentColor" aria-hidden="true"><path d="M8 0C3.58 0 0 3.58 0 8c0 3.54 2.29 6.53 5.47 7.59.4.07.55-.17.55-.38 0-.19-.01-.82-.01-1.49-2.01.37-2.53-.49-2.69-.94-.09-.23-.48-.94-.82-1.13-.28-.15-.68-.52-.01-.53.63-.01 1.08.58 1.23.82.72 1.21 1.87.87 2.33.66.07-.52.28-.87.51-1.07-1.78-.2-3.64-.89-3.64-3.95 0-.87.31-1.59.82-2.15-.08-.2-.36-1.02.08-2.12 0 0 .67-.21 2.2.82.64-.18 1.32-.27 2-.27.68 0 1.36.09 2 .27 1.53-1.04 2.2-.82 2.2-.82.44 1.1.16 1.92.08 2.12.51.56.82 1.27.82 2.15 0 3.07-1.87 3.75-3.65 3.95.29.25.54.73.54 1.48 0 1.07-.01 1.93-.01 2.2 0 .21.15.46.55.38A8.013 8.013 0 0016 8c0-4.42-3.58-8-8-8z"/></svg>
+        GitHub
+      </a>
+      <a class="founder-link" href="https://github.com/Samuel777822/incident-agent" target="_blank" rel="noopener">
+        <svg width="15" height="15" viewBox="0 0 16 16" fill="currentColor" aria-hidden="true"><path d="M2 2.5A2.5 2.5 0 014.5 0h8.75a.75.75 0 01.75.75v12.5a.75.75 0 01-.75.75h-2.5a.75.75 0 110-1.5h1.75v-2h-8a1 1 0 00-.714 1.7.75.75 0 01-1.072 1.05A2.495 2.495 0 012 11.5v-9zm10.5-1h-8a1 1 0 00-1 1v6.708A2.486 2.486 0 014.5 9h8V1.5z"/></svg>
+        Repository
+      </a>
+      <a class="founder-link" href="mailto:naveenachandra371@gmail.com">
+        <svg width="15" height="15" viewBox="0 0 16 16" fill="currentColor" aria-hidden="true"><path d="M1.75 2h12.5c.966 0 1.75.784 1.75 1.75v8.5A1.75 1.75 0 0114.25 14H1.75A1.75 1.75 0 010 12.25v-8.5C0 2.784.784 2 1.75 2zm0 1.5a.25.25 0 00-.25.25v.725l6.5 3.9 6.5-3.9v-.725a.25.25 0 00-.25-.25H1.75zm13 2.748l-6.236 3.742a.5.5 0 01-.528 0L1.5 6.248v5.502c0 .138.112.25.25.25h12.5a.25.25 0 00.25-.25V6.248z"/></svg>
+        Email
+      </a>
+    </div>
+  </article>
+
+  <article class="card founder-card">
+    <div class="founder-header">
+      <div class="founder-avatar-wrap">
+        <img class="founder-avatar" src="/assets/daemon-founder-pranav.webp" alt="Pranav V Rao" width="108" height="108" loading="lazy">
+      </div>
+      <div class="founder-names">
+        <h2>Pranav V Rao</h2>
+        <span class="founder-role">Co-Founder &amp; Systems Architect</span>
+      </div>
+    </div>
+    <div class="founder-bio">
+      <p>Pranav is an AI &amp; ML Engineering student and the co-founder of Agent Daemon. He plays a key role in designing the system architecture and building the backend infrastructure that powers the platform. His contributions include backend development, architecting the system with Codex, developing the uptime monitoring setup, building and integrating the autonomous worker agent, and establishing deployment and automation workflows using Render.</p>
+      <p>He also works on backend integrations, system reliability, and connecting the different components that make Agent Daemon function as a unified platform. His mission with Agent Daemon is to build reliable, AI-powered incident response infrastructure that helps smaller development teams monitor applications, investigate failures, and resolve issues more efficiently.</p>
+      <p>Beyond technology, he is a defence enthusiast with a keen interest in military technology and its real-world applications.</p>
+    </div>
+    <div class="founder-links">
+      <a class="founder-link" href="https://github.com/pranavvrao1-ai" target="_blank" rel="noopener">
+        <svg width="15" height="15" viewBox="0 0 16 16" fill="currentColor" aria-hidden="true"><path d="M8 0C3.58 0 0 3.58 0 8c0 3.54 2.29 6.53 5.47 7.59.4.07.55-.17.55-.38 0-.19-.01-.82-.01-1.49-2.01.37-2.53-.49-2.69-.94-.09-.23-.48-.94-.82-1.13-.28-.15-.68-.52-.01-.53.63-.01 1.08.58 1.23.82.72 1.21 1.87.87 2.33.66.07-.52.28-.87.51-1.07-1.78-.2-3.64-.89-3.64-3.95 0-.87.31-1.59.82-2.15-.08-.2-.36-1.02.08-2.12 0 0 .67-.21 2.2.82.64-.18 1.32-.27 2-.27.68 0 1.36.09 2 .27 1.53-1.04 2.2-.82 2.2-.82.44 1.1.16 1.92.08 2.12.51.56.82 1.27.82 2.15 0 3.07-1.87 3.75-3.65 3.95.29.25.54.73.54 1.48 0 1.07-.01 1.93-.01 2.2 0 .21.15.46.55.38A8.013 8.013 0 0016 8c0-4.42-3.58-8-8-8z"/></svg>
+        GitHub
+      </a>
+      <a class="founder-link" href="https://www.linkedin.com/in/pranav-v-rao-061040393/" target="_blank" rel="noopener">
+        <svg width="15" height="15" viewBox="0 0 16 16" fill="currentColor" aria-hidden="true"><path d="M0 1.146C0 .513.526 0 1.175 0h13.65C15.474 0 16 .513 16 1.146v13.708c0 .633-.526 1.146-1.175 1.146H1.175C.526 16 0 15.487 0 14.854V1.146zm4.943 12.248V6.169H2.542v7.225h2.401zm-1.2-8.212c.837 0 1.358-.554 1.358-1.248-.015-.709-.52-1.248-1.342-1.248-.822 0-1.359.54-1.359 1.248 0 .694.521 1.248 1.327 1.248h.016zm4.908 8.212V9.359c0-.216.016-.432.08-.586.173-.431.568-.878 1.232-.878.869 0 1.216.662 1.216 1.634v3.865h2.401V9.25c0-2.22-1.184-3.252-2.764-3.252-1.274 0-1.845.7-2.165 1.193v.025h-.016a5.54 5.54 0 01.016-.025V6.169h-2.4c.03.678 0 7.225 0 7.225h2.4z"/></svg>
+        LinkedIn
+      </a>
+      <a class="founder-link" href="https://github.com/Samuel777822/incident-agent" target="_blank" rel="noopener">
+        <svg width="15" height="15" viewBox="0 0 16 16" fill="currentColor" aria-hidden="true"><path d="M2 2.5A2.5 2.5 0 014.5 0h8.75a.75.75 0 01.75.75v12.5a.75.75 0 01-.75.75h-2.5a.75.75 0 110-1.5h1.75v-2h-8a1 1 0 00-.714 1.7.75.75 0 01-1.072 1.05A2.495 2.495 0 012 11.5v-9zm10.5-1h-8a1 1 0 00-1 1v6.708A2.486 2.486 0 014.5 9h8V1.5z"/></svg>
+        Repository
+      </a>
+      <a class="founder-link" href="mailto:pranavvrao1@gmail.com">
+        <svg width="15" height="15" viewBox="0 0 16 16" fill="currentColor" aria-hidden="true"><path d="M1.75 2h12.5c.966 0 1.75.784 1.75 1.75v8.5A1.75 1.75 0 0114.25 14H1.75A1.75 1.75 0 010 12.25v-8.5C0 2.784.784 2 1.75 2zm0 1.5a.25.25 0 00-.25.25v.725l6.5 3.9 6.5-3.9v-.725a.25.25 0 00-.25-.25H1.75zm13 2.748l-6.236 3.742a.5.5 0 01-.528 0L1.5 6.248v5.502c0 .138.112.25.25.25h12.5a.25.25 0 00.25-.25V6.248z"/></svg>
+        Email
+      </a>
+    </div>
+  </article>
+</section>
+
+<section class="card mission-card">
+  <h3>Our Mission</h3>
+  <p>Agent Daemon was conceived to eliminate the stress of production emergencies for fast-moving engineering teams. By combining continuous telemetry analysis, intelligent diagnosis, and automated pull requests, we make reliable 24/7 on-call engineering accessible to everyone.</p>
+  <div class="actions" style="justify-content:center">
+    <a class="button primary" href="/login">Get Started with Agent Daemon</a>
+    <a class="button" href="/">How It Works</a>
+  </div>
+</section>
+""")
+    return _response(body, request)
 
 
 def _page_home(request):
@@ -1278,7 +1386,7 @@ def _page_incident_board_live(request, project_id):
 
 ASSET_DIR = os.path.join(os.path.dirname(os.path.abspath(__file__)), "assets")
 ASSET_TYPES = {".webp": "image/webp", ".woff": "font/woff"}
-ASSET_FILES = {"daemon-bg.webp", "daemon-crest.webp", "daemon-gloock.woff", "daemon-sans-400.woff", "daemon-sans-700.woff"}
+ASSET_FILES = {"daemon-bg.webp", "daemon-crest.webp", "daemon-gloock.woff", "daemon-sans-400.woff", "daemon-sans-700.woff", "daemon-founder-abhay.webp", "daemon-founder-pranav.webp"}
 
 
 def _page_asset(request):
@@ -1633,6 +1741,8 @@ def _page_logout(request):
 def _dispatch(request: Request) -> Response:
     if request.method == "GET" and request.path == "/":
         return _page_home(request)
+    if request.method == "GET" and request.path in ("/about", "/about-us"):
+        return _page_about(request)
     if request.path == "/auth/google":
         if request.method != "GET":
             return _response("Method not allowed", request, "405 Method Not Allowed")

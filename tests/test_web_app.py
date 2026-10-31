@@ -216,3 +216,41 @@ def test_google_sign_in_links_to_an_existing_account_with_the_same_email(web_env
     assert user["id"] == old_id and user["email"] == "admin2@example.com"
     again = web_app.portal_db.get_or_create_google_user("admin2@example.com", "google-sub-777", True)
     assert again["id"] == old_id
+
+
+def test_about_page_and_founder_assets(web_env):
+    status, _, body = _request("/about")
+    assert status == "200 OK"
+    for expected in (
+        "About Us &amp; Co-Founders",
+        "Abhay Samuel H",
+        "Co-Founder &amp; CTO",
+        "Pranav V Rao",
+        "Co-Founder &amp; Systems Architect",
+        "/assets/daemon-founder-abhay.webp",
+        "/assets/daemon-founder-pranav.webp",
+        "https://github.com/Samuel777822",
+        "https://github.com/pranavvrao1-ai",
+        "https://www.linkedin.com/in/pranav-v-rao-061040393/",
+    ):
+        assert expected in body
+
+    # Raw WSGI request for binary assets
+    from wsgiref.util import setup_testing_defaults
+    values = {}
+    setup_testing_defaults(values)
+    values.update({"QUERY_STRING": "", "PATH_INFO": "/assets/daemon-founder-abhay.webp", "REQUEST_METHOD": "GET", "REMOTE_ADDR": "127.0.0.1", "wsgi.input": io.BytesIO()})
+    captured = {}
+    def start_response(status, headers):
+        captured["status"] = status
+        captured["headers"] = headers
+    raw_abhay = b"".join(web_app.application(values, start_response))
+    assert captured["status"] == "200 OK"
+    assert any(h == ("Content-Type", "image/webp") for h in captured["headers"])
+    assert len(raw_abhay) > 1000
+
+    values["PATH_INFO"] = "/assets/daemon-founder-pranav.webp"
+    raw_pranav = b"".join(web_app.application(values, start_response))
+    assert captured["status"] == "200 OK"
+    assert any(h == ("Content-Type", "image/webp") for h in captured["headers"])
+    assert len(raw_pranav) > 1000
