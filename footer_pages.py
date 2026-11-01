@@ -356,3 +356,50 @@ def terms_of_service_page_html() -> str:
   <h3 style="color:var(--silver);margin:24px 0 8px">5. Limitation of Liability</h3>
   <p>In no event shall Agent Daemon, its founders, or contributors be liable for any indirect, incidental, or consequential damages resulting from downtime, software defects, or pull request merges.</p>
 </section>"""
+
+
+def render_header_nav_html(signed_in: bool = False, is_admin: bool = False, csrf_token: str = "") -> str:
+    user_action = ""
+    if signed_in:
+        signout = (
+            '<form method="post" action="/logout" style="display:inline">'
+            f'<input type="hidden" name="csrf" value="{csrf_token}"><button class="button" type="submit">Sign out</button></form>'
+        )
+        if is_admin:
+            user_action = '<a href="/admin">Admin</a>' + signout
+        else:
+            user_action = '<a href="/dashboard">Projects</a><a href="/billing">Plan &amp; billing</a>' + signout
+    else:
+        user_action = '<a class="button primary" href="/login">Sign in with Google</a>'
+
+    return f"""<div class="nav-dropdown">
+  <button class="nav-trigger" type="button" aria-haspopup="true">Product</button>
+  <div class="nav-menu">
+    <a href="/features">Features</a>
+    <a href="/pricing">Pricing</a>
+    <a href="/docs">Documentation</a>
+    <a href="/changelog">Changelog</a>
+  </div>
+</div>
+<div class="nav-dropdown">
+  <button class="nav-trigger" type="button" aria-haspopup="true">Company</button>
+  <div class="nav-menu">
+    <a href="/about">About Us</a>
+    <a href="/contact">Contact Us</a>
+  </div>
+</div>
+<div class="nav-dropdown">
+  <button class="nav-trigger" type="button" aria-haspopup="true">Resources</button>
+  <div class="nav-menu">
+    <a href="/faq">FAQ</a>
+    <a href="/help">Help Center</a>
+  </div>
+</div>
+<div class="nav-dropdown">
+  <button class="nav-trigger" type="button" aria-haspopup="true">Legal</button>
+  <div class="nav-menu">
+    <a href="/privacy">Privacy Policy</a>
+    <a href="/terms">Terms of Service</a>
+  </div>
+</div>
+{user_action}"""

@@ -164,6 +164,24 @@ a.card:hover{box-shadow:0 20px 60px #0009,0 0 28px #9a4dff44;transform:translate
 .mission-card p{max-width:680px;margin:0 auto 22px;color:var(--muted);font-size:16px;line-height:1.6}
 
 
+
+/* ===== Header Dropdown Menus (Product, Company, Resources, Legal) ===== */
+.navlinks{display:flex;gap:14px;align-items:center;position:relative}
+.nav-dropdown{position:relative;display:inline-flex;align-items:center}
+.nav-trigger{color:#cdbfe0;font-size:14px;font-weight:600;letter-spacing:.02em;padding:8px 10px;border-radius:8px;background:transparent;border:none;cursor:pointer;display:inline-flex;align-items:center;gap:5px;font-family:inherit;transition:all .18s ease}
+.nav-trigger:hover,.nav-dropdown:hover .nav-trigger,.nav-dropdown:focus-within .nav-trigger{color:#fff;background:#ffffff15}
+.nav-trigger::after{content:"▾";font-size:11px;opacity:.75;transition:transform .2s ease}
+.nav-dropdown:hover .nav-trigger::after,.nav-dropdown:focus-within .nav-trigger::after{transform:rotate(180deg);color:#ff8a7a}
+.nav-menu{display:none;position:absolute;top:calc(100% + 4px);left:0;min-width:180px;padding:6px;border-radius:10px;background:linear-gradient(160deg,#160b22,#0b0612);border:1px solid #4a2752;box-shadow:0 18px 48px #000c,0 0 24px #e11d2a2e;z-index:9999;-webkit-backdrop-filter:blur(16px);backdrop-filter:blur(16px);flex-direction:column;gap:2px}
+.nav-dropdown:hover .nav-menu,.nav-dropdown:focus-within .nav-menu{display:flex}
+.nav-menu a{display:block;padding:8px 12px;border-radius:7px;color:#d8cde6;font-size:13.5px;font-weight:500;text-decoration:none;transition:all .15s ease}
+.nav-menu a:hover{background:#ffffff15;color:#ff8a7a;text-decoration:none;transform:translateX(3px)}
+@media(max-width:860px){
+  .nav{height:auto;padding-top:12px;padding-bottom:12px;flex-wrap:wrap;gap:10px}
+  .navlinks{flex-wrap:wrap;gap:6px}
+  .nav-trigger{padding:6px 8px;font-size:13px}
+}
+
 /* ===== Structured 4-Column Footer ===== */
 .footer{border-top:1px solid;border-image:linear-gradient(90deg,#e11d2a55,#9a4dff55 60%,transparent) 1;padding:50px 0 38px;color:var(--muted);font-size:14px}
 .footer-grid{display:grid;grid-template-columns:repeat(4,1fr);gap:36px;margin-bottom:44px}
@@ -427,25 +445,22 @@ def _is_admin(request: Request) -> bool:
 
 def _layout(title: str, body: str, request: Request | None = None) -> str:
     signed_in = bool(request and request.session)
-    if signed_in:
-        signout = ('<form method="post" action="/logout" style="display:inline">'
-                   f'<input type="hidden" name="csrf" value="{_csrf(request)}"><button class="button" type="submit">Sign out</button></form>')
-        if _is_admin(request):
-            links = '<a href="/about">About us</a><a href="/help">Help Center</a><a href="/contact">Contact</a><a href="/admin">Admin</a>' + signout
-        else:
-            links = '<a href="/about">About us</a><a href="/help">Help Center</a><a href="/contact">Contact</a><a href="/dashboard">Projects</a><a href="/billing">Plan &amp; billing</a>' + signout
-    else:
-        links = '<a href="/about">About us</a><a href="/help">Help Center</a><a href="/contact">Contact</a><a class="button primary" href="/login">Sign in with Google</a>'
+    is_admin = _is_admin(request) if request else False
+    csrf_token = _csrf(request) if (request and signed_in) else ""
+    links = footer_pages.render_header_nav_html(signed_in=signed_in, is_admin=is_admin, csrf_token=csrf_token)
     return f"""<!doctype html><html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><meta name="description" content="AI incident response for Python apps"><title>{_escape(title)} · {APP_NAME}</title><link rel="preconnect" href="https://fonts.googleapis.com"><link rel="preconnect" href="https://fonts.gstatic.com" crossorigin><link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Cinzel:wght@500;700&amp;family=Cinzel+Decorative:wght@700&amp;display=swap"><style>{CSS}</style></head><body><header class="wrap nav"><a class="brand" href="/"><span class="brand-mark">A</span>{APP_NAME}</a><nav class="navlinks">{links}</nav></header><main class="wrap">{body}</main>{footer_pages.render_footer_html()}<script src="/assets/chat.js" defer></script></body></html>"""
 
 
 def _csrf(request: Request) -> str:
     if request.session:
         return request.session["csrf_token"]
+    if getattr(request, "_cached_csrf_token", None):
+        return request._cached_csrf_token
     token = _verify_cookie(request.cookies.get(CSRF_COOKIE, ""))
     if not token:
         token = secrets.token_urlsafe(32)
         request.new_csrf_cookie = _cookie(CSRF_COOKIE, _signed_cookie(token), max_age=7200, http_only=False)
+    request._cached_csrf_token = token
     return token
 
 
