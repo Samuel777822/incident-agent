@@ -213,6 +213,17 @@ CREATE TABLE IF NOT EXISTS visitor_tracking (
   last_notified TEXT NOT NULL,
   visit_count INTEGER NOT NULL DEFAULT 1
 );
+
+CREATE TABLE IF NOT EXISTS support_messages (
+  id TEXT PRIMARY KEY,
+  name TEXT NOT NULL,
+  email TEXT NOT NULL,
+  subject TEXT NOT NULL,
+  message TEXT NOT NULL,
+  status TEXT NOT NULL DEFAULT 'new',
+  created_at TEXT NOT NULL
+);
+CREATE INDEX IF NOT EXISTS idx_support_messages_time ON support_messages(created_at DESC);
 """
 
 
@@ -1447,5 +1458,29 @@ def update_conversation_visitor_details(conversation_id: str, name: str, email: 
         _execute(conn, "UPDATE chat_conversations SET visitor_name = ?, visitor_email = ?, updated_at = ? WHERE id = ?",
                  (name.strip(), email.strip().lower(), _now(), conversation_id))
         conn.commit()
+    finally:
+        conn.close()
+
+
+def create_support_message(name: str, email: str, subject: str, message: str) -> dict:
+    conn = get_connection()
+    try:
+        msg_id = _id()
+        now = _now()
+        _execute(conn, "INSERT INTO support_messages(id, name, email, subject, message, status, created_at) "
+                       "VALUES(?,?,?,?,?,?,?)",
+                 (msg_id, name.strip(), email.strip().lower(), subject.strip(), message.strip(), "new", now))
+        conn.commit()
+        row = _execute(conn, "SELECT * FROM support_messages WHERE id = ?", (msg_id,)).fetchone()
+        return dict(row)
+    finally:
+        conn.close()
+
+
+def admin_list_support_messages(limit: int = 30) -> list[dict]:
+    conn = get_connection()
+    try:
+        rows = _execute(conn, "SELECT * FROM support_messages ORDER BY created_at DESC LIMIT ?", (limit,)).fetchall()
+        return [dict(r) for r in rows]
     finally:
         conn.close()

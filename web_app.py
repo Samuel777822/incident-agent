@@ -370,12 +370,12 @@ def _layout(title: str, body: str, request: Request | None = None) -> str:
         signout = ('<form method="post" action="/logout" style="display:inline">'
                    f'<input type="hidden" name="csrf" value="{_csrf(request)}"><button class="button" type="submit">Sign out</button></form>')
         if _is_admin(request):
-            links = '<a href="/about">About us</a><a href="/admin">Admin</a>' + signout
+            links = '<a href="/about">About us</a><a href="/contact">Contact</a><a href="/admin">Admin</a>' + signout
         else:
-            links = '<a href="/about">About us</a><a href="/dashboard">Projects</a><a href="/billing">Plan &amp; billing</a>' + signout
+            links = '<a href="/about">About us</a><a href="/contact">Contact</a><a href="/dashboard">Projects</a><a href="/billing">Plan &amp; billing</a>' + signout
     else:
-        links = '<a href="/about">About us</a><a class="button primary" href="/login">Sign in with Google</a>'
-    return f"""<!doctype html><html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><meta name="description" content="AI incident response for Python apps"><title>{_escape(title)} · {APP_NAME}</title><link rel="preconnect" href="https://fonts.googleapis.com"><link rel="preconnect" href="https://fonts.gstatic.com" crossorigin><link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Cinzel:wght@500;700&amp;family=Cinzel+Decorative:wght@700&amp;display=swap"><style>{CSS}</style></head><body><header class="wrap nav"><a class="brand" href="/"><span class="brand-mark">A</span>{APP_NAME}</a><nav class="navlinks">{links}</nav></header><main class="wrap">{body}</main><footer class="wrap footer"><div style="display:flex;justify-content:space-between;align-items:center;flex-wrap:wrap;gap:12px"><span>Agent Daemon · Your changes stay reviewable and reversible.</span><span><a href="/about">About us / Co-Founders</a> · <a href="https://github.com/Samuel777822/incident-agent" target="_blank" rel="noopener">GitHub</a></span></div></footer><script src="/assets/chat.js" defer></script></body></html>"""
+        links = '<a href="/about">About us</a><a href="/contact">Contact</a><a class="button primary" href="/login">Sign in with Google</a>'
+    return f"""<!doctype html><html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><meta name="description" content="AI incident response for Python apps"><title>{_escape(title)} · {APP_NAME}</title><link rel="preconnect" href="https://fonts.googleapis.com"><link rel="preconnect" href="https://fonts.gstatic.com" crossorigin><link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Cinzel:wght@500;700&amp;family=Cinzel+Decorative:wght@700&amp;display=swap"><style>{CSS}</style></head><body><header class="wrap nav"><a class="brand" href="/"><span class="brand-mark">A</span>{APP_NAME}</a><nav class="navlinks">{links}</nav></header><main class="wrap">{body}</main><footer class="wrap footer"><div style="display:flex;justify-content:space-between;align-items:center;flex-wrap:wrap;gap:12px"><span>Agent Daemon · Your changes stay reviewable and reversible.</span><span><a href="/about">About us</a> · <a href="/contact">Contact Support</a> · <a href="https://github.com/Samuel777822/incident-agent" target="_blank" rel="noopener">GitHub</a></span></div></footer><script src="/assets/chat.js" defer></script></body></html>"""
 
 
 def _csrf(request: Request) -> str:
@@ -903,6 +903,97 @@ def _api_admin_chat_messages(request: Request) -> Response:
     msgs = portal_db.list_chat_messages(conv_id, after_time=after) if conv_id else []
     return Response(json.dumps({"messages": msgs}), "200 OK", [("Content-Type", "application/json")])
 
+def _page_contact(request: Request) -> Response:
+    prefill_email = request.session.get("email", "") if request.session else ""
+    prefill_name = request.session.get("name", "") if request.session else ""
+
+    if request.method == "POST":
+        if not _csrf_valid(request):
+            return _response("<div class='alert'>This form expired. Please refresh and try again.</div>", request, "403 Forbidden")
+        name = request.form.get("name", "").strip()
+        email = request.form.get("email", "").strip()
+        subject = request.form.get("subject", "").strip()
+        message = request.form.get("message", "").strip()
+
+        if not name or not email or not message:
+            error_html = "<div class='alert'>Please provide your name, email, and message.</div>"
+            return _render_contact_page(request, error_html, name, email, subject, message)
+
+        if not EMAIL_RE.fullmatch(email):
+            error_html = "<div class='alert'>Please provide a valid email address.</div>"
+            return _render_contact_page(request, error_html, name, email, subject, message)
+
+        # Save to database
+        portal_db.create_support_message(name, email, subject or "General Support Inquiry", message)
+
+        # Notify admins
+        email_subj = f"[Agent Daemon Support] {subject or 'New Inquiry'} from {name}"
+        email_body = (
+            f"You received a new message from the Agent Daemon Contact & Support page:\n\n"
+            f"From: {name} ({email})\n"
+            f"Subject: {subject or 'General Support Inquiry'}\n"
+            f"Time: {_now()}\n\n"
+            f"Message:\n{message}\n\n"
+            f"View in Admin Operations:\n{_base_url()}/admin#support-inquiries"
+        )
+        notifications.notify_admins(email_subj, email_body, "support_inquiry")
+
+        success_html = (
+            "<section class='card form-card' style='text-align:center'>"
+            "<div class='eyebrow'>Message Received</div>"
+            "<h1>Thanks for reaching out!</h1>"
+            f"<p class='muted'>We've delivered your message to our founders and support team. We will get back to you at <b>{_escape(email)}</b> shortly.</p>"
+            "<div class='actions' style='justify-content:center;margin-top:24px'>"
+            "<a class='button primary' href='/'>Return to Home</a>"
+            "<a class='button' href='/about'>Meet the Team</a>"
+            "</div>"
+            "</section>"
+        )
+        return _response(success_html, request)
+
+    return _render_contact_page(request, "", prefill_name, prefill_email, "", "")
+
+
+def _render_contact_page(request: Request, flash: str = "", name: str = "", email: str = "", subject: str = "", message: str = "") -> Response:
+    body = (
+        "<section class='about-hero' style='padding-bottom:10px'>"
+        "<div class='eyebrow'>Support &amp; Inquiries</div>"
+        "<h1>Contact Our Team</h1>"
+        "<p>Have questions about Agent Daemon, need help setting up monitoring on your repository, or want to discuss enterprise features? Reach out directly to our founders and engineering team.</p>"
+        "</section>"
+        f"<section class='card form-card' style='margin-top:20px;max-width:580px'>"
+        f"{flash}"
+        "<form method='post' action='/contact'>"
+        f"<input type='hidden' name='csrf' value='{_csrf(request)}'>"
+        "<div class='field'>"
+        "<label for='name'>Your Name</label>"
+        f"<input id='name' name='name' type='text' placeholder='e.g. Alex Morgan' value='{_escape(name)}' required maxlength='100'>"
+        "</div>"
+        "<div class='field'>"
+        "<label for='email'>Your Work Email</label>"
+        f"<input id='email' name='email' type='email' placeholder='name@company.com' value='{_escape(email)}' required maxlength='120'>"
+        "</div>"
+        "<div class='field'>"
+        "<label for='subject'>Subject</label>"
+        f"<input id='subject' name='subject' type='text' placeholder='e.g. Question about private repository auto-remediation' value='{_escape(subject)}' maxlength='150'>"
+        "</div>"
+        "<div class='field'>"
+        "<label for='message'>Message</label>"
+        f"<textarea id='message' name='message' rows='5' style='width:100%;padding:12px 13px;border-radius:9px;border:1px solid #34425e;background:#0b1324;color:var(--text);font:inherit;resize:vertical' placeholder='Tell us what you need help with...' required maxlength='3000'>{_escape(message)}</textarea>"
+        "</div>"
+        "<div class='actions' style='margin-top:22px'>"
+        "<button class='button primary' type='submit'>Send Message to Support</button>"
+        "<a class='button' href='/about'>About Founders</a>"
+        "</div>"
+        "</form>"
+        "<div style='margin-top:28px;padding-top:20px;border-top:1px solid #28182f;font-size:13px;color:var(--muted)'>"
+        "Direct founder inboxes: <a href='mailto:pranavvrao1@gmail.com'>pranavvrao1@gmail.com</a> · <a href='mailto:naveenachandra371@gmail.com'>naveenachandra371@gmail.com</a>"
+        "</div>"
+        "</section>"
+    )
+    return _response(body, request)
+
+
 def _page_home(request):
     if request.session:
         return _redirect("/admin" if _is_admin(request) else "/dashboard")
@@ -1147,6 +1238,17 @@ def _admin_view(request):
     chat_table = _table(["Visitor", "Status", "Latest Message", "Action"], chat_rows, "No visitor conversations yet.")
     chat_section = f"<h2 id='live-chats'>Live visitor conversations &amp; inquiries</h2>{chat_table}"
 
+    # Support messages
+    support_msgs = portal_db.admin_list_support_messages(20)
+    support_rows = []
+    for s in support_msgs:
+        support_rows.append(f"<tr><td><b>{_escape(s['name'])}</b><br><small class='muted'>{_escape(s['email'])}</small></td>"
+                            f"<td><b>{_escape(s['subject'])}</b><br><span style='font-size:13px;color:var(--muted)'>{_escape(s['message'])}</span></td>"
+                            f"<td><small class='muted'>{_escape(_fmt_time(s['created_at']))}</small></td>"
+                            f"<td><a class='button' href='mailto:{_escape(s['email'])}?subject=Re:%20{quote(s['subject'])}'>Reply by Email</a></td></tr>")
+    support_table = _table(["From", "Inquiry", "Time", "Action"], support_rows, "No support inquiries submitted yet.")
+    support_section = f"<h2 id='support-inquiries'>Support Inquiries (Contact Form)</h2>{support_table}" 
+
     admin_chat_modal = """
 <div id="admin-chat-modal" style="display:none;position:fixed;bottom:20px;right:20px;width:380px;height:520px;background:#120a1b;border:1px solid #ff4a3a66;border-radius:14px;box-shadow:0 15px 50px #000;z-index:99999;flex-direction:column;overflow:hidden">
   <div style="padding:12px 16px;background:#1e0f2c;border-bottom:1px solid #3a2338;display:flex;justify-content:space-between;align-items:center">
@@ -1213,6 +1315,7 @@ setInterval(() => {
             f"<h2>Applications</h2>{_table(['App', 'Owner', 'State', 'Last check-in', 'Open incidents'], project_rows, 'No applications connected yet.')}"
             f"<h2>Recent incidents and fixes</h2>{_table(['When', 'App', 'Error', 'Agent status', 'Fix'], incident_rows, 'No incidents yet.')}"
             f"{chat_section}"
+            f"{support_section}"
             f"{system}</section>" + admin_chat_modal)
     return _response(body, request)
 
@@ -2007,6 +2110,8 @@ def _dispatch(request: Request) -> Response:
         return _page_home(request)
     if request.method == "GET" and request.path in ("/about", "/about-us"):
         return _page_about(request)
+    if request.path in ("/contact", "/support"):
+        return _page_contact(request)
     if request.path in ("/onboarding/name", "/profile/name"):
         return _page_onboarding_name(request)
     if request.path == "/auth/google":
@@ -2074,7 +2179,7 @@ def _dispatch(request: Request) -> Response:
 def application(environ, start_response):
     try:
         request = Request(environ)
-        if request.method == "POST" and request.path not in ("/login", "/signup", "/webhooks/razorpay", "/ingest", "/heartbeat", "/api/visitor/track", "/api/chat/send", "/api/chat/save-contact") and not request.session:
+        if request.method == "POST" and request.path not in ("/login", "/signup", "/contact", "/support", "/webhooks/razorpay", "/ingest", "/heartbeat", "/api/visitor/track", "/api/chat/send", "/api/chat/save-contact") and not request.session:
             response = _redirect("/login")
         else:
             response = _dispatch(request)

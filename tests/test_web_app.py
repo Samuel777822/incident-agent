@@ -316,3 +316,49 @@ def test_chat_and_visitor_endpoints(web_env):
     cookie_user = f"{web_app.SESSION_COOKIE}={web_app._signed_cookie(s_id)}"
     status, _, _ = _request("/api/admin/chat/reply", method="POST", json_body={"conversation_id": conv_id, "text": "Hello!"}, cookie=cookie_user)
     assert status == "403 Forbidden"
+
+
+def test_contact_us_page_and_admin_notifications(web_env):
+    # 1. GET /contact renders form and sets CSRF cookie
+    status, headers, body = _request("/contact")
+    assert status == "200 OK"
+    assert "Contact Our Team" in body
+    assert "Your Work Email" in body
+    assert "Send Message to Support" in body
+
+    # Extract CSRF token and cookie (support both single and double quotes)
+    match = re.search(r"name=['\"]csrf['\"]\s+value=['\"]([^'\"]+)['\"]", body)
+    csrf = match.group(1) if match else "test-csrf"
+    csrf_cookie = _cookie_value(headers, web_app.CSRF_COOKIE)
+    contact_cookie = f"{web_app.CSRF_COOKIE}={csrf_cookie}"
+
+    # 2. POST /contact without required fields fails gracefully
+    status, _, body_fail = _request(
+        "/contact",
+        method="POST",
+        form={"csrf": csrf, "name": "Tester", "email": "bad-email", "message": ""},
+        cookie=contact_cookie,
+    )
+    assert status == "200 OK"
+    assert "Please provide your name, email, and message" in body_fail or "valid email" in body_fail
+
+    # 3. POST /contact with valid fields succeeds and creates support record
+    status, _, body_ok = _request(
+        "/contact",
+        method="POST",
+        form={
+            "csrf": csrf,
+            "name": "Alex Founder",
+            "email": "alex@startup.com",
+            "subject": "Enterprise monitoring question",
+            "message": "We have 15 microservices and want to use Agent Daemon.",
+        },
+        cookie=contact_cookie,
+    )
+    assert status == "200 OK"
+    assert "Thanks for reaching out!" in body_ok
+    assert "alex@startup.com" in body_ok
+
+    # Verify admin support messages list
+    support_items = web_app.portal_db.admin_list_support_messages(5)
+    assert any(s["email"] == "alex@startup.com" and "Enterprise" in s["subject"] for s in support_items)
