@@ -397,3 +397,57 @@ def test_help_center_page_and_navigation(web_env):
     import chatbot
     reply = chatbot.answer_visitor_query("How do I troubleshoot when my app shows offline?")
     assert "/help" in reply
+
+
+
+def test_structured_footer_and_all_links(web_env):
+    # 1. Verify structured 4-column footer on home page
+    status, _, body = _request("/")
+    assert status == "200 OK"
+    assert "footer-grid" in body
+    assert "Product" in body
+    assert "Company" in body
+    assert "Resources" in body
+    assert "Legal" in body
+
+    # 2. Verify all Product links
+    for path, expected_text in [
+        ("/features", "Platform Capabilities"),
+        ("/pricing", "Simple &amp; Transparent Plans"),
+        ("/docs", "Agent Daemon Help Centre"),
+        ("/changelog", "Product Releases"),
+    ]:
+        st, _, b = _request(path)
+        assert st == "200 OK", f"Failed for {path}: {st}"
+        assert expected_text in b, f"Missing text for {path}"
+
+    # 3. Verify all Company links
+    for path, expected_text in [
+        ("/about", "About Us &amp; Co-Founders"),
+        ("/contact", "Contact Our Team"),
+        ("/partnerships", "Partner with Agent Daemon"),
+        ("/careers", "Build the Future of Autonomous Systems Engineering"),
+    ]:
+        st, _, b = _request(path)
+        assert st == "200 OK", f"Failed for {path}: {st}"
+        assert expected_text in b, f"Missing text for {path}"
+
+    # 4. Verify all Resources links
+    for path, expected_text in [
+        ("/faq", "Frequently Asked Questions"),
+        ("/help", "Agent Daemon Help Centre"),
+        ("/status", "Agent Daemon System Status"),
+    ]:
+        st, _, b = _request(path)
+        assert st == "200 OK", f"Failed for {path}: {st}"
+        assert expected_text in b, f"Missing text for {path}"
+
+    # 5. Verify all Legal links
+    for path, expected_text in [
+        ("/privacy", "Privacy Policy"),
+        ("/terms", "Terms of Service"),
+        ("/cookies", "Cookie Policy"),
+    ]:
+        st, _, b = _request(path)
+        assert st == "200 OK", f"Failed for {path}: {st}"
+        assert expected_text in b, f"Missing text for {path}"

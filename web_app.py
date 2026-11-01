@@ -35,6 +35,7 @@ import notifications
 import chatbot
 import chat_widget
 import portal_db
+import footer_pages
 from monitoring_installer import resolve_branch, GitHubInstallError, open_monitoring_pr, validate_repository_access
 
 APP_NAME = "Agent Daemon"
@@ -161,6 +162,20 @@ a.card:hover{box-shadow:0 20px 60px #0009,0 0 28px #9a4dff44;transform:translate
 .mission-card{text-align:center;padding:38px 28px;margin-bottom:50px}
 .mission-card h3{font-size:24px;margin:0 0 12px;color:var(--silver)}
 .mission-card p{max-width:680px;margin:0 auto 22px;color:var(--muted);font-size:16px;line-height:1.6}
+
+
+/* ===== Structured 4-Column Footer ===== */
+.footer{border-top:1px solid;border-image:linear-gradient(90deg,#e11d2a55,#9a4dff55 60%,transparent) 1;padding:50px 0 38px;color:var(--muted);font-size:14px}
+.footer-grid{display:grid;grid-template-columns:repeat(4,1fr);gap:36px;margin-bottom:44px}
+.footer-col{display:flex;flex-direction:column}
+.footer-heading{font-family:var(--serif);font-size:15px;font-weight:700;color:var(--text);letter-spacing:.04em;margin-bottom:16px}
+.footer-links{list-style:none;padding:0;margin:0;display:flex;flex-direction:column;gap:12px}
+.footer-links li a{color:#a99dbb;font-size:14px;text-decoration:none;transition:all .18s ease}
+.footer-links li a:hover{color:#ff8a7a;text-decoration:none;transform:translateX(2px);display:inline-block}
+.footer-bottom{display:flex;justify-content:space-between;align-items:center;flex-wrap:wrap;gap:16px;padding-top:28px;border-top:1px solid #ffffff12}
+.footer-brand-line{display:flex;align-items:center;gap:12px;flex-wrap:wrap}
+@media(max-width:768px){.footer-grid{grid-template-columns:repeat(2,1fr);gap:28px}.footer-bottom{flex-direction:column;align-items:flex-start}}
+@media(max-width:440px){.footer-grid{grid-template-columns:1fr}}
 
 /* ===== Help Centre & Troubleshooting ===== */
 .help-hero{text-align:center;padding:min(12vh,90px) 0 24px;max-width:860px;margin:0 auto}
@@ -421,7 +436,7 @@ def _layout(title: str, body: str, request: Request | None = None) -> str:
             links = '<a href="/about">About us</a><a href="/help">Help Center</a><a href="/contact">Contact</a><a href="/dashboard">Projects</a><a href="/billing">Plan &amp; billing</a>' + signout
     else:
         links = '<a href="/about">About us</a><a href="/help">Help Center</a><a href="/contact">Contact</a><a class="button primary" href="/login">Sign in with Google</a>'
-    return f"""<!doctype html><html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><meta name="description" content="AI incident response for Python apps"><title>{_escape(title)} · {APP_NAME}</title><link rel="preconnect" href="https://fonts.googleapis.com"><link rel="preconnect" href="https://fonts.gstatic.com" crossorigin><link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Cinzel:wght@500;700&amp;family=Cinzel+Decorative:wght@700&amp;display=swap"><style>{CSS}</style></head><body><header class="wrap nav"><a class="brand" href="/"><span class="brand-mark">A</span>{APP_NAME}</a><nav class="navlinks">{links}</nav></header><main class="wrap">{body}</main><footer class="wrap footer"><div style="display:flex;justify-content:space-between;align-items:center;flex-wrap:wrap;gap:12px"><span>Agent Daemon · Your changes stay reviewable and reversible.</span><span><a href="/about">About us</a> · <a href="/help">Help Center</a> · <a href="/contact">Contact Support</a> · <a href="https://github.com/Samuel777822/incident-agent" target="_blank" rel="noopener">GitHub</a></span></div></footer><script src="/assets/chat.js" defer></script></body></html>"""
+    return f"""<!doctype html><html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><meta name="description" content="AI incident response for Python apps"><title>{_escape(title)} · {APP_NAME}</title><link rel="preconnect" href="https://fonts.googleapis.com"><link rel="preconnect" href="https://fonts.gstatic.com" crossorigin><link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Cinzel:wght@500;700&amp;family=Cinzel+Decorative:wght@700&amp;display=swap"><style>{CSS}</style></head><body><header class="wrap nav"><a class="brand" href="/"><span class="brand-mark">A</span>{APP_NAME}</a><nav class="navlinks">{links}</nav></header><main class="wrap">{body}</main>{footer_pages.render_footer_html()}<script src="/assets/chat.js" defer></script></body></html>"""
 
 
 def _csrf(request: Request) -> str:
@@ -2555,6 +2570,26 @@ def _dispatch(request: Request) -> Response:
         return _page_about(request)
     if request.method == "GET" and request.path in ("/help", "/docs", "/help-center", "/troubleshooting"):
         return _page_help(request)
+    if request.method == "GET" and request.path == "/features":
+        return _response(footer_pages.features_page_html(), request, status="200 OK")
+    if request.method == "GET" and request.path == "/pricing":
+        return _response(footer_pages.pricing_page_html(signed_in=bool(request.session)), request, status="200 OK")
+    if request.method == "GET" and request.path == "/changelog":
+        return _response(footer_pages.changelog_page_html(), request, status="200 OK")
+    if request.method == "GET" and request.path == "/partnerships":
+        return _response(footer_pages.partnerships_page_html(), request, status="200 OK")
+    if request.method == "GET" and request.path == "/careers":
+        return _response(footer_pages.careers_page_html(), request, status="200 OK")
+    if request.method == "GET" and request.path in ("/faq", "/questions"):
+        return _response(footer_pages.faq_page_html(), request, status="200 OK")
+    if request.method == "GET" and request.path in ("/status", "/system-status"):
+        return _response(footer_pages.system_status_page_html(), request, status="200 OK")
+    if request.method == "GET" and request.path in ("/privacy", "/privacy-policy"):
+        return _response(footer_pages.privacy_policy_page_html(), request, status="200 OK")
+    if request.method == "GET" and request.path in ("/terms", "/terms-of-service", "/tos"):
+        return _response(footer_pages.terms_of_service_page_html(), request, status="200 OK")
+    if request.method == "GET" and request.path in ("/cookies", "/cookie-policy"):
+        return _response(footer_pages.cookie_policy_page_html(), request, status="200 OK")
     if request.path in ("/contact", "/support"):
         return _page_contact(request)
     if request.path in ("/onboarding/name", "/profile/name"):
