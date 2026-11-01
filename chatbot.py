@@ -40,8 +40,14 @@ PRICING & PLANS:
 - Paid Yearly: ₹1,000 for 365 days.
 - Payment method: Instant Paytm UPI QR with admin UTR confirmation.
 
+HELP CENTRE, DEMO & TROUBLESHOOTING:
+- Help Centre URL: /help (also /docs, /help-center, /troubleshooting).
+- Video Demo & Walkthrough: https://www.youtube.com/watch?v=Y3neE_B2d-M (shows autonomous detection, diagnosis, fix PR, and auto-merge on a live coffee shop API).
+- Guides include: GitHub token setup (repo & workflow scopes), zero-touch installer, manual integration for Flask, FastAPI, Django, and WSGI.
+- Troubleshooting playbooks: solving 'Offline' status, GitHub API 401/403/404 errors, auto-fix 'needs_human' safety gates, CI check auto-merge rules, and Render idle sleep.
+
 CONTACT & LIVE SUPPORT:
-Founders are available directly via this chat or by email:
+Founders are available directly via this chat, our Contact form at /contact, or by email:
 - pranavvrao1@gmail.com
 - naveenachandra371@gmail.com
 """
@@ -91,6 +97,12 @@ def answer_visitor_query(user_text: str, history: list[dict] | None = None) -> s
             log.warning("Groq chatbot call failed: %s; using deterministic fallback", e)
 
     # Deterministic fallback responses
+    if any(k in text_lower for k in ("help", "guide", "doc", "troubleshoot", "demo", "video", "offline", "tutorial", "how to")):
+        return (
+            "You can find complete setup guides, troubleshooting playbooks, and our full video walkthrough demo "
+            "in our Help Centre at /help! You can also view our contact page at /contact to reach our founders directly."
+        )
+
     if any(k in text_lower for k in ("price", "cost", "plan", "free", "trial", "payment", "pay", "upi")):
         return (
             "Agent Daemon offers a 1-day free trial so you can test it on your repository. "

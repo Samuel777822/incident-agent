@@ -362,3 +362,38 @@ def test_contact_us_page_and_admin_notifications(web_env):
     # Verify admin support messages list
     support_items = web_app.portal_db.admin_list_support_messages(5)
     assert any(s["email"] == "alex@startup.com" and "Enterprise" in s["subject"] for s in support_items)
+
+
+
+def test_help_center_page_and_navigation(web_env):
+    # 1. GET /help renders full help centre
+    status, _, body = _request("/help")
+    assert status == "200 OK"
+    assert "Agent Daemon Help Centre" in body
+    assert "Y3neE_B2d-M" in body  # YouTube video ID embed
+    assert "Remediation Modes" in body
+    assert "Automatic Mode" in body
+    assert "Pull Request Only" in body
+    assert "Report Only" in body
+    assert "Troubleshooting Playbooks" in body
+    assert "Offline" in body
+    assert "GitHub Installation PR Fails" in body
+    assert "Auto-Fix Skipped or Marked" in body
+    assert "Fix PR Opened on GitHub but Not Auto-Merging" in body
+    assert "FastAPI" in body and "Flask" in body and "Django" in body
+    assert "help-search" in body
+
+    # 2. Aliases /docs, /help-center, /troubleshooting also work
+    for alias in ("/docs", "/help-center", "/troubleshooting"):
+        alias_status, _, alias_body = _request(alias)
+        assert alias_status == "200 OK"
+        assert "Agent Daemon Help Centre" in alias_body
+
+    # 3. Header and footer navigation contain Help Center link
+    _, _, home_body = _request("/")
+    assert '<a href="/help">Help Center</a>' in home_body
+
+    # 4. Chatbot recognizes help queries
+    import chatbot
+    reply = chatbot.answer_visitor_query("How do I troubleshoot when my app shows offline?")
+    assert "/help" in reply

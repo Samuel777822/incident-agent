@@ -162,6 +162,52 @@ a.card:hover{box-shadow:0 20px 60px #0009,0 0 28px #9a4dff44;transform:translate
 .mission-card h3{font-size:24px;margin:0 0 12px;color:var(--silver)}
 .mission-card p{max-width:680px;margin:0 auto 22px;color:var(--muted);font-size:16px;line-height:1.6}
 
+/* ===== Help Centre & Troubleshooting ===== */
+.help-hero{text-align:center;padding:min(12vh,90px) 0 24px;max-width:860px;margin:0 auto}
+.help-hero h1{font-family:var(--display);font-size:clamp(30px,4.5vw,46px);margin:12px 0 14px;background:linear-gradient(180deg,#fff,#d4cadf 55%,#8e8499);-webkit-background-clip:text;background-clip:text;color:transparent}
+.help-hero p{font-size:17px;line-height:1.6;color:var(--muted);margin:0}
+.help-search-bar{max-width:620px;margin:24px auto 0;position:relative}
+.help-search-input{width:100%;padding:14px 18px 14px 44px;border-radius:12px;border:1px solid #4a2f4c;background:#140c1fe6;color:var(--text);font:inherit;font-size:15px;backdrop-filter:blur(10px);box-shadow:0 8px 30px #0008;transition:all .2s ease}
+.help-search-input:focus{border-color:var(--crimson);box-shadow:0 0 0 3px #e11d2a33,0 0 24px #9a4dff33;outline:none}
+.help-search-icon{position:absolute;left:15px;top:50%;transform:translateY(-50%);font-size:16px;pointer-events:none}
+.help-pills{display:flex;justify-content:center;flex-wrap:wrap;gap:10px;margin:26px 0 36px}
+.help-pill{padding:8px 16px;border-radius:99px;background:#ffffff0a;border:1px solid #ffffff1e;color:#d8cde6;font-size:13px;font-weight:600;cursor:pointer;transition:all .18s ease;text-decoration:none}
+.help-pill:hover,.help-pill.active{background:linear-gradient(120deg,#d1121f 0%,#5b1fa8 100%);border-color:#ff4a3a88;color:#fff;text-decoration:none;box-shadow:0 0 14px #e11d2a44}
+.video-card{background:linear-gradient(160deg,#190d23,#0e0816);border:1px solid #47264a;border-radius:16px;overflow:hidden;box-shadow:0 24px 60px #000c;margin:24px 0 44px}
+.video-frame-wrap{position:relative;padding-bottom:56.25%;height:0;overflow:hidden;background:#000}
+.video-frame-wrap iframe{position:absolute;top:0;left:0;width:100%;height:100%;border:0}
+.video-info{padding:22px 26px;display:flex;justify-content:space-between;align-items:center;flex-wrap:wrap;gap:16px;border-top:1px solid #361c38}
+.video-info h3{margin:0 0 6px;font-size:20px;color:var(--silver);font-family:var(--serif)}
+.video-info p{margin:0;color:var(--muted);font-size:14px;max-width:680px;line-height:1.5}
+.help-section{margin:40px 0}
+.help-section-title{font-family:var(--serif);font-size:23px;margin:0 0 18px;display:flex;align-items:center;gap:12px;color:var(--silver)}
+.help-section-title::before{content:"";width:4px;height:22px;border-radius:2px;background:linear-gradient(180deg,var(--crimson),var(--violet))}
+.accordion-group{display:flex;flex-direction:column;gap:12px}
+.accordion-item{border:1px solid #341e3a;border-radius:12px;background:linear-gradient(160deg,#160b20cc,#0c0612d9);overflow:hidden;transition:all .2s ease}
+.accordion-item:hover{border-color:#5a2e63}
+.accordion-item[open]{border-color:#e11d2a66;box-shadow:0 0 20px #e11d2a1a}
+.accordion-summary{padding:16px 20px;cursor:pointer;font-weight:600;font-size:15px;color:var(--text);display:flex;justify-content:space-between;align-items:center;user-select:none}
+.accordion-summary::-webkit-details-marker{display:none}
+.accordion-summary::after{content:"+";font-size:18px;font-weight:700;color:#ff8a7a;transition:transform .2s ease}
+.accordion-item[open] .accordion-summary::after{content:"−";color:var(--violet)}
+.accordion-body{padding:0 20px 20px;color:#d1c4df;font-size:14px;line-height:1.65;border-top:1px solid #28142e}
+.accordion-body p{margin:12px 0 8px}
+.accordion-body ul,.accordion-body ol{margin:8px 0;padding-left:22px}
+.accordion-body li{margin:5px 0}
+.code-box{background:#09050d;border:1px solid #2f1736;border-radius:8px;padding:12px 14px;font-family:Consolas,Monaco,monospace;font-size:13px;color:#ffb8ac;overflow-x:auto;margin:10px 0;white-space:pre}
+.badge-tag{display:inline-block;padding:2px 8px;border-radius:6px;font-size:11px;font-weight:600;text-transform:uppercase;margin-right:8px}
+.badge-tag.bug{background:#45141b;color:#ff8a7a;border:1px solid #73222e}
+.badge-tag.setup{background:#163229;color:#6fe0b0;border:1px solid #235c4b}
+.badge-tag.git{background:#231a3b;color:#b98aff;border:1px solid #432e6e}
+.badge-tag.mode{background:#2e1f0e;color:#f0cf8a;border:1px solid #6b5320}
+.modes-grid{display:grid;grid-template-columns:repeat(auto-fit,minmax(270px,1fr));gap:18px;margin:18px 0 28px}
+.mode-card{padding:22px 20px;border-radius:12px;background:linear-gradient(160deg,#180c24,#0e0716);border:1px solid #3d2144;position:relative}
+.mode-card h4{margin:0 0 8px;font-size:17px;color:var(--text);display:flex;align-items:center;gap:8px;font-family:var(--serif)}
+.mode-card p{margin:0;font-size:13.5px;color:var(--muted);line-height:1.55}
+.chapter-list{display:grid;grid-template-columns:repeat(auto-fit,minmax(260px,1fr));gap:10px;margin-top:14px}
+.chapter-item{padding:10px 14px;background:#140a1d;border:1px solid #2d1830;border-radius:8px;font-size:13px;color:var(--muted)}
+.chapter-item b{color:#ff8a7a;margin-right:6px}
+
 """
 
 
@@ -370,12 +416,12 @@ def _layout(title: str, body: str, request: Request | None = None) -> str:
         signout = ('<form method="post" action="/logout" style="display:inline">'
                    f'<input type="hidden" name="csrf" value="{_csrf(request)}"><button class="button" type="submit">Sign out</button></form>')
         if _is_admin(request):
-            links = '<a href="/about">About us</a><a href="/contact">Contact</a><a href="/admin">Admin</a>' + signout
+            links = '<a href="/about">About us</a><a href="/help">Help Center</a><a href="/contact">Contact</a><a href="/admin">Admin</a>' + signout
         else:
-            links = '<a href="/about">About us</a><a href="/contact">Contact</a><a href="/dashboard">Projects</a><a href="/billing">Plan &amp; billing</a>' + signout
+            links = '<a href="/about">About us</a><a href="/help">Help Center</a><a href="/contact">Contact</a><a href="/dashboard">Projects</a><a href="/billing">Plan &amp; billing</a>' + signout
     else:
-        links = '<a href="/about">About us</a><a href="/contact">Contact</a><a class="button primary" href="/login">Sign in with Google</a>'
-    return f"""<!doctype html><html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><meta name="description" content="AI incident response for Python apps"><title>{_escape(title)} · {APP_NAME}</title><link rel="preconnect" href="https://fonts.googleapis.com"><link rel="preconnect" href="https://fonts.gstatic.com" crossorigin><link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Cinzel:wght@500;700&amp;family=Cinzel+Decorative:wght@700&amp;display=swap"><style>{CSS}</style></head><body><header class="wrap nav"><a class="brand" href="/"><span class="brand-mark">A</span>{APP_NAME}</a><nav class="navlinks">{links}</nav></header><main class="wrap">{body}</main><footer class="wrap footer"><div style="display:flex;justify-content:space-between;align-items:center;flex-wrap:wrap;gap:12px"><span>Agent Daemon · Your changes stay reviewable and reversible.</span><span><a href="/about">About us</a> · <a href="/contact">Contact Support</a> · <a href="https://github.com/Samuel777822/incident-agent" target="_blank" rel="noopener">GitHub</a></span></div></footer><script src="/assets/chat.js" defer></script></body></html>"""
+        links = '<a href="/about">About us</a><a href="/help">Help Center</a><a href="/contact">Contact</a><a class="button primary" href="/login">Sign in with Google</a>'
+    return f"""<!doctype html><html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><meta name="description" content="AI incident response for Python apps"><title>{_escape(title)} · {APP_NAME}</title><link rel="preconnect" href="https://fonts.googleapis.com"><link rel="preconnect" href="https://fonts.gstatic.com" crossorigin><link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Cinzel:wght@500;700&amp;family=Cinzel+Decorative:wght@700&amp;display=swap"><style>{CSS}</style></head><body><header class="wrap nav"><a class="brand" href="/"><span class="brand-mark">A</span>{APP_NAME}</a><nav class="navlinks">{links}</nav></header><main class="wrap">{body}</main><footer class="wrap footer"><div style="display:flex;justify-content:space-between;align-items:center;flex-wrap:wrap;gap:12px"><span>Agent Daemon · Your changes stay reviewable and reversible.</span><span><a href="/about">About us</a> · <a href="/help">Help Center</a> · <a href="/contact">Contact Support</a> · <a href="https://github.com/Samuel777822/incident-agent" target="_blank" rel="noopener">GitHub</a></span></div></footer><script src="/assets/chat.js" defer></script></body></html>"""
 
 
 def _csrf(request: Request) -> str:
@@ -391,7 +437,7 @@ def _csrf(request: Request) -> str:
 def _response(body, request=None, status="200 OK", headers=None):
     defaults = [("Content-Type", "text/html; charset=utf-8"), ("Cache-Control", "no-store"),
                 ("X-Content-Type-Options", "nosniff"), ("Referrer-Policy", "same-origin"),
-                ("Content-Security-Policy", "default-src 'self'; style-src 'self' 'unsafe-inline' https://fonts.googleapis.com; font-src 'self' https://fonts.gstatic.com; img-src 'self' data:; form-action 'self'; frame-ancestors 'none'; base-uri 'none'")]
+                ("Content-Security-Policy", "default-src 'self'; style-src 'self' 'unsafe-inline' https://fonts.googleapis.com; font-src 'self' https://fonts.gstatic.com; img-src 'self' data: https://i.ytimg.com https://img.youtube.com; frame-src 'self' https://www.youtube.com https://www.youtube-nocookie.com; form-action 'self'; frame-ancestors 'none'; base-uri 'none'")]
     response = Response(_layout("Agent Daemon", body, request), status, defaults + list(headers or []))
     if request and request.new_csrf_cookie:
         response.headers.append(request.new_csrf_cookie)
@@ -902,6 +948,403 @@ def _api_admin_chat_messages(request: Request) -> Response:
     after = request.query.get("after", [""])[0]
     msgs = portal_db.list_chat_messages(conv_id, after_time=after) if conv_id else []
     return Response(json.dumps({"messages": msgs}), "200 OK", [("Content-Type", "application/json")])
+
+
+
+def _page_help(request: Request) -> Response:
+    body = """<section class="help-hero">
+<div class="eyebrow">Documentation &amp; Support</div>
+<h1>Agent Daemon Help Centre</h1>
+<p>Guides, architecture workflows, video demonstration, framework setup, and troubleshooting playbooks to keep your production Python services self-healing.</p>
+
+<div class="help-search-bar">
+  <span class="help-search-icon" aria-hidden="true">&#128269;</span>
+  <input id="help-search" class="help-search-input" type="search" placeholder="Search guides, errors, tokens, GitHub setup, auto-fix, offline..." oninput="filterHelp(this.value)">
+</div>
+
+<nav class="help-pills">
+  <a class="help-pill active" href="javascript:void(0)" onclick="filterCategory('all', this)">All Topics</a>
+  <a class="help-pill" href="javascript:void(0)" onclick="filterCategory('video', this)">Video Demo</a>
+  <a class="help-pill" href="javascript:void(0)" onclick="filterCategory('modes', this)">Remediation Modes</a>
+  <a class="help-pill" href="javascript:void(0)" onclick="filterCategory('setup', this)">GitHub &amp; Setup</a>
+  <a class="help-pill" href="javascript:void(0)" onclick="filterCategory('frameworks', this)">Frameworks</a>
+  <a class="help-pill" href="javascript:void(0)" onclick="filterCategory('troubleshooting', this)">Troubleshooting</a>
+  <a class="help-pill" href="javascript:void(0)" onclick="filterCategory('faq', this)">FAQ</a>
+</nav>
+</section>
+
+<!-- 1. Video Demo Section -->
+<section class="video-card help-section" id="video" data-category="video">
+  <div class="video-frame-wrap">
+    <iframe src="https://www.youtube-nocookie.com/embed/Y3neE_B2d-M" title="Agent Daemon Demo &amp; Walkthrough" allow="accelerometer; autoplay; clipboard-write; encrypted-media; gyroscope; picture-in-picture" allowfullscreen loading="lazy"></iframe>
+  </div>
+  <div class="video-info">
+    <div>
+      <h3>Full Video Walkthrough &amp; Live Demo</h3>
+      <p>Watch how Agent Daemon monitors a live Python app (Coffee Shop API), catches a real-world checkout bug deployed to Render, diagnoses the root cause, generates a verified fix PR, and auto-merges it without human intervention.</p>
+    </div>
+    <div style="display:flex;gap:10px;align-items:center">
+      <a class="button primary" href="https://www.youtube.com/watch?v=Y3neE_B2d-M" target="_blank" rel="noopener">Watch on YouTube &#8599;</a>
+      <a class="button" href="/contact">Ask Questions</a>
+    </div>
+  </div>
+  <div style="padding:16px 26px 22px;background:#11091a;border-top:1px solid #28142e">
+    <div style="font-size:12px;font-weight:700;letter-spacing:.08em;color:#ff8a7a;text-transform:uppercase;margin-bottom:8px">Video Key Moments &amp; Chapters</div>
+    <div class="chapter-list">
+      <div class="chapter-item"><b>0:00 &ndash; 0:45</b> What Agent Daemon is &amp; the autonomous on-call AI engineer mission.</div>
+      <div class="chapter-item"><b>0:45 &ndash; 1:15</b> Google sign-in &amp; plans: Monthly (&#8377;100), Yearly (&#8377;1,000), or 1-day free trial.</div>
+      <div class="chapter-item"><b>1:15 &ndash; 2:00</b> Connecting a repository via GitHub PAT and zero-touch monitoring installer.</div>
+      <div class="chapter-item"><b>2:00 &ndash; 2:40</b> Live demo: production coffee shop API running with healthy payments.</div>
+      <div class="chapter-item"><b>2:40 &ndash; 3:15</b> Inducing a live checkout failure &amp; deploying to Render. Error alerted immediately!</div>
+      <div class="chapter-item"><b>3:15 &ndash; 3:50</b> AI diagnosis: stack trace analyzed, culprit lines traced, and safe patch generated.</div>
+      <div class="chapter-item"><b>3:50 &ndash; 4:25</b> Fix pull request opened on GitHub &amp; GitHub Actions CI test suite runs.</div>
+      <div class="chapter-item"><b>4:25 &ndash; 4:55</b> Autonomous auto-merge: checks pass, PR squashes into main, Render redeploys fixed app!</div>
+      <div class="chapter-item"><b>4:55 &ndash; 5:15</b> Incident post-mortem report, cause explanation, unified diff, &amp; admin console.</div>
+    </div>
+  </div>
+</section>
+
+<!-- 2. Remediation Modes Section -->
+<section class="help-section" id="modes" data-category="modes">
+  <h2 class="help-section-title">Remediation Modes: How Much Autonomy Do You Want?</h2>
+  <p class="muted">You control the degree of autonomy for each connected repository. Switch modes at any time on your project settings page:</p>
+  
+  <div class="modes-grid">
+    <article class="mode-card">
+      <div style="margin-bottom:8px"><span class="badge-tag mode" style="background:#163229;color:#6fe0b0;border-color:#235c4b">Fully Autonomous</span></div>
+      <h4>Automatic Mode (<code>auto</code>)</h4>
+      <p>The complete self-healing loop shown in the demo video. When an incident occurs, Agent Daemon diagnoses the cause, writes a surgical patch, creates a branch, opens a PR, waits for your GitHub Actions CI tests to pass, and automatically squash-merges into your base branch. Requires a private repository.</p>
+    </article>
+
+    <article class="mode-card">
+      <div style="margin-bottom:8px"><span class="badge-tag mode" style="background:#231a3b;color:#b98aff;border-color:#432e6e">Recommended Default</span></div>
+      <h4>Pull Request Only (<code>pr_only</code>)</h4>
+      <p>Human-in-the-loop remediation. Agent Daemon analyzes the failure, generates a syntax-validated patch, and opens a GitHub Pull Request with the unified diff and incident explanation. Merging is left to your developers. Ideal for production teams requiring manual review.</p>
+    </article>
+
+    <article class="mode-card">
+      <div style="margin-bottom:8px"><span class="badge-tag mode">Triage &amp; Observability</span></div>
+      <h4>Report Only (<code>report_only</code>)</h4>
+      <p>Non-intrusive error monitoring. Clusters repeated exceptions into incidents, explains the likely root cause and culprit commits, and suggests manual fix recommendations on your dashboard. Does not create branches or open pull requests.</p>
+    </article>
+  </div>
+</section>
+
+<!-- 3. GitHub & Setup Guides -->
+<section class="help-section" id="setup" data-category="setup">
+  <h2 class="help-section-title">Getting Started &amp; GitHub Configuration</h2>
+  <div class="accordion-group">
+
+    <details class="accordion-item" open>
+      <summary class="accordion-summary">
+        <span><span class="badge-tag setup">Step 1</span> How to generate a classic GitHub Personal Access Token (PAT)</span>
+      </summary>
+      <div class="accordion-body">
+        <p>Agent Daemon interacts with GitHub using a <b>classic personal access token</b>. Here is how to create one in 60 seconds:</p>
+        <ol>
+          <li>On <b>github.com</b>, click your profile avatar in the top right &rarr; <b>Settings</b>.</li>
+          <li>In the left sidebar, scroll to the bottom and click <b>Developer settings</b>.</li>
+          <li>Click <b>Personal access tokens</b> &rarr; <b>Tokens (classic)</b>.</li>
+          <li>Click <b>Generate new token</b> &rarr; <b>Generate new token (classic)</b>.</li>
+          <li>Set Note to <code>Agent Daemon</code> and choose an expiration duration (e.g. 90 days or no expiration).</li>
+          <li>Check exactly two permission scopes:
+            <ul>
+              <li><code>repo</code> &mdash; Full control of private repositories (to read source evidence, create fix branches, and open pull requests).</li>
+              <li><code>workflow</code> &mdash; Update GitHub Action workflows (used to install automated test validation).</li>
+            </ul>
+          </li>
+          <li>Click <b>Generate token</b> at the bottom. <b>Copy your token immediately</b> &mdash; GitHub will not show it again.</li>
+        </ol>
+        <p><b>Security note:</b> Tokens are encrypted at rest with Fernet (AES-128-CBC + HMAC) using <code>TOKEN_ENCRYPTION_KEY</code> and are never logged or stored in plain text. You can revoke the token on GitHub at any time to cut off access.</p>
+      </div>
+    </details>
+
+    <details class="accordion-item">
+      <summary class="accordion-summary">
+        <span><span class="badge-tag setup">Step 2</span> Connecting your repository &amp; Zero-Touch Installer</span>
+      </summary>
+      <div class="accordion-body">
+        <p>Once you have access (via trial or plan), navigate to <b><a href="/projects/new">Projects &rarr; Connect repository</a></b>:</p>
+        <ol>
+          <li>Enter the repository <b>Owner / Name</b> (e.g. <code>my-org/backend-api</code>).</li>
+          <li>Select your base branch (e.g. <code>main</code> or leave empty for default).</li>
+          <li>Choose your remediation mode (<code>Automatic</code>, <code>Pull request</code>, or <code>Report only</code>).</li>
+          <li>Paste your classic GitHub token and click <b>Connect project</b>.</li>
+        </ol>
+        <p><b>What the Zero-Touch Installer does automatically:</b></p>
+        <ul>
+          <li>Opens a pull request that adds <code>incident_agent_monitor.py</code> (the lightweight client).</li>
+          <li>Inserts <code>import incident_agent_monitor</code> at the top of your app entry point (e.g. <code>app.py</code>, <code>main.py</code>, <code>wsgi.py</code>).</li>
+          <li>Creates <code>incident_agent_config.json</code> with your project's ingest URL and unique ingest key.</li>
+          <li>Adds <code>.github/workflows/agent-daemon-tests.yml</code> so PRs have test validation checks.</li>
+          <li>Auto-merges the PR if repository permissions allow, or provides a direct link to merge on GitHub.</li>
+        </ul>
+      </div>
+    </details>
+
+    <details class="accordion-item">
+      <summary class="accordion-summary">
+        <span><span class="badge-tag setup">Step 3</span> Repository Privacy &amp; Public vs. Private Repos</span>
+      </summary>
+      <div class="accordion-body">
+        <p>Agent Daemon treats public and private repositories differently for strict security reasons:</p>
+        <ul>
+          <li><b>Private repositories:</b> Support all three modes (<code>Automatic</code>, <code>Pull request</code>, <code>Report only</code>). Your ingest key and source files remain confidential.</li>
+          <li><b>Public repositories:</b> Automatically locked to <b>Pull request only</b> mode. Because ingest keys in public repositories are visible to anyone, auto-merge is prohibited to prevent malicious error injections from pushing unauthorized code into production. A human must always review and merge PRs in public repos.</li>
+        </ul>
+      </div>
+    </details>
+
+  </div>
+</section>
+
+<!-- 4. Framework Integration Guides -->
+<section class="help-section" id="frameworks" data-category="frameworks">
+  <h2 class="help-section-title">Framework Setup &amp; Manual Integration</h2>
+  <p class="muted">If you prefer manual setup rather than the automated PR, or use custom entrypoints, simply drop <code>incident_agent_monitor.py</code> into your project root and add one line to your app:</p>
+
+  <div class="accordion-group">
+
+    <details class="accordion-item" open>
+      <summary class="accordion-summary">
+        <span><span class="badge-tag setup">Framework</span> Flask, FastAPI, Django, &amp; WSGI Integration</span>
+      </summary>
+      <div class="accordion-body">
+        <p><b>Flask (<code>app.py</code> or <code>wsgi.py</code>):</b></p>
+        <div class="code-box">import incident_agent_monitor  # noqa: F401 (Agent Daemon error monitoring)
+from flask import Flask
+
+app = Flask(__name__)
+
+@app.route("/")
+def index():
+    return "Hello Production"</div>
+
+        <p><b>FastAPI / Starlette / ASGI (<code>main.py</code>):</b></p>
+        <div class="code-box">import incident_agent_monitor  # Starts error hook &amp; heartbeat thread
+from fastapi import FastAPI
+
+app = FastAPI()
+
+@app.get("/")
+def read_root():
+    return {"status": "ok"}</div>
+
+        <p><b>Django (<code>wsgi.py</code> or <code>asgi.py</code>):</b></p>
+        <div class="code-box">import incident_agent_monitor  # Place before get_wsgi_application()
+import os
+from django.core.wsgi import get_wsgi_application
+
+os.environ.setdefault("DJANGO_SETTINGS_MODULE", "myproject.settings")
+application = get_wsgi_application()</div>
+      </div>
+    </details>
+
+    <details class="accordion-item">
+      <summary class="accordion-summary">
+        <span><span class="badge-tag setup">Config</span> Configuration file: <code>incident_agent_config.json</code></span>
+      </summary>
+      <div class="accordion-body">
+        <p>Place this file in the working directory of your app (the same folder where your Python command is executed):</p>
+        <div class="code-box">{
+  "ingest_url": "https://incident-agent-portal.onrender.com/ingest",
+  "ingest_key": "YOUR_PROJECT_INGEST_KEY"
+}</div>
+        <p>The client will automatically load this config, spawn a daemonized heartbeat thread that reports health every 5 minutes, and attach an uncaught exception hook (<code>sys.excepthook</code>) and root logging handler.</p>
+      </div>
+    </details>
+
+  </div>
+</section>
+
+<!-- 5. Troubleshooting Playbooks -->
+<section class="help-section" id="troubleshooting" data-category="troubleshooting">
+  <h2 class="help-section-title">Troubleshooting Playbooks &amp; Failure Modes</h2>
+  <p class="muted">Direct solutions for common issues based on Agent Daemon's architecture and safety gates:</p>
+
+  <div class="accordion-group">
+
+    <details class="accordion-item" open>
+      <summary class="accordion-summary">
+        <span><span class="badge-tag bug">Issue 1</span> Project shows "Offline" / No Heartbeat Received</span>
+      </summary>
+      <div class="accordion-body">
+        <p><b>Symptom:</b> The dashboard project badge says <code>Offline</code> or "Last check-in: Never / 3 hours ago".</p>
+        <p><b>Root Causes &amp; Solutions:</b></p>
+        <ol>
+          <li><b>App has not restarted since monitoring was merged:</b> Deploy or restart your application so the new <code>import incident_agent_monitor</code> line is executed.</li>
+          <li><b>Free tier hosting is sleeping:</b> Services on Render, Railway, or Fly.io free tiers sleep after 15 minutes without web requests. Once asleep, the background heartbeat stops. Send a request to your app or configure a free pinger (e.g. UptimeRobot) hitting your app's health route every 10 minutes.</li>
+          <li><b>Missing <code>incident_agent_config.json</code>:</b> Confirm that <code>incident_agent_config.json</code> is located in the working directory of your running Python process.</li>
+          <li><b>Outbound network restriction:</b> Verify that your hosting environment permits outbound HTTPS connections to <code>https://incident-agent-portal.onrender.com</code>.</li>
+        </ol>
+      </div>
+    </details>
+
+    <details class="accordion-item">
+      <summary class="accordion-summary">
+        <span><span class="badge-tag git">Issue 2</span> GitHub Installation PR Fails (401 / 403 / 404)</span>
+      </summary>
+      <div class="accordion-body">
+        <p><b>Symptom:</b> When connecting a repository or clicking "Install monitoring", the portal displays a GitHub API error.</p>
+        <p><b>Resolution by Error Code:</b></p>
+        <ul>
+          <li><b>HTTP 401 Bad credentials:</b> The GitHub Personal Access Token was entered with extra spaces, has expired, or was revoked on GitHub. Go to GitHub &rarr; Developer Settings &rarr; Tokens (classic), generate a fresh token with <code>repo</code> and <code>workflow</code> scopes, and click <b>Update GitHub token</b> on your project page.</li>
+          <li><b>HTTP 403 Forbidden:</b> The token is missing the <code>repo</code> scope, or the repository belongs to an organization that requires <b>SSO authorization</b> for personal access tokens. Click "Configure SSO" next to the token in your GitHub settings to approve your organization.</li>
+          <li><b>HTTP 404 Not Found:</b> GitHub cannot locate the repository or branch. Confirm that the <code>owner/repository</code> spelling is exact (case-sensitive) and that the default branch (e.g. <code>main</code> instead of <code>master</code>) exists.</li>
+        </ul>
+      </div>
+    </details>
+
+    <details class="accordion-item">
+      <summary class="accordion-summary">
+        <span><span class="badge-tag bug">Issue 3</span> Auto-Fix Skipped or Marked "Needs Human"</span>
+      </summary>
+      <div class="accordion-body">
+        <p><b>Symptom:</b> An incident appears in the dashboard, but its status changes to <code>needs_human</code> without opening a fix pull request.</p>
+        <p><b>Why this happens (Built-in Safety Gates):</b></p>
+        <p>Agent Daemon will NEVER perform automated code changes unless all 5 safety gates pass:</p>
+        <ol>
+          <li><b>Category is not a code bug:</b> If the failure is classified as a database outage, third-party API downtime, missing environment variable, or server out-of-memory, Agent Daemon refuses to alter source code.</li>
+          <li><b>Confidence is not "high":</b> If the AI diagnostic engine has any doubt about the root cause, it safely escalates to human review.</li>
+          <li><b>Bug is already resolved:</b> If the bug is no longer present in the latest commit on your base branch, the fix is skipped.</li>
+          <li><b>Safety flag:</b> The diagnostic LLM explicitly marked <code>safe_to_auto_fix = False</code>.</li>
+          <li><b>Maximum attempts exceeded:</b> Agent Daemon limits automated fixes to 2 attempts per incident to prevent endless loops.</li>
+        </ol>
+        <p><b>Action:</b> Click into the incident to read the full root cause analysis, timeline, and recommended manual fix.</p>
+      </div>
+    </details>
+
+    <details class="accordion-item">
+      <summary class="accordion-summary">
+        <span><span class="badge-tag git">Issue 4</span> Fix PR Opened on GitHub but Not Auto-Merging</span>
+      </summary>
+      <div class="accordion-body">
+        <p><b>Symptom:</b> The fix branch and PR were created on GitHub, but status remains <code>pending</code> or <code>failed</code> on the portal.</p>
+        <p><b>Troubleshooting Checklist:</b></p>
+        <ul>
+          <li><b>CI checks must pass:</b> Auto-merge requires at least one completed GitHub Actions check with conclusion <code>success</code>. If tests failed in CI, Agent Daemon safely halts and leaves the PR open for inspection.</li>
+          <li><b>Branch protection rules:</b> If your repository enforces required code reviews (e.g. "Require at least 1 approval before merging"), GitHub's API blocks automated merges. You can either authorize bot merges or merge manually with one click on GitHub.</li>
+          <li><b>Public repository restriction:</b> As a strict security measure, public repositories never auto-merge.</li>
+          <li><b>Merge conflicts:</b> If other commits were pushed to your base branch while CI was running, the PR will await human rebasing.</li>
+        </ul>
+      </div>
+    </details>
+
+    <details class="accordion-item">
+      <summary class="accordion-summary">
+        <span><span class="badge-tag bug">Issue 5</span> Errors Occurring in App Not Appearing on Dashboard</span>
+      </summary>
+      <div class="accordion-body">
+        <p><b>Symptom:</b> You triggered an error in your application, but no incident was created on the dashboard.</p>
+        <p><b>Verification Steps:</b></p>
+        <ol>
+          <li><b>Is the exception caught?</b> Bare <code>try ... except: pass</code> or <code>try ... except Exception as e: print(e)</code> blocks swallow errors before they reach <code>sys.excepthook</code>. Use <code>logging.exception("Failed processing")</code> to ship handled exceptions.</li>
+          <li><b>Check Ingest Key:</b> If you rotated your ingest key on the dashboard, make sure to update <code>incident_agent_config.json</code> with the new key.</li>
+          <li><b>Test Ingestion directly via cURL:</b> Run this in your terminal to verify network connectivity to the portal:
+            <div class="code-box">curl -X POST https://incident-agent-portal.onrender.com/ingest \
+  -H "Content-Type: application/json" \
+  -H "X-Ingest-Key: YOUR_KEY" \
+  -d '{"message":"Test diagnostic error","traceback":"Traceback: line 42 ZeroDivisionError","service":"test"}'</div>
+            A successful response returns <code>{"status":"accepted","incident_id":"..."}</code>.
+          </li>
+        </ol>
+      </div>
+    </details>
+
+    <details class="accordion-item">
+      <summary class="accordion-summary">
+        <span><span class="badge-tag setup">Issue 6</span> Render Free Tier Sleep &amp; Background Worker</span>
+      </summary>
+      <div class="accordion-body">
+        <p><b>Symptom:</b> Cold starts take 30-50 seconds or background tasks take longer to trigger on free tier.</p>
+        <p><b>Explanation:</b> Render's free tier spins down web instances after 15 minutes of inactivity. When a new error occurs, the instance wakes up automatically, but ingestion may take 30 seconds for the first request.</p>
+        <p><b>Tip:</b> You can set up a free uptime monitor (such as UptimeRobot, BetterStack, or cron-job.org) targeting <code>https://incident-agent-portal.onrender.com/health</code> every 10 minutes to keep the worker continuously warm.</p>
+      </div>
+    </details>
+
+  </div>
+</section>
+
+<!-- 6. FAQ Section -->
+<section class="help-section" id="faq" data-category="faq">
+  <h2 class="help-section-title">Frequently Asked Questions</h2>
+  <div class="accordion-group">
+
+    <details class="accordion-item">
+      <summary class="accordion-summary">Does Agent Daemon run my proprietary code on its servers?</summary>
+      <div class="accordion-body">
+        <p><b>No.</b> Agent Daemon only reads source code files as text evidence via GitHub API to diagnose problems and construct minimal AST-checked diffs. Customer code and test suites are never executed on Agent Daemon servers.</p>
+      </div>
+    </details>
+
+    <details class="accordion-item">
+      <summary class="accordion-summary">Can Agent Daemon accidentally break my database or infrastructure?</summary>
+      <div class="accordion-body">
+        <p><b>No.</b> Auto-fix is strictly confined to Python source code bugs. Database migrations, credentials, environment variables, Docker configurations, and infrastructure errors are strictly escalated to human engineers with <code>needs_human</code> status.</p>
+      </div>
+    </details>
+
+    <details class="accordion-item">
+      <summary class="accordion-summary">Can I disconnect a project or revoke access?</summary>
+      <div class="accordion-body">
+        <p>Yes. You can pause monitoring or permanently delete a project from your dashboard with one click. To instantly revoke all permissions on GitHub, simply delete the Personal Access Token in your GitHub account.</p>
+      </div>
+    </details>
+
+    <details class="accordion-item">
+      <summary class="accordion-summary">How does the 1-day free trial work?</summary>
+      <div class="accordion-body">
+        <p>Every customer is eligible for one 1-day free trial. Submit a request on the <a href="/billing">Billing page</a>, and our founders (Abhay &amp; Pranav) will approve it promptly, activating 24 hours of unrestricted autonomous incident response.</p>
+      </div>
+    </details>
+
+  </div>
+</section>
+
+<!-- 7. Need More Help CTA -->
+<section class="card mission-card" style="margin-top:40px;text-align:center">
+  <h3>Still Need Help or Have a Complex Setup?</h3>
+  <p>Our co-founders and support engineers are available to assist with custom frameworks, private VPCs, and enterprise on-call requirements.</p>
+  <div class="actions" style="justify-content:center">
+    <a class="button primary" href="/contact">Contact Support &amp; Founders</a>
+    <a class="button" href="/about">About Co-Founders</a>
+    <a class="button" href="https://github.com/Samuel777822/incident-agent" target="_blank" rel="noopener">GitHub Project</a>
+  </div>
+</section>
+
+<script>
+function filterHelp(query) {
+  var q = (query || "").toLowerCase().trim();
+  var items = document.querySelectorAll(".accordion-item, .mode-card, .chapter-item");
+  items.forEach(function(el) {
+    var txt = el.textContent.toLowerCase();
+    if (!q || txt.indexOf(q) !== -1) {
+      el.style.display = "";
+      if (q && el.tagName.toLowerCase() === "details") {
+        el.open = true;
+      }
+    } else {
+      el.style.display = "none";
+    }
+  });
+}
+
+function filterCategory(cat, btn) {
+  document.querySelectorAll(".help-pills .help-pill").forEach(function(p) { p.classList.remove("active"); });
+  if (btn) btn.classList.add("active");
+  var sections = document.querySelectorAll(".help-section");
+  sections.forEach(function(s) {
+    if (cat === "all" || s.getAttribute("data-category") === cat || s.id === cat) {
+      s.style.display = "";
+    } else {
+      s.style.display = "none";
+    }
+  });
+}
+</script>
+"""
+    return _response(body, request)
+
 
 def _page_contact(request: Request) -> Response:
     prefill_email = request.session.get("email", "") if request.session else ""
@@ -2110,6 +2553,8 @@ def _dispatch(request: Request) -> Response:
         return _page_home(request)
     if request.method == "GET" and request.path in ("/about", "/about-us"):
         return _page_about(request)
+    if request.method == "GET" and request.path in ("/help", "/docs", "/help-center", "/troubleshooting"):
+        return _page_help(request)
     if request.path in ("/contact", "/support"):
         return _page_contact(request)
     if request.path in ("/onboarding/name", "/profile/name"):
