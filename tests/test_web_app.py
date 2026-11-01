@@ -278,3 +278,41 @@ def test_onboarding_name_prompt_flow(web_env):
     status, _, body = _request("/dashboard", cookie=cookie)
     assert status == "200 OK"
     assert "Jane Developer" in body
+
+
+def test_chat_and_visitor_endpoints(web_env):
+    # 1. Visitor tracking notifies admin once per window
+    status, headers, body = _request("/api/visitor/track", method="POST", json_body={"path": "/about", "referrer": "google.com"})
+    assert status == "200 OK"
+    data = json.loads(body)
+    assert data["ok"] is True
+
+    # 2. Chat messages endpoint
+    status, _, body = _request("/api/chat/messages")
+    assert status == "200 OK"
+    data = json.loads(body)
+    assert "messages" in data and "conversation_id" in data
+    conv_id = data["conversation_id"]
+
+    # 3. Sending visitor inquiry triggers reply and notifies admins
+    status, _, body = _request("/api/chat/send", method="POST", json_body={"text": "What are your pricing plans?", "contact": "visitor@example.com"})
+    assert status == "200 OK"
+    res = json.loads(body)
+    assert "reply" in res and len(res["reply"]) > 10
+
+    # 4. Chat JS asset
+    status, headers, body = _request("/assets/chat.js")
+    assert status == "200 OK"
+    assert "daemon-chat-btn" in body
+
+    # 5. Admin chat reply requires session and admin privileges
+    status, headers, _ = _request("/api/admin/chat/reply", method="POST", json_body={"conversation_id": conv_id, "text": "Hello!"})
+    assert status == "303 See Other" and dict(headers)["Location"] == "/login"
+
+    # With non-admin session, returns 403 Forbidden
+    from datetime import timedelta
+    u_id = web_app.portal_db.create_user("user_not_admin@example.com", "")
+    s_id = web_app.portal_db.create_session(u_id, "csrf-test", (web_app._now() + timedelta(days=1)).isoformat(timespec="seconds"))
+    cookie_user = f"{web_app.SESSION_COOKIE}={web_app._signed_cookie(s_id)}"
+    status, _, _ = _request("/api/admin/chat/reply", method="POST", json_body={"conversation_id": conv_id, "text": "Hello!"}, cookie=cookie_user)
+    assert status == "403 Forbidden"

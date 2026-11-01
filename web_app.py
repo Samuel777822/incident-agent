@@ -14,6 +14,7 @@ import hmac
 import html
 import json
 import os
+import uuid
 import re
 import secrets
 from pathlib import PurePosixPath
@@ -31,6 +32,8 @@ from urllib.parse import urlencode
 
 import incident_board
 import notifications
+import chatbot
+import chat_widget
 import portal_db
 from monitoring_installer import resolve_branch, GitHubInstallError, open_monitoring_pr, validate_repository_access
 
@@ -236,6 +239,11 @@ class Request:
         signed = _verify_cookie(self.cookies.get(SESSION_COOKIE, ""))
         if signed:
             self.session = portal_db.get_session(signed)
+        self.visitor_id = self.cookies.get("agent_visitor_id", "").strip()
+        self.new_visitor_cookie = None
+        if not self.visitor_id or not re.fullmatch(r"[0-9a-f-]{36}", self.visitor_id):
+            self.visitor_id = str(uuid.uuid4())
+            self.new_visitor_cookie = _cookie("agent_visitor_id", self.visitor_id, max_age=60*60*24*365, http_only=False)
 
 
 class Response:
@@ -367,7 +375,7 @@ def _layout(title: str, body: str, request: Request | None = None) -> str:
             links = '<a href="/about">About us</a><a href="/dashboard">Projects</a><a href="/billing">Plan &amp; billing</a>' + signout
     else:
         links = '<a href="/about">About us</a><a class="button primary" href="/login">Sign in with Google</a>'
-    return f"""<!doctype html><html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><meta name="description" content="AI incident response for Python apps"><title>{_escape(title)} · {APP_NAME}</title><link rel="preconnect" href="https://fonts.googleapis.com"><link rel="preconnect" href="https://fonts.gstatic.com" crossorigin><link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Cinzel:wght@500;700&amp;family=Cinzel+Decorative:wght@700&amp;display=swap"><style>{CSS}</style></head><body><header class="wrap nav"><a class="brand" href="/"><span class="brand-mark">A</span>{APP_NAME}</a><nav class="navlinks">{links}</nav></header><main class="wrap">{body}</main><footer class="wrap footer"><div style="display:flex;justify-content:space-between;align-items:center;flex-wrap:wrap;gap:12px"><span>Agent Daemon · Your changes stay reviewable and reversible.</span><span><a href="/about">About us / Co-Founders</a> · <a href="https://github.com/Samuel777822/incident-agent" target="_blank" rel="noopener">GitHub</a></span></div></footer></body></html>"""
+    return f"""<!doctype html><html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><meta name="description" content="AI incident response for Python apps"><title>{_escape(title)} · {APP_NAME}</title><link rel="preconnect" href="https://fonts.googleapis.com"><link rel="preconnect" href="https://fonts.gstatic.com" crossorigin><link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Cinzel:wght@500;700&amp;family=Cinzel+Decorative:wght@700&amp;display=swap"><style>{CSS}</style></head><body><header class="wrap nav"><a class="brand" href="/"><span class="brand-mark">A</span>{APP_NAME}</a><nav class="navlinks">{links}</nav></header><main class="wrap">{body}</main><footer class="wrap footer"><div style="display:flex;justify-content:space-between;align-items:center;flex-wrap:wrap;gap:12px"><span>Agent Daemon · Your changes stay reviewable and reversible.</span><span><a href="/about">About us / Co-Founders</a> · <a href="https://github.com/Samuel777822/incident-agent" target="_blank" rel="noopener">GitHub</a></span></div></footer><script src="/assets/chat.js" defer></script></body></html>"""
 
 
 def _csrf(request: Request) -> str:
@@ -387,6 +395,8 @@ def _response(body, request=None, status="200 OK", headers=None):
     response = Response(_layout("Agent Daemon", body, request), status, defaults + list(headers or []))
     if request and request.new_csrf_cookie:
         response.headers.append(request.new_csrf_cookie)
+    if request and getattr(request, "new_visitor_cookie", None):
+        response.headers.append(request.new_visitor_cookie)
     return response
 
 
@@ -780,6 +790,119 @@ def _page_onboarding_name(request: Request):
     return _response(body, request)
 
 
+
+
+# --- Live Chat & Visitor Alert Endpoints -------------------------------------
+
+def _page_chat_js(request: Request) -> Response:
+    return Response(chat_widget.CHAT_JS, "200 OK",
+                    [("Content-Type", "application/javascript; charset=utf-8"),
+                     ("Cache-Control", "public, max-age=300"), ("X-Content-Type-Options", "nosniff")])
+
+
+def _api_visitor_track(request: Request) -> Response:
+    if request.method != "POST":
+        return Response(b"{}", "405 Method Not Allowed", [("Content-Type", "application/json")])
+    visitor_id = request.visitor_id
+    path = request.form.get("path", "/") if isinstance(request.form, dict) else "/"
+    ref = request.form.get("referrer", "") if isinstance(request.form, dict) else ""
+    should_notify = portal_db.track_visitor_visit(visitor_id)
+    if should_notify:
+        notifications.notify_admins(
+            f"New visitor arrived on portal ({path})",
+            f"A visitor arrived at {path}.\nReferrer: {ref or 'Direct'}\nVisitor ID: {visitor_id}\n"
+            f"Live admin console: {_base_url()}/admin#live-chats",
+            "visitor_alert"
+        )
+    resp = Response(json.dumps({"ok": True}), "200 OK", [("Content-Type", "application/json")])
+    if getattr(request, "new_visitor_cookie", None):
+        resp.headers.append(request.new_visitor_cookie)
+    return resp
+
+
+def _api_chat_messages(request: Request) -> Response:
+    conv = portal_db.get_or_create_conversation(request.visitor_id)
+    after = request.query.get("after", [""])[0]
+    msgs = portal_db.list_chat_messages(conv["id"], after_time=after)
+    return Response(json.dumps({"messages": msgs, "conversation_id": conv["id"]}), "200 OK",
+                    [("Content-Type", "application/json"), ("Cache-Control", "no-store")])
+
+
+def _api_chat_send(request: Request) -> Response:
+    if request.method != "POST":
+        return Response(b"{}", "405 Method Not Allowed", [("Content-Type", "application/json")])
+    form = request.form if isinstance(request.form, dict) else {}
+    text = form.get("text", "").strip()
+    contact = form.get("contact", "").strip()
+    if not text:
+        return Response(json.dumps({"error": "Empty message"}), "400 Bad Request", [("Content-Type", "application/json")])
+
+    conv = portal_db.get_or_create_conversation(request.visitor_id)
+    if contact:
+        if "@" in contact:
+            portal_db.update_conversation_visitor_details(conv["id"], conv.get("visitor_name", ""), contact)
+        else:
+            portal_db.update_conversation_visitor_details(conv["id"], contact, conv.get("visitor_email", ""))
+
+    # Save visitor message
+    portal_db.add_chat_message(conv["id"], "visitor", text)
+
+    # Notify admins about user question / chat inquiry
+    contact_info = f" (Contact: {contact})" if contact else ""
+    notifications.notify_admins(
+        f"Live chat inquiry from visitor{contact_info}",
+        f"Visitor message:\n\"{text}\"\n\nReply in live admin dashboard:\n{_base_url()}/admin#live-chats",
+        "chat_inquiry"
+    )
+
+    # Generate AI Assistant response
+    history = portal_db.list_chat_messages(conv["id"])
+    reply = chatbot.answer_visitor_query(text, history)
+    bot_msg = portal_db.add_chat_message(conv["id"], "bot", reply, "AI Assistant")
+
+    return Response(json.dumps({
+        "reply": reply,
+        "created_at": bot_msg["created_at"],
+        "conversation_id": conv["id"]
+    }), "200 OK", [("Content-Type", "application/json")])
+
+
+def _api_chat_save_contact(request: Request) -> Response:
+    if request.method != "POST":
+        return Response(b"{}", "405 Method Not Allowed", [("Content-Type", "application/json")])
+    contact = request.form.get("contact", "").strip() if isinstance(request.form, dict) else ""
+    if contact:
+        conv = portal_db.get_or_create_conversation(request.visitor_id)
+        if "@" in contact:
+            portal_db.update_conversation_visitor_details(conv["id"], conv.get("visitor_name", ""), contact)
+        else:
+            portal_db.update_conversation_visitor_details(conv["id"], contact, conv.get("visitor_email", ""))
+    return Response(json.dumps({"ok": True}), "200 OK", [("Content-Type", "application/json")])
+
+
+def _api_admin_chat_reply(request: Request) -> Response:
+    if not request.session or not _is_admin(request):
+        return Response(json.dumps({"error": "Unauthorized"}), "403 Forbidden", [("Content-Type", "application/json")])
+    if request.method != "POST":
+        return Response(b"{}", "405 Method Not Allowed", [("Content-Type", "application/json")])
+    form = request.form if isinstance(request.form, dict) else {}
+    conv_id = form.get("conversation_id", "").strip()
+    text = form.get("text", "").strip()
+    if not conv_id or not text:
+        return Response(json.dumps({"error": "Missing conversation_id or text"}), "400 Bad Request", [("Content-Type", "application/json")])
+    admin_name = request.session.get("name") or request.session.get("email", "").split("@")[0].capitalize()
+    msg = portal_db.add_chat_message(conv_id, "admin", text, f"{admin_name} (Founder)")
+    return Response(json.dumps({"ok": True, "message": msg}), "200 OK", [("Content-Type", "application/json")])
+
+
+def _api_admin_chat_messages(request: Request) -> Response:
+    if not request.session or not _is_admin(request):
+        return Response(json.dumps({"error": "Unauthorized"}), "403 Forbidden", [("Content-Type", "application/json")])
+    conv_id = request.query.get("conversation_id", [""])[0]
+    after = request.query.get("after", [""])[0]
+    msgs = portal_db.list_chat_messages(conv_id, after_time=after) if conv_id else []
+    return Response(json.dumps({"messages": msgs}), "200 OK", [("Content-Type", "application/json")])
+
 def _page_home(request):
     if request.session:
         return _redirect("/admin" if _is_admin(request) else "/dashboard")
@@ -1009,12 +1132,88 @@ def _admin_view(request):
               "<h3>Email status</h3><p class='muted'>Accepted means the email provider took the message. It does not guarantee inbox delivery.</p>"
               + _table(["When", "To", "Kind", "Result"], notif_rows, "No emails sent yet."))
 
+    # Live visitor chat conversations
+    chat_convs = portal_db.admin_list_chat_conversations(15)
+    chat_rows = []
+    for c in chat_convs:
+        c_title = _escape(c.get("visitor_name") or c.get("visitor_email") or f"Visitor {c['visitor_id'][:8]}")
+        last_m = _escape(c.get("last_message") or "(No messages)")
+        tag_cls = "pill green" if c.get("last_sender") == "visitor" else "pill"
+        tag_txt = "New message" if c.get("last_sender") == "visitor" else "Responded"
+        chat_rows.append(f"<tr><td><b>{c_title}</b><br><small class='muted'>{_escape(_fmt_time(c['updated_at']))}</small></td>"
+                         f"<td><span class='{tag_cls}'>{tag_txt}</span></td>"
+                         f"<td>{last_m}</td>"
+                         f"<td><button class='button' type='button' onclick='openAdminChat(\"{_escape(c['id'])}\", \"{c_title}\")'>Open Chat</button></td></tr>")
+    chat_table = _table(["Visitor", "Status", "Latest Message", "Action"], chat_rows, "No visitor conversations yet.")
+    chat_section = f"<h2 id='live-chats'>Live visitor conversations &amp; inquiries</h2>{chat_table}"
+
+    admin_chat_modal = """
+<div id="admin-chat-modal" style="display:none;position:fixed;bottom:20px;right:20px;width:380px;height:520px;background:#120a1b;border:1px solid #ff4a3a66;border-radius:14px;box-shadow:0 15px 50px #000;z-index:99999;flex-direction:column;overflow:hidden">
+  <div style="padding:12px 16px;background:#1e0f2c;border-bottom:1px solid #3a2338;display:flex;justify-content:space-between;align-items:center">
+    <b id="admin-chat-header" style="color:#fff;font-size:14px">Visitor Chat</b>
+    <button onclick="document.getElementById('admin-chat-modal').style.display='none'" style="background:none;border:none;color:#aaa;cursor:pointer;font-size:18px">&times;</button>
+  </div>
+  <div id="admin-chat-msgs" style="flex:1;padding:14px;overflow-y:auto;display:flex;flex-direction:column;gap:10px;background:#09060d"></div>
+  <div style="padding:10px;border-top:1px solid #3a2338;display:flex;gap:8px;background:#120a1b">
+    <input id="admin-reply-input" type="text" placeholder="Type a reply as Founder / Admin..." style="flex:1;padding:8px 10px;border-radius:6px;border:1px solid #3a2338;background:#060408;color:#fff">
+    <button id="admin-reply-btn" onclick="sendAdminReply()" class="button primary" style="padding:6px 14px">Reply</button>
+  </div>
+</div>
+<script>
+var currentConvId = null;
+var adminLastPoll = "";
+function openAdminChat(convId, title) {
+  currentConvId = convId;
+  adminLastPoll = "";
+  document.getElementById('admin-chat-header').textContent = "Chat: " + title;
+  document.getElementById('admin-chat-msgs').innerHTML = "";
+  document.getElementById('admin-chat-modal').style.display = 'flex';
+  pollAdminMessages();
+}
+function pollAdminMessages() {
+  if (!currentConvId) return;
+  fetch('/api/admin/chat/messages?conversation_id=' + encodeURIComponent(currentConvId) + (adminLastPoll ? '&after=' + encodeURIComponent(adminLastPoll) : ''))
+    .then(r => r.json())
+    .then(data => {
+      if (data && data.messages) {
+        var box = document.getElementById('admin-chat-msgs');
+        data.messages.forEach(m => {
+          var div = document.createElement('div');
+          var isMe = m.sender === 'admin';
+          div.style.cssText = 'padding:8px 12px;border-radius:10px;font-size:13px;max-width:85%;word-break:break-word;' + 
+            (isMe ? 'align-self:flex-end;background:#5b1fa8;color:#fff;' : 'align-self:flex-start;background:#211432;border:1px solid #3a2338;color:#eee;');
+          div.innerHTML = (m.sender_name ? '<div style="font-size:10px;font-weight:700;color:#ff8a7a;margin-bottom:3px">' + m.sender_name + '</div>' : '') + m.text;
+          box.appendChild(div);
+          adminLastPoll = m.created_at;
+        });
+        box.scrollTop = box.scrollHeight;
+      }
+    });
+}
+function sendAdminReply() {
+  var input = document.getElementById('admin-reply-input');
+  var text = input.value.trim();
+  if (!text || !currentConvId) return;
+  input.value = "";
+  fetch('/api/admin/chat/reply', {
+    method: 'POST',
+    headers: {'Content-Type': 'application/json'},
+    body: JSON.stringify({conversation_id: currentConvId, text: text})
+  }).then(r => r.json()).then(() => pollAdminMessages());
+}
+setInterval(() => {
+  if (document.getElementById('admin-chat-modal').style.display === 'flex') pollAdminMessages();
+}, 4000);
+</script>
+"""
+
     body = (f"<section class='section'><div class='eyebrow'>Administrator</div><h1>Operations</h1>"
             f"<p class='muted'>Signed in as {_escape(request.session['email'])}</p>{flash}<div class='statgrid'>{cards}</div>{attention}"
             f"<h2>Customers</h2>{_table(['Customer', 'Access', 'Action'], customer_rows, 'No customer accounts yet.')}"
             f"<h2>Applications</h2>{_table(['App', 'Owner', 'State', 'Last check-in', 'Open incidents'], project_rows, 'No applications connected yet.')}"
             f"<h2>Recent incidents and fixes</h2>{_table(['When', 'App', 'Error', 'Agent status', 'Fix'], incident_rows, 'No incidents yet.')}"
-            f"{system}</section>")
+            f"{chat_section}"
+            f"{system}</section>" + admin_chat_modal)
     return _response(body, request)
 
 
@@ -1790,6 +1989,20 @@ def _page_logout(request):
 
 
 def _dispatch(request: Request) -> Response:
+    if request.path == "/assets/chat.js":
+        return _page_chat_js(request)
+    if request.path == "/api/visitor/track":
+        return _api_visitor_track(request)
+    if request.path == "/api/chat/messages":
+        return _api_chat_messages(request)
+    if request.path == "/api/chat/send":
+        return _api_chat_send(request)
+    if request.path == "/api/chat/save-contact":
+        return _api_chat_save_contact(request)
+    if request.path == "/api/admin/chat/reply":
+        return _api_admin_chat_reply(request)
+    if request.path == "/api/admin/chat/messages":
+        return _api_admin_chat_messages(request)
     if request.method == "GET" and request.path == "/":
         return _page_home(request)
     if request.method == "GET" and request.path in ("/about", "/about-us"):
@@ -1861,7 +2074,7 @@ def _dispatch(request: Request) -> Response:
 def application(environ, start_response):
     try:
         request = Request(environ)
-        if request.method == "POST" and request.path not in ("/login", "/signup", "/webhooks/razorpay", "/ingest", "/heartbeat") and not request.session:
+        if request.method == "POST" and request.path not in ("/login", "/signup", "/webhooks/razorpay", "/ingest", "/heartbeat", "/api/visitor/track", "/api/chat/send", "/api/chat/save-contact") and not request.session:
             response = _redirect("/login")
         else:
             response = _dispatch(request)

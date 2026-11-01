@@ -184,6 +184,35 @@ CREATE TABLE IF NOT EXISTS worker_status (
   name TEXT PRIMARY KEY,
   last_seen TEXT NOT NULL
 );
+
+CREATE TABLE IF NOT EXISTS chat_conversations (
+  id TEXT PRIMARY KEY,
+  visitor_id TEXT NOT NULL,
+  visitor_name TEXT NOT NULL DEFAULT '',
+  visitor_email TEXT NOT NULL DEFAULT '',
+  status TEXT NOT NULL DEFAULT 'open',
+  created_at TEXT NOT NULL,
+  updated_at TEXT NOT NULL
+);
+CREATE INDEX IF NOT EXISTS idx_chat_conv_visitor ON chat_conversations(visitor_id);
+CREATE INDEX IF NOT EXISTS idx_chat_conv_updated ON chat_conversations(updated_at DESC);
+
+CREATE TABLE IF NOT EXISTS chat_messages (
+  id TEXT PRIMARY KEY,
+  conversation_id TEXT NOT NULL REFERENCES chat_conversations(id) ON DELETE CASCADE,
+  sender TEXT NOT NULL,
+  sender_name TEXT NOT NULL DEFAULT '',
+  text TEXT NOT NULL,
+  created_at TEXT NOT NULL
+);
+CREATE INDEX IF NOT EXISTS idx_chat_msg_conv_time ON chat_messages(conversation_id, created_at ASC);
+
+CREATE TABLE IF NOT EXISTS visitor_tracking (
+  visitor_id TEXT PRIMARY KEY,
+  first_seen TEXT NOT NULL,
+  last_notified TEXT NOT NULL,
+  visit_count INTEGER NOT NULL DEFAULT 1
+);
 """
 
 
@@ -1303,5 +1332,120 @@ def update_project_branch(project_id: str, user_id: str, branch: str) -> bool:
         cur = _execute(conn, "UPDATE projects SET branch=? WHERE id=? AND user_id=?", (branch[:100], project_id, user_id))
         conn.commit()
         return cur.rowcount == 1
+    finally:
+        conn.close()
+
+
+# --- Chat & Visitor Tracking Persistence -------------------------------------
+
+def track_visitor_visit(visitor_id: str, cooldown_seconds: int = 1800) -> bool:
+    """Records a visitor visit. Returns True if admins should be notified (first visit or after cooldown)."""
+    conn = get_connection()
+    try:
+        now = _now()
+        row = _execute(conn, "SELECT visitor_id, last_notified, visit_count FROM visitor_tracking WHERE visitor_id = ?",
+                       (visitor_id,)).fetchone()
+        if not row:
+            _execute(conn, "INSERT INTO visitor_tracking(visitor_id, first_seen, last_notified, visit_count) VALUES(?,?,?,?)",
+                     (visitor_id, now, now, 1))
+            conn.commit()
+            return True
+        last_dt = _parse_ts(row["last_notified"]) if isinstance(row["last_notified"], str) else row["last_notified"]
+        now_dt = datetime.now(timezone.utc)
+        should_notify = (now_dt - last_dt) > timedelta(seconds=cooldown_seconds)
+        new_last = now if should_notify else row["last_notified"]
+        _execute(conn, "UPDATE visitor_tracking SET last_notified=?, visit_count=visit_count+1 WHERE visitor_id=?",
+                 (new_last, visitor_id))
+        conn.commit()
+        return should_notify
+    finally:
+        conn.close()
+
+
+def get_or_create_conversation(visitor_id: str, name: str = "", email: str = "") -> dict:
+    conn = get_connection()
+    try:
+        row = _execute(conn, "SELECT * FROM chat_conversations WHERE visitor_id = ? ORDER BY updated_at DESC LIMIT 1",
+                       (visitor_id,)).fetchone()
+        now = _now()
+        if row:
+            conv = dict(row)
+            updates = []
+            params = []
+            if name and not conv.get("visitor_name"):
+                updates.append("visitor_name = ?")
+                params.append(name.strip())
+            if email and not conv.get("visitor_email"):
+                updates.append("visitor_email = ?")
+                params.append(email.strip().lower())
+            if updates:
+                params.append(conv["id"])
+                _execute(conn, f"UPDATE chat_conversations SET {', '.join(updates)} WHERE id = ?", params)
+                conn.commit()
+                row = _execute(conn, "SELECT * FROM chat_conversations WHERE id = ?", (conv["id"],)).fetchone()
+                return dict(row)
+            return conv
+        conv_id = _id()
+        _execute(conn, "INSERT INTO chat_conversations(id, visitor_id, visitor_name, visitor_email, status, created_at, updated_at) "
+                       "VALUES(?,?,?,?,?,?,?)",
+                 (conv_id, visitor_id, name.strip(), email.strip().lower(), "open", now, now))
+        conn.commit()
+        return dict(_execute(conn, "SELECT * FROM chat_conversations WHERE id = ?", (conv_id,)).fetchone())
+    finally:
+        conn.close()
+
+
+def add_chat_message(conversation_id: str, sender: str, text: str, sender_name: str = "") -> dict:
+    conn = get_connection()
+    try:
+        msg_id = _id()
+        now = _now()
+        _execute(conn, "INSERT INTO chat_messages(id, conversation_id, sender, sender_name, text, created_at) VALUES(?,?,?,?,?,?)",
+                 (msg_id, conversation_id, sender, sender_name.strip(), text.strip(), now))
+        _execute(conn, "UPDATE chat_conversations SET updated_at = ? WHERE id = ?", (now, conversation_id))
+        conn.commit()
+        row = _execute(conn, "SELECT * FROM chat_messages WHERE id = ?", (msg_id,)).fetchone()
+        return dict(row)
+    finally:
+        conn.close()
+
+
+def list_chat_messages(conversation_id: str, after_time: str = "") -> list[dict]:
+    conn = get_connection()
+    try:
+        if after_time:
+            rows = _execute(conn, "SELECT * FROM chat_messages WHERE conversation_id = ? AND created_at > ? ORDER BY created_at ASC",
+                            (conversation_id, after_time)).fetchall()
+        else:
+            rows = _execute(conn, "SELECT * FROM chat_messages WHERE conversation_id = ? ORDER BY created_at ASC",
+                            (conversation_id,)).fetchall()
+        return [dict(r) for r in rows]
+    finally:
+        conn.close()
+
+
+def admin_list_chat_conversations(limit: int = 30) -> list[dict]:
+    conn = get_connection()
+    try:
+        rows = _execute(conn, """
+            SELECT c.*,
+                   (SELECT COUNT(*) FROM chat_messages m WHERE m.conversation_id = c.id) AS message_count,
+                   (SELECT text FROM chat_messages m WHERE m.conversation_id = c.id ORDER BY m.created_at DESC LIMIT 1) AS last_message,
+                   (SELECT sender FROM chat_messages m WHERE m.conversation_id = c.id ORDER BY m.created_at DESC LIMIT 1) AS last_sender
+            FROM chat_conversations c
+            ORDER BY c.updated_at DESC
+            LIMIT ?
+        """, (limit,)).fetchall()
+        return [dict(r) for r in rows]
+    finally:
+        conn.close()
+
+
+def update_conversation_visitor_details(conversation_id: str, name: str, email: str) -> None:
+    conn = get_connection()
+    try:
+        _execute(conn, "UPDATE chat_conversations SET visitor_name = ?, visitor_email = ?, updated_at = ? WHERE id = ?",
+                 (name.strip(), email.strip().lower(), _now(), conversation_id))
+        conn.commit()
     finally:
         conn.close()
