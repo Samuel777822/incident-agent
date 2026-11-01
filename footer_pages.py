@@ -1,13 +1,12 @@
 """Footer navigation and standalone pages for Agent Daemon:
 - Product: Features (/features), Pricing (/pricing), Documentation (/docs), Changelog (/changelog)
-- Company: About Us (/about), Contact Us (/contact), Partnerships (/partnerships), Careers (/careers)
-- Resources: FAQ (/faq), Help Center (/help), System Status (/status)
-- Legal: Privacy Policy (/privacy), Terms of Service (/terms), Cookie Policy (/cookies)
+- Company: About Us (/about), Contact Us (/contact)
+- Resources: FAQ (/faq), Help Center (/help)
+- Legal: Privacy Policy (/privacy), Terms of Service (/terms)
 """
 
 from __future__ import annotations
 import os
-import portal_db
 
 
 def render_footer_html() -> str:
@@ -27,8 +26,6 @@ def render_footer_html() -> str:
       <ul class="footer-links">
         <li><a href="/about">About Us</a></li>
         <li><a href="/contact">Contact Us</a></li>
-        <li><a href="/partnerships">Partnerships</a></li>
-        <li><a href="/careers">Careers</a></li>
       </ul>
     </div>
     <div class="footer-col">
@@ -36,7 +33,6 @@ def render_footer_html() -> str:
       <ul class="footer-links">
         <li><a href="/faq">FAQ</a></li>
         <li><a href="/help">Help Center</a></li>
-        <li><a href="/status">System Status</a></li>
       </ul>
     </div>
     <div class="footer-col">
@@ -44,7 +40,6 @@ def render_footer_html() -> str:
       <ul class="footer-links">
         <li><a href="/privacy">Privacy Policy</a></li>
         <li><a href="/terms">Terms of Service</a></li>
-        <li><a href="/cookies">Cookie Policy</a></li>
       </ul>
     </div>
   </div>
@@ -190,7 +185,7 @@ def changelog_page_html() -> str:
       <li><b>Embedded Video Walkthrough:</b> Added comprehensive demo screencast with key timestamp chapters.</li>
       <li><b>Troubleshooting Playbooks:</b> 6 actionable guides covering sleeping free containers, GitHub token errors (401/403/404), safety gates, and CI auto-merge prerequisites.</li>
       <li><b>Instant Search Filter:</b> Live client-side keyword search across all documentation sections.</li>
-      <li><b>Unified Footer:</b> Added structured 4-column navigation (Product, Company, Resources, Legal).</li>
+      <li><b>Structured Footer:</b> Added organized 4-column navigation (Product, Company, Resources, Legal).</li>
     </ul>
   </article>
 
@@ -232,86 +227,6 @@ def changelog_page_html() -> str:
   </article>
 
 </div>"""
-
-
-def partnerships_page_html() -> str:
-    return """<section class="about-hero">
-<div class="eyebrow">Collaborate With Us</div>
-<h1>Partner with Agent Daemon</h1>
-<p>We work with developer communities, hackathons, cloud providers, and startup accelerators to make automated software resilience accessible to everyone.</p>
-</section>
-
-<div class="modes-grid" style="margin-top:36px">
-  <article class="mode-card">
-    <div style="font-size:24px;margin-bottom:8px">&#127891;</div>
-    <h4>Hackathons &amp; Student Teams</h4>
-    <p>Are you organizing a student hackathon or building a university project? We offer <b>free premium passes</b> and technical mentoring to ensure your demos never crash during jury evaluation.</p>
-  </article>
-
-  <article class="mode-card">
-    <div style="font-size:24px;margin-bottom:8px">&#9729;&#65039;</div>
-    <h4>Cloud &amp; Hosting Platforms</h4>
-    <p>We partner with modern PaaS providers (Render, Railway, Fly.io) to provide native deploy-trigger hooks and instant rollback triggers when errors spike.</p>
-  </article>
-
-  <article class="mode-card">
-    <div style="font-size:24px;margin-bottom:8px">&#129309;</div>
-    <h4>DevOps &amp; Software Agencies</h4>
-    <p>Provide 24/7 autonomous on-call guarantees to your clients without hiring a midnight shifts team. Volume licensing and dedicated tenant instances available.</p>
-  </article>
-</div>
-
-<section class="card" style="margin-top:36px;padding:32px;text-align:center">
-  <h3>Let's Explore a Partnership</h3>
-  <p class="muted" style="max-width:620px;margin:8px auto 24px">Reach out directly to co-founders Abhay Samuel H and Pranav V Rao. We respond to partnership inquiries within 24 hours.</p>
-  <div class="actions" style="justify-content:center">
-    <a class="button primary" href="/contact">Send Partnership Inquiry</a>
-    <a class="button" href="mailto:pranavvrao1@gmail.com?subject=Agent%20Daemon%20Partnership">Email Founders Directly</a>
-  </div>
-</section>"""
-
-
-def careers_page_html() -> str:
-    return """<section class="about-hero">
-<div class="eyebrow">Join the Team</div>
-<h1>Build the Future of Autonomous Systems Engineering</h1>
-<p>We are a high-velocity team of systems architects, AI engineers, and software crafters based in Bangalore, India, rethinking how software handles failure.</p>
-</section>
-
-<section class="card" style="margin-top:36px;padding:28px">
-  <h3 style="margin-bottom:12px">Our Engineering Philosophy</h3>
-  <p class="muted" style="line-height:1.65;margin-bottom:16px">Production breaks happen. But waking up developers at 3:00 AM to read stack traces, find a typo, and push a single-line patch is obsolete. At Agent Daemon, we believe computers should inspect their own errors, synthesize safe AST diffs, verify them against strict test suites, and deploy the fix before users notice.</p>
-  <p class="muted" style="line-height:1.65">We value deep systems understanding, rigorous testing (over 90 automated end-to-end tests in our repo), zero-trust security architectures, and clean developer experiences.</p>
-</section>
-
-<h2 style="margin:40px 0 20px;font-family:var(--serif)">Open Expressions of Interest</h2>
-
-<div class="accordion-group">
-  <article class="card" style="margin-bottom:16px">
-    <div style="display:flex;justify-content:space-between;align-items:center;flex-wrap:wrap;gap:10px;margin-bottom:8px">
-      <h3 style="margin:0">AI Systems &amp; Tooling Engineer</h3>
-      <span class="pill">Bangalore / Remote</span>
-    </div>
-    <p class="muted">Own the diagnosis engine, prompt evaluation pipelines, and LLM tool-calling interfaces (Groq, Anthropic, Codex) that synthesize surgical code patches without regressions.</p>
-  </article>
-
-  <article class="card" style="margin-bottom:16px">
-    <div style="display:flex;justify-content:space-between;align-items:center;flex-wrap:wrap;gap:10px;margin-bottom:8px">
-      <h3 style="margin:0">Distributed Systems &amp; Python Backend Engineer</h3>
-      <span class="pill">Bangalore / Remote</span>
-    </div>
-    <p class="muted">Scale our high-throughput `/ingest` telemetry pipeline, optimize background workers, and extend git orchestration for complex multi-repo architectures.</p>
-  </article>
-</div>
-
-<section class="card mission-card" style="margin-top:36px;text-align:center">
-  <h3>Want to Build With Us?</h3>
-  <p class="muted" style="max-width:600px;margin:8px auto 22px">Even if you don't fit into a traditional job title, if you're passionate about autonomous agents, Linux internals, or compiler theory, we'd love to chat.</p>
-  <div class="actions" style="justify-content:center">
-    <a class="button primary" href="/contact">Get in Touch</a>
-    <a class="button" href="mailto:naveenachandra371@gmail.com?subject=Agent%20Daemon%20Careers">Email Abhay &amp; Pranav</a>
-  </div>
-</section>"""
 
 
 def faq_page_html() -> str:
@@ -384,96 +299,6 @@ def faq_page_html() -> str:
 </section>"""
 
 
-def system_status_page_html() -> str:
-    db_ok = True
-    try:
-        conn = portal_db.get_connection()
-        conn.close()
-    except Exception:
-        db_ok = False
-
-    groq_ok = bool(os.getenv("GROQ_API_KEY", "").strip())
-    overall_status = "All Systems Operational" if (db_ok and groq_ok) else "Partially Degraded"
-    overall_color = "var(--green)" if (db_ok and groq_ok) else "var(--amber)"
-    overall_badge = "pill green" if (db_ok and groq_ok) else "pill amber"
-
-    return f"""<section class="about-hero">
-<div class="eyebrow">Service Health &amp; Availability</div>
-<h1>Agent Daemon System Status</h1>
-<p>Live operational status for ingestion telemetry, Groq LLM inference, GitHub webhooks, and billing gateways.</p>
-<div style="margin-top:18px"><span class="{overall_badge}" style="font-size:14px;padding:6px 16px"><span style="display:inline-block;width:8px;height:8px;border-radius:50%;background:{overall_color};margin-right:6px"></span>{overall_status}</span></div>
-</section>
-
-<div class="card" style="margin-top:36px;padding:26px">
-  <div style="display:flex;justify-content:space-between;align-items:center;padding:12px 0;border-bottom:1px solid #3a2338">
-    <div>
-      <b>Core Ingestion API (<code>/ingest</code>)</b>
-      <div class="muted" style="font-size:13px">Accepts error telemetry and heartbeats from client apps</div>
-    </div>
-    <span class="pill green">Operational &middot; 38ms</span>
-  </div>
-
-  <div style="display:flex;justify-content:space-between;align-items:center;padding:12px 0;border-bottom:1px solid #3a2338">
-    <div>
-      <b>Portal Web Service &amp; Dashboard</b>
-      <div class="muted" style="font-size:13px">Customer dashboard, incident timelines, and project management</div>
-    </div>
-    <span class="pill green">Operational</span>
-  </div>
-
-  <div style="display:flex;justify-content:space-between;align-items:center;padding:12px 0;border-bottom:1px solid #3a2338">
-    <div>
-      <b>Groq LLM Diagnostic Engine</b>
-      <div class="muted" style="font-size:13px">Root-cause identification and AST patch generation</div>
-    </div>
-    <span class="pill {'green' if groq_ok else 'amber'}">{'Operational &middot; 1.1s' if groq_ok else 'Fallback Rules'}</span>
-  </div>
-
-  <div style="display:flex;justify-content:space-between;align-items:center;padding:12px 0;border-bottom:1px solid #3a2338">
-    <div>
-      <b>GitHub API &amp; Webhook Gateway</b>
-      <div class="muted" style="font-size:13px">Automated branch creation, PR opening, and CI status polling</div>
-    </div>
-    <span class="pill green">Operational</span>
-  </div>
-
-  <div style="display:flex;justify-content:space-between;align-items:center;padding:12px 0;border-bottom:1px solid #3a2338">
-    <div>
-      <b>Autonomous Worker Queue</b>
-      <div class="muted" style="font-size:13px">Background incident processing and auto-merge loops</div>
-    </div>
-    <span class="pill green">Active</span>
-  </div>
-
-  <div style="display:flex;justify-content:space-between;align-items:center;padding:12px 0">
-    <div>
-      <b>Billing &amp; Payment Gateway (Paytm UPI &amp; Razorpay)</b>
-      <div class="muted" style="font-size:13px">QR code generation, webhook verification, and manual approval flow</div>
-    </div>
-    <span class="pill green">Operational</span>
-  </div>
-</div>
-
-<div class="statgrid" style="margin-top:28px">
-  <div class="stat">
-    <b>99.94%</b>
-    <span>30-Day Ingest Uptime</span>
-  </div>
-  <div class="stat">
-    <b>&lt; 3 min</b>
-    <span>Average Auto-Fix Resolution</span>
-  </div>
-  <div class="stat">
-    <b>0</b>
-    <span>Active Outages</span>
-  </div>
-</div>
-
-<div style="text-align:center;margin-top:32px">
-  <span class="muted" style="font-size:13px">Automated health ping available at <a href="/health"><code>/health</code></a>. Monitored continuously across multi-region edge endpoints.</span>
-</div>"""
-
-
 def privacy_policy_page_html() -> str:
     return """<section class="about-hero">
 <div class="eyebrow">Data Privacy &amp; Protection</div>
@@ -530,54 +355,4 @@ def terms_of_service_page_html() -> str:
 
   <h3 style="color:var(--silver);margin:24px 0 8px">5. Limitation of Liability</h3>
   <p>In no event shall Agent Daemon, its founders, or contributors be liable for any indirect, incidental, or consequential damages resulting from downtime, software defects, or pull request merges.</p>
-</section>"""
-
-
-def cookie_policy_page_html() -> str:
-    return """<section class="about-hero">
-<div class="eyebrow">Transparency &amp; Storage</div>
-<h1>Cookie Policy</h1>
-<p class="muted">How Agent Daemon uses necessary browser cookies to ensure security and functionality.</p>
-</section>
-
-<section class="card" style="margin-top:36px;padding:32px;line-height:1.7;color:#d1c4df">
-  <h3 style="color:var(--silver);margin-bottom:8px">1. What Are Cookies?</h3>
-  <p>Cookies are small text strings stored in your web browser that enable websites to recognize your device across visits and authenticate your session.</p>
-
-  <h3 style="color:var(--silver);margin:24px 0 8px">2. Cookies We Use</h3>
-  <p>Agent Daemon uses <b>strictly necessary first-party cookies</b> to operate our platform securely. We do <b>not</b> use third-party advertising or cross-site tracking cookies.</p>
-
-  <table class="table" style="margin-top:16px">
-    <thead>
-      <tr>
-        <th>Cookie Name</th>
-        <th>Type</th>
-        <th>Purpose</th>
-        <th>Duration</th>
-      </tr>
-    </thead>
-    <tbody>
-      <tr>
-        <td><code>agent_session</code></td>
-        <td>Strictly Necessary</td>
-        <td>Signed, HTTP-only session cookie that keeps you securely logged into your dashboard.</td>
-        <td>14 Days</td>
-      </tr>
-      <tr>
-        <td><code>agent_csrf</code></td>
-        <td>Security</td>
-        <td>Cryptographic HMAC token preventing Cross-Site Request Forgery (CSRF) on form submissions.</td>
-        <td>2 Hours</td>
-      </tr>
-      <tr>
-        <td><code>agent_visitor_id</code></td>
-        <td>Functionality</td>
-        <td>Random UUID cookie used to persist live visitor chat sessions and prevent duplicate founder alerts.</td>
-        <td>1 Year</td>
-      </tr>
-    </tbody>
-  </table>
-
-  <h3 style="color:var(--silver);margin:24px 0 8px">3. Managing Cookies</h3>
-  <p>You can manage or disable cookies through your browser settings. However, disabling strictly necessary cookies will prevent you from signing in or submitting secure forms on Agent Daemon.</p>
 </section>"""

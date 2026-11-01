@@ -410,7 +410,7 @@ def test_structured_footer_and_all_links(web_env):
     assert "Resources" in body
     assert "Legal" in body
 
-    # 2. Verify all Product links
+    # 2. Verify all active Product links
     for path, expected_text in [
         ("/features", "Platform Capabilities"),
         ("/pricing", "Simple &amp; Transparent Plans"),
@@ -421,33 +421,33 @@ def test_structured_footer_and_all_links(web_env):
         assert st == "200 OK", f"Failed for {path}: {st}"
         assert expected_text in b, f"Missing text for {path}"
 
-    # 3. Verify all Company links
+    # 3. Verify active Company links (About Us, Contact Us)
     for path, expected_text in [
         ("/about", "About Us &amp; Co-Founders"),
         ("/contact", "Contact Our Team"),
-        ("/partnerships", "Partner with Agent Daemon"),
-        ("/careers", "Build the Future of Autonomous Systems Engineering"),
     ]:
         st, _, b = _request(path)
         assert st == "200 OK", f"Failed for {path}: {st}"
         assert expected_text in b, f"Missing text for {path}"
 
-    # 4. Verify all Resources links
+    # 4. Verify active Resources links (FAQ, Help Center)
     for path, expected_text in [
         ("/faq", "Frequently Asked Questions"),
         ("/help", "Agent Daemon Help Centre"),
-        ("/status", "Agent Daemon System Status"),
     ]:
         st, _, b = _request(path)
         assert st == "200 OK", f"Failed for {path}: {st}"
         assert expected_text in b, f"Missing text for {path}"
 
-    # 5. Verify all Legal links
+    # 5. Verify active Legal links (Privacy Policy, Terms of Service)
     for path, expected_text in [
         ("/privacy", "Privacy Policy"),
         ("/terms", "Terms of Service"),
-        ("/cookies", "Cookie Policy"),
     ]:
         st, _, b = _request(path)
         assert st == "200 OK", f"Failed for {path}: {st}"
         assert expected_text in b, f"Missing text for {path}"
+
+    # 6. Verify removed links are not in footer HTML
+    for removed in ("Partnerships", "Careers", "System Status", "Cookie Policy"):
+        assert removed not in body, f"{removed} should not be in footer"

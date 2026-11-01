@@ -2576,20 +2576,12 @@ def _dispatch(request: Request) -> Response:
         return _response(footer_pages.pricing_page_html(signed_in=bool(request.session)), request, status="200 OK")
     if request.method == "GET" and request.path == "/changelog":
         return _response(footer_pages.changelog_page_html(), request, status="200 OK")
-    if request.method == "GET" and request.path == "/partnerships":
-        return _response(footer_pages.partnerships_page_html(), request, status="200 OK")
-    if request.method == "GET" and request.path == "/careers":
-        return _response(footer_pages.careers_page_html(), request, status="200 OK")
     if request.method == "GET" and request.path in ("/faq", "/questions"):
         return _response(footer_pages.faq_page_html(), request, status="200 OK")
-    if request.method == "GET" and request.path in ("/status", "/system-status"):
-        return _response(footer_pages.system_status_page_html(), request, status="200 OK")
     if request.method == "GET" and request.path in ("/privacy", "/privacy-policy"):
         return _response(footer_pages.privacy_policy_page_html(), request, status="200 OK")
     if request.method == "GET" and request.path in ("/terms", "/terms-of-service", "/tos"):
         return _response(footer_pages.terms_of_service_page_html(), request, status="200 OK")
-    if request.method == "GET" and request.path in ("/cookies", "/cookie-policy"):
-        return _response(footer_pages.cookie_policy_page_html(), request, status="200 OK")
     if request.path in ("/contact", "/support"):
         return _page_contact(request)
     if request.path in ("/onboarding/name", "/profile/name"):
