@@ -713,3 +713,109 @@ def test_retry_with_nothing_to_change_reports_unchanged_instead_of_failing(monke
     result = mi.open_monitoring_pr(owner="demo", repo="shop", base_branch="main", project_id="11111111-2222-3333-4444-555555555555", token="t")
     assert result["unchanged"] is True and result["workflow_added"] is False and result["had_ci"] is False
     assert not calls.get("merged")  # no pull request was opened or merged
+
+
+
+# --- customer intake on free trial and paid plans --------------------------------
+
+def test_trial_intake_details_saved_and_emailed_to_admins(web_env):
+    user_id, csrf, cookie = make_session("lead@company.com")
+    
+    # 1. Check intake form on billing page
+    status, _, bill = _request("/billing", cookie=cookie)
+    assert status == "200 OK"
+    assert "Request free trial" in bill
+    assert "name='phone'" in bill
+    assert "name='referral_source'" in bill
+
+    # 2. Submit trial request with intake details
+    status, _, body = post("/billing/trial-request", cookie, csrf,
+                           name="Alice Smith",
+                           phone="+91 9988776655",
+                           referral_source="YouTube",
+                           organization="Acme Systems")
+    assert status == "200 OK"
+    assert "Request received" in body
+
+    # 3. Verify saved in database (users and trial_requests tables)
+    user = portal_db.get_user_by_id(user_id)
+    assert user["name"] == "Alice Smith"
+    assert user["phone"] == "+91 9988776655"
+    assert user["referral_source"] == "YouTube"
+    assert user["organization"] == "Acme Systems"
+
+    trials = portal_db.admin_list_trial_requests()
+    t = next(tr for tr in trials if tr["user_id"] == user_id)
+    assert t["user_name"] == "Alice Smith"
+    assert t["user_phone"] == "+91 9988776655"
+    assert t["user_referral"] == "YouTube"
+    assert t["user_organization"] == "Acme Systems"
+
+    # 4. Verify admin email alerts received the details
+    notifs = portal_db.recent_notifications(10)
+    trial_notifs = [n for n in notifs if n["kind"] == "trial_request"]
+    assert len(trial_notifs) == 2  # sent to both admins
+    for n in trial_notifs:
+        assert "lead@company.com" in n["subject"]
+
+    # 5. Verify details show on admin dashboard
+    _, _, admin_cookie = make_session("admin1@example.com")
+    st, _, admin_page = _request("/admin", cookie=admin_cookie)
+    assert st == "200 OK"
+    assert "Alice Smith" in admin_page
+    assert "+91 9988776655" in admin_page
+    assert "YouTube" in admin_page
+    assert "Acme Systems" in admin_page
+
+
+def test_payment_intake_details_saved_and_emailed_to_admins(web_env):
+    user_id, csrf, cookie = make_session("paying_user@company.com")
+
+    # 1. Check intake form on UPI payment page
+    st, _, page = _request("/billing/pay?plan=yearly", cookie=cookie)
+    assert st == "200 OK"
+    assert "name='phone'" in page
+    assert "name='referral_source'" in page
+    assert "name='transaction_ref'" in page
+
+    # 2. Submit payment with intake details
+    st, _, body = post("/billing/pay", cookie, csrf,
+                       plan="yearly",
+                       transaction_ref="888877776666",
+                       name="Bob Jones",
+                       phone="+91 9123456789",
+                       referral_source="GitHub",
+                       organization="Bob Labs")
+    assert st == "200 OK"
+    assert "Payment submitted" in body
+
+    # 3. Verify details saved in database
+    user = portal_db.get_user_by_id(user_id)
+    assert user["name"] == "Bob Jones"
+    assert user["phone"] == "+91 9123456789"
+    assert user["referral_source"] == "GitHub"
+    assert user["organization"] == "Bob Labs"
+
+    payments = portal_db.admin_list_manual_payments()
+    p = next(pm for pm in payments if pm["user_id"] == user_id)
+    assert p["user_name"] == "Bob Jones"
+    assert p["user_phone"] == "+91 9123456789"
+    assert p["user_referral"] == "GitHub"
+    assert p["user_organization"] == "Bob Labs"
+
+    # 4. Verify admin email alerts received details
+    notifs = portal_db.recent_notifications(10)
+    sub_notifs = [n for n in notifs if n["kind"] == "payment_submitted"]
+    assert len(sub_notifs) == 2  # sent to both admins
+    for n in sub_notifs:
+        assert "paying_user@company.com" in n["subject"]
+
+    # 5. Verify details show on admin dashboard
+    _, _, admin_cookie = make_session("admin1@example.com")
+    st, _, admin_page = _request("/admin", cookie=admin_cookie)
+    assert st == "200 OK"
+    assert "Bob Jones" in admin_page
+    assert "+91 9123456789" in admin_page
+    assert "GitHub" in admin_page
+    assert "Bob Labs" in admin_page
+    assert "888877776666" in admin_page

@@ -19,6 +19,9 @@ CREATE TABLE IF NOT EXISTS users (
   id TEXT PRIMARY KEY,
   email TEXT NOT NULL UNIQUE,
   name TEXT NOT NULL DEFAULT '',
+  phone TEXT NOT NULL DEFAULT '',
+  referral_source TEXT NOT NULL DEFAULT '',
+  organization TEXT NOT NULL DEFAULT '',
   password_hash TEXT NOT NULL DEFAULT '',
   created_at TEXT NOT NULL
 );
@@ -151,6 +154,10 @@ CREATE TABLE IF NOT EXISTS manual_payments (
   plan TEXT NOT NULL,
   transaction_ref TEXT NOT NULL,
   ref_norm TEXT NOT NULL DEFAULT '',
+  name TEXT NOT NULL DEFAULT '',
+  phone TEXT NOT NULL DEFAULT '',
+  referral_source TEXT NOT NULL DEFAULT '',
+  organization TEXT NOT NULL DEFAULT '',
   status TEXT NOT NULL DEFAULT 'pending',
   created_at TEXT NOT NULL,
   reviewed_at TEXT NOT NULL DEFAULT '',
@@ -161,6 +168,10 @@ CREATE INDEX IF NOT EXISTS idx_manual_payments_status ON manual_payments(status,
 CREATE TABLE IF NOT EXISTS trial_requests (
   id TEXT PRIMARY KEY,
   user_id TEXT NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+  name TEXT NOT NULL DEFAULT '',
+  phone TEXT NOT NULL DEFAULT '',
+  referral_source TEXT NOT NULL DEFAULT '',
+  organization TEXT NOT NULL DEFAULT '',
   status TEXT NOT NULL DEFAULT 'pending',
   requested_at TEXT NOT NULL,
   reviewed_at TEXT NOT NULL DEFAULT '',
@@ -283,6 +294,17 @@ def init_db() -> None:
             ("subscriptions", "granted_by", "TEXT NOT NULL DEFAULT ''"),
             ("payment_orders", "plan", "TEXT NOT NULL DEFAULT 'yearly'"),
             ("manual_payments", "ref_norm", "TEXT NOT NULL DEFAULT ''"),
+            ("users", "phone", "TEXT NOT NULL DEFAULT ''"),
+            ("users", "referral_source", "TEXT NOT NULL DEFAULT ''"),
+            ("users", "organization", "TEXT NOT NULL DEFAULT ''"),
+            ("trial_requests", "name", "TEXT NOT NULL DEFAULT ''"),
+            ("trial_requests", "phone", "TEXT NOT NULL DEFAULT ''"),
+            ("trial_requests", "referral_source", "TEXT NOT NULL DEFAULT ''"),
+            ("trial_requests", "organization", "TEXT NOT NULL DEFAULT ''"),
+            ("manual_payments", "name", "TEXT NOT NULL DEFAULT ''"),
+            ("manual_payments", "phone", "TEXT NOT NULL DEFAULT ''"),
+            ("manual_payments", "referral_source", "TEXT NOT NULL DEFAULT ''"),
+            ("manual_payments", "organization", "TEXT NOT NULL DEFAULT ''"),
         ]
         for table, column, ddl in additions:
             if isinstance(conn, sqlite3.Connection):
@@ -318,6 +340,33 @@ def update_user_name(user_id: str, name: str) -> None:
     conn = get_connection()
     try:
         _execute(conn, "UPDATE users SET name=? WHERE id=?", (name.strip(), user_id))
+        conn.commit()
+    finally:
+        conn.close()
+
+
+def get_user_by_id(user_id: str) -> dict | None:
+    conn = get_connection()
+    try:
+        row = _execute(conn, "SELECT * FROM users WHERE id = ?", (user_id,)).fetchone()
+        return dict(row) if row else None
+    finally:
+        conn.close()
+
+
+def update_user_details(user_id: str, name: str = "", phone: str = "", referral_source: str = "", organization: str = "") -> None:
+    conn = get_connection()
+    try:
+        current = _execute(conn, "SELECT * FROM users WHERE id = ?", (user_id,)).fetchone()
+        if not current:
+            return
+        c_keys = current.keys() if hasattr(current, "keys") else []
+        new_name = name.strip() or (current["name"] if "name" in c_keys and current["name"] else "")
+        new_phone = phone.strip() or (current["phone"] if "phone" in c_keys and current["phone"] else "")
+        new_ref = referral_source.strip() or (current["referral_source"] if "referral_source" in c_keys and current["referral_source"] else "")
+        new_org = organization.strip() or (current["organization"] if "organization" in c_keys and current["organization"] else "")
+        _execute(conn, "UPDATE users SET name=?, phone=?, referral_source=?, organization=? WHERE id=?",
+                 (new_name, new_phone, new_ref, new_org, user_id))
         conn.commit()
     finally:
         conn.close()
@@ -917,7 +966,7 @@ def user_has_active_access(user_id: str) -> bool:
 def admin_list_users():
     conn = get_connection()
     try:
-        rows = _execute(conn, """SELECT u.id,u.email,u.name,u.created_at,s.active_until,
+        rows = _execute(conn, """SELECT u.id,u.email,u.name,u.phone,u.referral_source,u.organization,u.created_at,s.active_until,
             COALESCE(s.grant_type,'') AS grant_type
             FROM users u LEFT JOIN subscriptions s ON s.user_id=u.id
             ORDER BY u.created_at DESC""").fetchall()
@@ -989,7 +1038,8 @@ def normalize_payment_ref(value: str) -> str:
     return "".join(str(value).split()).upper()
 
 
-def create_manual_payment_request(user_id: str, amount: int, plan: str, transaction_ref: str) -> dict:
+def create_manual_payment_request(user_id: str, amount: int, plan: str, transaction_ref: str,
+                                  name: str = "", phone: str = "", referral_source: str = "", organization: str = "") -> dict:
     """Record a customer's claimed UPI payment for manual verification.
 
     The reference must look like a UPI reference and be unique across ALL
@@ -1003,6 +1053,17 @@ def create_manual_payment_request(user_id: str, amount: int, plan: str, transact
         raise ValueError("Enter the 12-digit UPI reference (UTR) from your payment receipt.")
     conn = get_connection()
     try:
+        user_row = _execute(conn, "SELECT * FROM users WHERE id=?", (user_id,)).fetchone()
+        u_keys = user_row.keys() if user_row and hasattr(user_row, "keys") else []
+        u_name = name.strip() or (user_row["name"] if "name" in u_keys and user_row["name"] else "")
+        u_phone = phone.strip() or (user_row["phone"] if "phone" in u_keys and user_row["phone"] else "")
+        u_ref = referral_source.strip() or (user_row["referral_source"] if "referral_source" in u_keys and user_row["referral_source"] else "")
+        u_org = organization.strip() or (user_row["organization"] if "organization" in u_keys and user_row["organization"] else "")
+
+        if any([name.strip(), phone.strip(), referral_source.strip(), organization.strip()]):
+            _execute(conn, "UPDATE users SET name=?, phone=?, referral_source=?, organization=? WHERE id=?",
+                     (u_name, u_phone, u_ref, u_org, user_id))
+
         existing = _execute(conn, "SELECT * FROM manual_payments WHERE ref_norm=?", (norm,)).fetchone()
         if existing:
             if existing["user_id"] == user_id:
@@ -1015,9 +1076,9 @@ def create_manual_payment_request(user_id: str, amount: int, plan: str, transact
         payment_id = _id()
         try:
             _execute(conn, """INSERT INTO manual_payments
-                (id,user_id,amount,plan,transaction_ref,ref_norm,status,created_at)
-                VALUES(?,?,?,?,?,?,'pending',?)""",
-                (payment_id, user_id, amount, plan, transaction_ref, norm, _now()))
+                (id,user_id,amount,plan,transaction_ref,ref_norm,name,phone,referral_source,organization,status,created_at)
+                VALUES(?,?,?,?,?,?,?,?,?,?,?,?)""",
+                (payment_id, user_id, amount, plan, transaction_ref, norm, u_name, u_phone, u_ref, u_org, 'pending', _now()))
             conn.commit()
         except Exception as exc:
             conn.rollback()
@@ -1032,7 +1093,12 @@ def create_manual_payment_request(user_id: str, amount: int, plan: str, transact
 def admin_list_manual_payments():
     conn = get_connection()
     try:
-        rows = _execute(conn, """SELECT p.*,u.email FROM manual_payments p
+        rows = _execute(conn, """SELECT p.*, u.email,
+            COALESCE(NULLIF(p.name, ''), u.name, '') AS user_name,
+            COALESCE(NULLIF(p.phone, ''), u.phone, '') AS user_phone,
+            COALESCE(NULLIF(p.referral_source, ''), u.referral_source, '') AS user_referral,
+            COALESCE(NULLIF(p.organization, ''), u.organization, '') AS user_organization
+            FROM manual_payments p
             JOIN users u ON u.id=p.user_id ORDER BY
             CASE WHEN p.status='pending' THEN 0 ELSE 1 END, p.created_at DESC""").fetchall()
         return [dict(row) for row in rows]
@@ -1101,21 +1167,42 @@ def user_trial_status(user_id: str) -> str:
     return "none"
 
 
-def create_trial_request(user_id: str) -> dict:
+def create_trial_request(user_id: str, name: str = "", phone: str = "", referral_source: str = "", organization: str = "") -> dict:
     """One trial per customer, ever. Re-requesting while pending returns the same request."""
     conn = get_connection()
     try:
         rows = _execute(conn, "SELECT * FROM trial_requests WHERE user_id=? ORDER BY requested_at DESC", (user_id,)).fetchall()
         if any(row["status"] == "approved" for row in rows):
             raise ValueError("Your free trial has already been used. Choose a plan to continue.")
+        user_row = _execute(conn, "SELECT * FROM users WHERE id=?", (user_id,)).fetchone()
+        u_keys = user_row.keys() if user_row and hasattr(user_row, "keys") else []
+        u_name = name.strip() or (user_row["name"] if "name" in u_keys and user_row["name"] else "")
+        u_phone = phone.strip() or (user_row["phone"] if "phone" in u_keys and user_row["phone"] else "")
+        u_ref = referral_source.strip() or (user_row["referral_source"] if "referral_source" in u_keys and user_row["referral_source"] else "")
+        u_org = organization.strip() or (user_row["organization"] if "organization" in u_keys and user_row["organization"] else "")
+
+        if any([name.strip(), phone.strip(), referral_source.strip(), organization.strip()]):
+            _execute(conn, "UPDATE users SET name=?, phone=?, referral_source=?, organization=? WHERE id=?",
+                     (u_name, u_phone, u_ref, u_org, user_id))
+
         pending = next((row for row in rows if row["status"] == "pending"), None)
         if pending:
             existing = dict(pending)
             existing["created"] = False
+            if any([name.strip(), phone.strip(), referral_source.strip(), organization.strip()]):
+                _execute(conn, "UPDATE trial_requests SET name=?, phone=?, referral_source=?, organization=? WHERE id=?",
+                         (u_name, u_phone, u_ref, u_org, existing["id"]))
+                conn.commit()
+                existing["name"] = u_name
+                existing["phone"] = u_phone
+                existing["referral_source"] = u_ref
+                existing["organization"] = u_org
             return existing
         request_id = _id()
-        _execute(conn, "INSERT INTO trial_requests(id,user_id,status,requested_at) VALUES(?,?,?,?)",
-                 (request_id, user_id, "pending", _now()))
+        _execute(conn, """INSERT INTO trial_requests
+            (id,user_id,name,phone,referral_source,organization,status,requested_at)
+            VALUES(?,?,?,?,?,?,?,?)""",
+            (request_id, user_id, u_name, u_phone, u_ref, u_org, "pending", _now()))
         conn.commit()
         created = dict(_execute(conn, "SELECT * FROM trial_requests WHERE id=?", (request_id,)).fetchone())
         created["created"] = True
@@ -1127,7 +1214,12 @@ def create_trial_request(user_id: str) -> dict:
 def admin_list_trial_requests():
     conn = get_connection()
     try:
-        rows = _execute(conn, """SELECT tr.*,u.email FROM trial_requests tr
+        rows = _execute(conn, """SELECT tr.*, u.email,
+            COALESCE(NULLIF(tr.name, ''), u.name, '') AS user_name,
+            COALESCE(NULLIF(tr.phone, ''), u.phone, '') AS user_phone,
+            COALESCE(NULLIF(tr.referral_source, ''), u.referral_source, '') AS user_referral,
+            COALESCE(NULLIF(tr.organization, ''), u.organization, '') AS user_organization
+            FROM trial_requests tr
             JOIN users u ON u.id=tr.user_id
             ORDER BY CASE WHEN tr.status='pending' THEN 0 ELSE 1 END, tr.requested_at DESC""").fetchall()
         return [dict(row) for row in rows]

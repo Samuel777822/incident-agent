@@ -696,17 +696,35 @@ def _after_payment(order_id: str, payment_id: str) -> None:
     order = portal_db.get_payment_order(order_id)
     if not order:
         return
-    email = portal_db.get_user_email(order["user_id"])
+    user = portal_db.get_user_by_id(order["user_id"]) or {}
+    email = user.get("email") or portal_db.get_user_email(order["user_id"])
     plan = PLANS.get(order["plan"], PLANS["yearly"])
+    u_name = user.get("name") or "User"
+    u_phone = user.get("phone") or "Not provided"
+    u_ref = user.get("referral_source") or "Not specified"
+    u_org = user.get("organization") or "Not specified"
     if email:
         notifications.notify_customer(
             email, "Payment received - your Agent Daemon access is active",
-            f"Thanks! We received your payment of INR {plan['rupees']} for the {plan['label'].lower()} plan.\n"
+            f"Thanks {u_name}! We received your payment of INR {plan['rupees']} for the {plan['label'].lower()} plan.\n"
             f"Your access is active now: {_base_url()}/dashboard", "payment_customer")
+    admin_body = (
+        f"New paid subscription activated: {email or order['user_id']}\n\n"
+        f"Customer Details:\n"
+        f"  - Name: {u_name}\n"
+        f"  - Email: {email}\n"
+        f"  - Mobile / WhatsApp: {u_phone}\n"
+        f"  - How they found us: {u_ref}\n"
+        f"  - Company / Project: {u_org}\n\n"
+        f"Payment Details:\n"
+        f"  - Amount: INR {plan['rupees']} ({plan['label']})\n"
+        f"  - Razorpay Order ID: {order_id}\n"
+        f"  - Razorpay Payment ID: {payment_id}\n\n"
+        f"View admin dashboard:\n{_base_url()}/admin"
+    )
     notifications.notify_admins(
         f"New paid subscription: {email or order['user_id']}",
-        f"{email} paid INR {plan['rupees']} ({plan['label'].lower()}). Access was activated automatically.\n"
-        f"{_base_url()}/admin", "payment_admin")
+        admin_body, "payment_admin")
 
 
 def _github_setup_guide() -> str:
@@ -1613,26 +1631,59 @@ def _admin_view(request):
     ])
 
     pending_trials = [t for t in trials if t["status"] == "pending"]
-    trial_rows = [f"<tr><td>{_escape(t['email'])}</td><td>{_escape(_fmt_time(t['requested_at']))}</td><td>"
-                  f"<form method='post' action='/admin' class='actions'><input type='hidden' name='csrf' value='{csrf}'>"
-                  f"<input type='hidden' name='request_id' value='{_escape(t['id'])}'>"
-                  "<button class='button primary' name='action' value='approve_trial' type='submit'>Approve 1-day trial</button>"
-                  "<button class='button danger' name='action' value='reject_trial' type='submit'>Reject</button></form></td></tr>"
-                  for t in pending_trials]
+    trial_rows = []
+    for t in pending_trials:
+        c_name = t.get("user_name") or t.get("name") or ""
+        c_phone = t.get("user_phone") or t.get("phone") or ""
+        c_ref = t.get("user_referral") or t.get("referral_source") or ""
+        c_org = t.get("user_organization") or t.get("organization") or ""
+        cust_cell = f"<b>{_escape(c_name)}</b><br><small class='muted'>{_escape(t['email'])}</small>" if c_name else _escape(t['email'])
+        phone_cell = f"<a href='tel:{_escape(c_phone)}' style='color:#75a7ff'>{_escape(c_phone)}</a>" if c_phone else "<span class='muted'>—</span>"
+        info_parts = []
+        if c_ref:
+            info_parts.append(f"<b>Via:</b> {_escape(c_ref)}")
+        if c_org:
+            info_parts.append(f"<b>Org:</b> {_escape(c_org)}")
+        info_cell = "<br>".join(info_parts) if info_parts else "<span class='muted'>—</span>"
+        trial_rows.append(
+            f"<tr><td>{cust_cell}</td><td>{phone_cell}</td><td>{info_cell}</td>"
+            f"<td>{_escape(_fmt_time(t['requested_at']))}</td><td>"
+            f"<form method='post' action='/admin' class='actions'><input type='hidden' name='csrf' value='{csrf}'>"
+            f"<input type='hidden' name='request_id' value='{_escape(t['id'])}'>"
+            "<button class='button primary' name='action' value='approve_trial' type='submit'>Approve 1-day trial</button>"
+            "<button class='button danger' name='action' value='reject_trial' type='submit'>Reject</button></form></td></tr>"
+        )
+
     pending_payments = [p for p in payments if p["status"] == "pending"]
-    payment_rows = [f"<tr><td>{_escape(p['email'])}</td><td>₹{_escape(p['amount'])} · {_escape(p['plan'])}</td>"
-                    f"<td><code>{_escape(p['transaction_ref'])}</code><br><small class='muted'>{_escape(_fmt_time(p['created_at']))}</small></td><td>"
-                    f"<form method='post' action='/admin' class='actions'><input type='hidden' name='csrf' value='{csrf}'>"
-                    f"<input type='hidden' name='payment_id' value='{_escape(p['id'])}'>"
-                    f"<button class='button primary' name='action' value='confirm_payment' type='submit'>I received ₹{_escape(p['amount'])} · grant {30 if p['plan'] == 'monthly' else 365} days</button>"
-                    "<button class='button danger' name='action' value='reject_payment' type='submit'>Not received</button></form></td></tr>"
-                    for p in pending_payments]
+    payment_rows = []
+    for p in pending_payments:
+        p_name = p.get("user_name") or p.get("name") or ""
+        p_phone = p.get("user_phone") or p.get("phone") or ""
+        p_ref = p.get("user_referral") or p.get("referral_source") or ""
+        p_org = p.get("user_organization") or p.get("organization") or ""
+        cust_cell = f"<b>{_escape(p_name)}</b><br><small class='muted'>{_escape(p['email'])}</small>" if p_name else _escape(p['email'])
+        phone_cell = f"<a href='tel:{_escape(p_phone)}' style='color:#75a7ff'>{_escape(p_phone)}</a>" if p_phone else "<span class='muted'>—</span>"
+        info_parts = []
+        if p_ref:
+            info_parts.append(f"<b>Via:</b> {_escape(p_ref)}")
+        if p_org:
+            info_parts.append(f"<b>Org:</b> {_escape(p_org)}")
+        info_cell = "<br>".join(info_parts) if info_parts else "<span class='muted'>—</span>"
+        payment_rows.append(
+            f"<tr><td>{cust_cell}</td><td>{phone_cell}</td><td>{info_cell}</td>"
+            f"<td>₹{_escape(p['amount'])} · {_escape(p['plan'])}</td>"
+            f"<td><code>{_escape(p['transaction_ref'])}</code><br><small class='muted'>{_escape(_fmt_time(p['created_at']))}</small></td><td>"
+            f"<form method='post' action='/admin' class='actions'><input type='hidden' name='csrf' value='{csrf}'>"
+            f"<input type='hidden' name='payment_id' value='{_escape(p['id'])}'>"
+            f"<button class='button primary' name='action' value='confirm_payment' type='submit'>I received ₹{_escape(p['amount'])} · grant {30 if p['plan'] == 'monthly' else 365} days</button>"
+            "<button class='button danger' name='action' value='reject_payment' type='submit'>Not received</button></form></td></tr>"
+        )
     attention = ""
     if trial_rows:
-        attention += "<h2>Trial requests</h2>" + _table(["Customer", "Requested", "Decision"], trial_rows)
+        attention += "<h2>Trial requests</h2>" + _table(["Customer", "Mobile / WhatsApp", "Found Via / Org", "Requested", "Decision"], trial_rows)
     if payment_rows:
         attention += ("<h2>UPI payments to confirm</h2><p class='muted'>Open your Paytm app, find this exact reference and amount, "
-                      "then confirm. Confirm only money you can see.</p>" + _table(["Customer", "Claimed", "Reference", "Decision"], payment_rows))
+                      "then confirm. Confirm only money you can see.</p>" + _table(["Customer", "Mobile / WhatsApp", "Found Via / Org", "Claimed", "Reference", "Decision"], payment_rows))
     if not attention:
         attention = "<h2>Needs your attention</h2><div class='empty'>Nothing waiting. New trial requests and UPI payments show up here.</div>"
 
@@ -1663,8 +1714,20 @@ def _admin_view(request):
                       "<select name='grant' aria-label='Access to grant'><option value='trial:1'>Free trial · 1 day</option>"
                       "<option value='paid:30'>Paid · 30 days</option><option value='paid:365'>Paid · 365 days</option></select>"
                       "<button class='button primary' name='action' value='grant' type='submit'>Grant access</button></form>")
-        cust_label = f"<b>{_escape(user['name'])}</b><br><small class='muted'>{_escape(user['email'])}</small>" if user.get('name') else _escape(user['email'])
-        customer_rows.append(f"<tr><td>{cust_label}<br><small class='muted'>Joined {_escape(_fmt_time(user['created_at']))}</small></td><td>{status}</td><td>{action}</td></tr>")
+        u_name = user.get('name') or ""
+        u_phone = user.get('phone') or ""
+        u_ref = user.get('referral_source') or ""
+        u_org = user.get('organization') or ""
+        cust_label = f"<b>{_escape(u_name)}</b><br><small class='muted'>{_escape(user['email'])}</small>" if u_name else _escape(user['email'])
+        contact_parts = []
+        if u_phone:
+            contact_parts.append(f"<a href='tel:{_escape(u_phone)}' style='color:#75a7ff'>{_escape(u_phone)}</a>")
+        if u_ref:
+            contact_parts.append(f"<small class='muted'>Via: {_escape(u_ref)}</small>")
+        if u_org:
+            contact_parts.append(f"<small class='muted'>Org: {_escape(u_org)}</small>")
+        contact_cell = "<br>".join(contact_parts) if contact_parts else "<span class='muted'>—</span>"
+        customer_rows.append(f"<tr><td>{cust_label}<br><small class='muted'>Joined {_escape(_fmt_time(user['created_at']))}</small></td><td>{contact_cell}</td><td>{status}</td><td>{action}</td></tr>")
 
     project_rows = []
     for project, (state, css) in zip(projects, states):
@@ -1784,7 +1847,7 @@ setInterval(() => {
 
     body = (f"<section class='section'><div class='eyebrow'>Administrator</div><h1>Operations</h1>"
             f"<p class='muted'>Signed in as {_escape(request.session['email'])}</p>{flash}<div class='statgrid'>{cards}</div>{attention}"
-            f"<h2>Customers</h2>{_table(['Customer', 'Access', 'Action'], customer_rows, 'No customer accounts yet.')}"
+            f"<h2>Customers</h2>{_table(['Customer', 'Contact & Referral', 'Access', 'Action'], customer_rows, 'No customer accounts yet.')}"
             f"<h2>Applications</h2>{_table(['App', 'Owner', 'State', 'Last check-in', 'Open incidents'], project_rows, 'No applications connected yet.')}"
             f"<h2>Recent incidents and fixes</h2>{_table(['When', 'App', 'Error', 'Agent status', 'Fix'], incident_rows, 'No incidents yet.')}"
             f"{chat_section}"
@@ -1803,14 +1866,39 @@ def _page_trial_request(request):
         return _response("Method not allowed", request, "405 Method Not Allowed")
     if not _csrf_valid(request):
         return _response("<div class='alert'>This form expired. Refresh and try again.</div>", request, "403 Forbidden")
+    name = str(request.form.get("name", "")).strip()
+    phone = str(request.form.get("phone", "")).strip()
+    referral_source = str(request.form.get("referral_source", "")).strip()
+    organization = str(request.form.get("organization", "")).strip()
     try:
-        trial = portal_db.create_trial_request(request.session["user_id"])
+        trial = portal_db.create_trial_request(
+            request.session["user_id"],
+            name=name,
+            phone=phone,
+            referral_source=referral_source,
+            organization=organization
+        )
     except ValueError as exc:
         return _response(f"<section class='card form-card'><h1>Trial not available</h1><p>{_escape(exc)}</p><a class='button primary' href='/billing'>Choose a plan</a></section>", request, "409 Conflict")
     if trial.get("created"):
+        user_name = name or trial.get("name") or request.session.get("name") or "User"
+        user_phone = phone or trial.get("phone") or "Not provided"
+        user_ref = referral_source or trial.get("referral_source") or "Not specified"
+        user_org = organization or trial.get("organization") or "Not specified"
+        email_body = (
+            f"New 1-day free trial request from {request.session['email']}.\n\n"
+            f"Customer Details:\n"
+            f"  - Name: {user_name}\n"
+            f"  - Email: {request.session['email']}\n"
+            f"  - Mobile / WhatsApp: {user_phone}\n"
+            f"  - How they found us: {user_ref}\n"
+            f"  - Organization / Project: {user_org}\n"
+            f"  - Requested At: {trial.get('requested_at', 'Just now')}\n\n"
+            f"Review and approve or reject on the admin page:\n{_base_url()}/admin"
+        )
         notifications.notify_admins(
             f"New trial request: {request.session['email']}",
-            f"{request.session['email']} requested a 1-day free trial.\nApprove or reject it here: {_base_url()}/admin", "trial_request")
+            email_body, "trial_request")
     return _response("<section class='card form-card'><h1>Request received</h1>"
                      "<p>Your request is saved and waiting for approval. When an admin approves it your 1-day trial starts immediately; "
                      "you will see it on your dashboard and get an email.</p>"
@@ -2275,10 +2363,36 @@ def _page_billing(request):
         elif trial == "approved":
             trial_card = "<article class='card'><div class='eyebrow'>Free trial</div><h3>Trial used</h3><p class='muted'>Your 1-day trial has ended. Pick a plan below to continue.</p></article>"
         else:
-            note = "<p class='muted'>Your last request was not approved. You can ask again.</p>" if trial == "rejected" else "<p class='muted'>Try everything for one day. An admin approves each request.</p>"
-            trial_card = (f"<article class='card'><div class='eyebrow'>Free trial</div><h3>1 day, free</h3>{note}"
-                          f"<form method='post' action='/billing/trial-request'><input type='hidden' name='csrf' value='{csrf}'>"
-                          "<button class='button' type='submit'>Request free trial</button></form></article>")
+            note = "<p class='muted'>Your last request was not approved. You can ask again.</p>" if trial == "rejected" else "<p class='muted'>Try everything for one day. Please provide your details below.</p>"
+            user_info = portal_db.get_user_by_id(user_id) or {}
+            prefill_name = user_info.get("name") or request.session.get("name") or ""
+            prefill_phone = user_info.get("phone") or ""
+            prefill_ref = user_info.get("referral_source") or ""
+            prefill_org = user_info.get("organization") or ""
+            ref_opts = [
+                ("YouTube", "YouTube Demo / Video"),
+                ("GitHub", "GitHub / Open Source"),
+                ("LinkedIn / X", "LinkedIn / X (Twitter)"),
+                ("Google Search", "Google Search"),
+                ("Friend / Colleague", "Friend / Colleague recommendation"),
+                ("College / Hackathon", "College / Hackathon"),
+                ("Other", "Other"),
+            ]
+            opts_html = "".join(f"<option value='{_escape(val)}'{' selected' if prefill_ref == val else ''}>{_escape(lbl)}</option>" for val, lbl in ref_opts)
+            trial_card = (
+                f"<article class='card'><div class='eyebrow'>Free trial</div><h3>1 day, free</h3>{note}"
+                f"<form method='post' action='/billing/trial-request' style='display:flex;flex-direction:column;gap:10px;margin-top:12px'>"
+                f"<input type='hidden' name='csrf' value='{csrf}'>"
+                f"<div class='field' style='margin-bottom:0'><label style='font-size:12px'>Your Name</label>"
+                f"<input name='name' value='{_escape(prefill_name)}' placeholder='Full name' maxlength='100'></div>"
+                f"<div class='field' style='margin-bottom:0'><label style='font-size:12px'>Mobile / WhatsApp Number</label>"
+                f"<input name='phone' type='tel' value='{_escape(prefill_phone)}' placeholder='+91 98765 43210' maxlength='30'></div>"
+                f"<div class='field' style='margin-bottom:0'><label style='font-size:12px'>How did you find out about us?</label>"
+                f"<select name='referral_source'><option value=''>Select an option...</option>{opts_html}</select></div>"
+                f"<div class='field' style='margin-bottom:0'><label style='font-size:12px'>Company / Project Name <small class='muted'>(optional)</small></label>"
+                f"<input name='organization' value='{_escape(prefill_org)}' placeholder='e.g. Acme Inc' maxlength='100'></div>"
+                "<button class='button primary' type='submit' style='margin-top:4px'>Request free trial</button></form></article>"
+            )
     plan_cards = []
     for key, plan in PLANS.items():
         if gateway:
@@ -2314,18 +2428,43 @@ def _page_manual_payment(request):
         if plan not in PLANS:
             return _response("<div class='alert'>Choose a valid plan.</div>", request, "400 Bad Request")
         ref = str(request.form.get("transaction_ref", "")).strip()
+        name = str(request.form.get("name", "")).strip()
+        phone = str(request.form.get("phone", "")).strip()
+        referral_source = str(request.form.get("referral_source", "")).strip()
+        organization = str(request.form.get("organization", "")).strip()
         try:
-            payment = portal_db.create_manual_payment_request(request.session["user_id"], PLANS[plan]["rupees"], plan, ref)
+            payment = portal_db.create_manual_payment_request(
+                request.session["user_id"], PLANS[plan]["rupees"], plan, ref,
+                name=name, phone=phone, referral_source=referral_source, organization=organization
+            )
         except ValueError as exc:
             return _response(f"<div class='alert'>{_escape(exc)}</div><p><a href='/billing/pay?plan={plan}'>Back</a></p>", request, "400 Bad Request")
         if payment.get("created_at") and payment["status"] == "pending":
+            user_name = name or payment.get("name") or request.session.get("name") or "User"
+            user_phone = phone or payment.get("phone") or "Not provided"
+            user_ref = referral_source or payment.get("referral_source") or "Not specified"
+            user_org = organization or payment.get("organization") or "Not specified"
+            email_body = (
+                f"UPI payment to confirm: INR {PLANS[plan]['rupees']} from {request.session['email']}.\n\n"
+                f"Customer Details:\n"
+                f"  - Name: {user_name}\n"
+                f"  - Email: {request.session['email']}\n"
+                f"  - Mobile / WhatsApp: {user_phone}\n"
+                f"  - How they found us: {user_ref}\n"
+                f"  - Company / Project: {user_org}\n\n"
+                f"Payment Details:\n"
+                f"  - Plan: {plan.title()} (INR {PLANS[plan]['rupees']})\n"
+                f"  - UPI Reference (UTR): {ref}\n"
+                f"  - Submitted: {payment.get('created_at', 'Just now')}\n\n"
+                f"Open your Paytm app and look for a payment of INR {PLANS[plan]['rupees']} with this reference. "
+                f"If you see it, confirm it here: {_base_url()}/admin"
+            )
             notifications.notify_admins(
                 f"UPI payment to confirm: INR {PLANS[plan]['rupees']} from {request.session['email']}",
-                f"Customer: {request.session['email']}\nPlan: {plan} (INR {PLANS[plan]['rupees']})\nUPI reference: {ref}\n"
-                f"Open your Paytm app and look for a payment of INR {PLANS[plan]['rupees']} with this reference. If you see it, confirm it here: {_base_url()}/admin", "payment_submitted")
+                email_body, "payment_submitted")
             notifications.notify_customer(
                 request.session["email"], "We received your payment details",
-                f"Thanks! You told us you paid INR {PLANS[plan]['rupees']} (reference {ref}).\n"
+                f"Thanks {user_name}! You told us you paid INR {PLANS[plan]['rupees']} (reference {ref}).\n"
                 "Please wait 1 to 2 hours. We check our Paytm account and switch your access on as soon as we see the payment. "
                 "You will get another email when it is active.", "payment_received")
         return _response("<section class='card form-card'><h1>Payment submitted</h1>"
@@ -2345,13 +2484,35 @@ def _page_manual_payment(request):
                                        {"pa": vpa, "pn": os.getenv("UPI_PAYEE_NAME", "Pranav V Rao").strip(), "cu": "INR"}.items())
     plain_qr = _qr_data_uri(plain_uri)
     plain_html = f"<img src='{_escape(plain_qr)}' alt='UPI QR code without an amount' width='220' height='220'>" if plain_qr else ""
+
+    user_info = portal_db.get_user_by_id(request.session["user_id"]) or {}
+    prefill_name = user_info.get("name") or request.session.get("name") or ""
+    prefill_phone = user_info.get("phone") or ""
+    prefill_ref = user_info.get("referral_source") or ""
+    prefill_org = user_info.get("organization") or ""
+
+    ref_opts = [
+        ("YouTube", "YouTube Demo / Video"),
+        ("GitHub", "GitHub / Open Source"),
+        ("LinkedIn / X", "LinkedIn / X (Twitter)"),
+        ("Google Search", "Google Search"),
+        ("Friend / Colleague", "Friend / Colleague recommendation"),
+        ("College / Hackathon", "College / Hackathon"),
+        ("Other", "Other"),
+    ]
+    opts_html = "".join(f"<option value='{_escape(val)}'{' selected' if prefill_ref == val else ''}>{_escape(lbl)}</option>" for val, lbl in ref_opts)
+
     body = (f"<section class='card form-card'><div class='eyebrow'>Pay by UPI</div><h1>Pay ₹{rupees:,}</h1>"
             f"<p class='muted'>{PLANS[plan]['label']} plan · {PLANS[plan]['days']} days. On a phone tap the button to open your UPI app (Paytm, PhonePe, GPay). On a computer scan the QR code with your phone.</p>"
             f"<div class='qr'><a href='{_escape(uri)}' aria-label='Open UPI app'>{qr_html}</a><p>{_escape(vpa)}</p>"
             f"<a class='button primary' style='margin-top:12px' href='{_escape(uri)}'>Open UPI app and pay ₹{rupees:,}</a></div>"
             f"<details><summary>Your app will not accept the amount? Scan this QR and type ₹{rupees:,} yourself.</summary><div class='qr'>{plain_html}<p>{_escape(vpa)}</p></div></details>"
-            f"<div class='alert'>Check that your UPI app shows exactly ₹{rupees:,}.00 before you pay. After you pay, enter the UPI reference number (UTR) from your receipt below and press the button. Then please wait 1 to 2 hours: we check our Paytm account for your payment and switch your access on. You will get an email.</div>"
+            f"<div class='alert'>Check that your UPI app shows exactly ₹{rupees:,}.00 before you pay. After you pay, enter the UPI reference number (UTR) and your contact details below and press the button. Then please wait 1 to 2 hours: we check our Paytm account for your payment and switch your access on. You will get an email.</div>"
             f"<form method='post' action='/billing/pay'><input type='hidden' name='csrf' value='{_escape(_csrf(request))}'><input type='hidden' name='plan' value='{plan}'>"
+            f"<div class='field'><label>Your Name</label><input name='name' value='{_escape(prefill_name)}' placeholder='Full name' maxlength='100'></div>"
+            f"<div class='field'><label>Mobile / WhatsApp Number</label><input name='phone' type='tel' value='{_escape(prefill_phone)}' placeholder='+91 98765 43210' maxlength='30'></div>"
+            f"<div class='field'><label>How did you find out about us?</label><select name='referral_source'><option value=''>Select an option...</option>{opts_html}</select></div>"
+            f"<div class='field'><label>Company / Project Name <small class='muted'>(optional)</small></label><input name='organization' value='{_escape(prefill_org)}' placeholder='e.g. Acme Inc' maxlength='100'></div>"
             "<div class='field'><label>UPI reference number (UTR)</label><input name='transaction_ref' maxlength='40' required autocomplete='off' placeholder='12-digit number from your payment receipt'>"
             "<small>Only submit after your UPI app shows the payment as successful. Fake references are rejected when an admin checks.</small></div>"
             "<button class='button primary' type='submit'>I have paid ₹" + f"{rupees:,}" + "</button></form></section>")
@@ -2376,6 +2537,12 @@ def _page_create_order(request):
     except RuntimeError as exc:
         return _response(f"<div class='alert'>{_escape(exc)}</div><p><a href='/billing/pay?plan={plan}'>Pay by UPI QR instead</a></p>", request, "503 Service Unavailable")
     user_id = request.session["user_id"]
+    cust_name = str(request.form.get("name", "")).strip()
+    cust_phone = str(request.form.get("phone", "")).strip()
+    cust_ref = str(request.form.get("referral_source", "")).strip()
+    cust_org = str(request.form.get("organization", "")).strip()
+    if any([cust_name, cust_phone, cust_ref, cust_org]):
+        portal_db.update_user_details(user_id, name=cust_name, phone=cust_phone, referral_source=cust_ref, organization=cust_org)
     payload = json.dumps({"amount": amount, "currency": "INR",
                           "receipt": "ad-" + secrets.token_hex(8),
                           "notes": {"user_id": user_id, "plan": plan}}).encode("utf-8")
