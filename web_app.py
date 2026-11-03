@@ -244,6 +244,73 @@ a.card:hover{box-shadow:0 20px 60px #0009,0 0 28px #9a4dff44;transform:translate
 """
 
 
+CSS += """
+/* ===== Homepage Visual Simulation & Animations ===== */
+@keyframes simPulseRed {
+  0% { box-shadow: 0 0 0 0 rgba(225, 29, 42, 0.7); }
+  70% { box-shadow: 0 0 0 8px rgba(225, 29, 42, 0); }
+  100% { box-shadow: 0 0 0 0 rgba(225, 29, 42, 0); }
+}
+@keyframes simPulseGreen {
+  0% { box-shadow: 0 0 0 0 rgba(111, 224, 176, 0.7); }
+  70% { box-shadow: 0 0 0 8px rgba(111, 224, 176, 0); }
+  100% { box-shadow: 0 0 0 0 rgba(111, 224, 176, 0); }
+}
+@keyframes simPulseAmber {
+  0% { box-shadow: 0 0 0 0 rgba(227, 189, 116, 0.7); }
+  70% { box-shadow: 0 0 0 8px rgba(227, 189, 116, 0); }
+  100% { box-shadow: 0 0 0 0 rgba(227, 189, 116, 0); }
+}
+@keyframes floatSlow {
+  0%, 100% { transform: translateY(0); }
+  50% { transform: translateY(-4px); }
+}
+.pulse-red {
+  display: inline-block;
+  width: 8px;
+  height: 8px;
+  border-radius: 50%;
+  background: #ff4a3a;
+  animation: simPulseRed 2s infinite;
+}
+.pulse-green {
+  display: inline-block;
+  width: 8px;
+  height: 8px;
+  border-radius: 50%;
+  background: #6fe0b0;
+  animation: simPulseGreen 2s infinite;
+}
+.pulse-amber {
+  display: inline-block;
+  width: 8px;
+  height: 8px;
+  border-radius: 50%;
+  background: #e3bd74;
+  animation: simPulseAmber 2s infinite;
+}
+.hover-float {
+  transition: transform 0.22s ease, box-shadow 0.22s ease, border-color 0.22s ease;
+}
+.hover-float:hover {
+  transform: translateY(-4px);
+  border-color: #ff4a3a88;
+  box-shadow: 0 18px 45px rgba(0,0,0,0.7), 0 0 25px rgba(154, 77, 255, 0.25);
+}
+.sim-tab {
+  transition: all 0.2s ease;
+}
+.sim-tab:hover {
+  filter: brightness(1.2);
+}
+.sim-box {
+  animation: floatSlow 6s ease-in-out infinite alternate;
+}
+.setup-drawer summary::-webkit-details-marker { display:none; }
+.setup-drawer summary { list-style:none; }
+"""
+
+
 def _escape(value) -> str:
     if isinstance(value, int) and not isinstance(value, bool):
         return str(value)
@@ -1488,10 +1555,234 @@ def _render_contact_page(request: Request, flash: str = "", name: str = "", emai
 def _page_home(request):
     if request.session:
         return _redirect("/admin" if _is_admin(request) else "/dashboard")
-    body = ("""<section class="hero"><div class="eyebrow">Incident response for Python services</div><h1>When production breaks, get to the cause faster.</h1><p>Agent Daemon watches the error logs of your Python app, groups repeated errors into incidents, explains the likely cause, and can open a pull request with a fix for you to review.</p><div class="actions"><a class="button primary" href="/login">Continue with Google</a></div></section>
-<section class="section"><h2>How it works</h2><ol class="steps big"><li><b>Sign in with Google.</b> No password to create or remember.</li><li><b>Get access.</b> Ask for a free trial or choose a plan. An administrator approves trials, and paid plans open as soon as payment is confirmed.</li><li><b>Connect your repository.</b> You give us a GitHub token and we open one pull request that adds monitoring. You review and merge it.</li><li><b>The agent watches.</b> Repeated errors become incidents with a timeline and a diagnosis. In Pull request mode it also proposes a fix.</li></ol></section>
-<section class="grid"><article class="card"><h3>See what happened</h3><p class="muted">Turn repeated error logs into incidents with a clear timeline and diagnosis.</p></article><article class="card"><h3>Keep your code in your control</h3><p class="muted">The hosted diagnosis worker reads repository files as evidence. It does not run your code or tests or change your repository.</p></article><article class="card"><h3>Choose how much it does</h3><p class="muted">Report only, Pull request, or Auto, which merges only after your GitHub checks pass. Pause monitoring or remove a project and its stored data from your dashboard any time.</p></article></section>
-""" + _github_setup_guide())
+    body = """<section class="hero" style="padding: min(28vh, 250px) 0 42px;">
+  <div class="eyebrow" style="margin-bottom:14px;background:#1b0e24;border:1px solid #ff4a3a55;border-radius:99px;padding:6px 16px;font-size:13px;display:inline-flex;align-items:center;gap:8px;">
+    <span class="pulse-red"></span> Autonomous Incident Response for Python Services
+  </div>
+  <h1 style="max-width:880px;margin:12px auto 18px;">When production breaks, get to the cause faster.</h1>
+  <p style="font-size:18px;max-width:680px;line-height:1.6;color:#d5cadf;margin:0 auto 28px;">
+    Agent Daemon watches the error logs of your Python app, groups repeated errors into incidents, explains the likely cause, and can open a pull request with a fix for you to review.
+  </p>
+  <div class="actions" style="display:flex;gap:12px;justify-content:center;align-items:center;flex-wrap:wrap;">
+    <a class="button primary" href="/login" style="padding:12px 24px;font-size:15px;box-shadow:0 0 24px #e11d2a77;">Continue with Google</a>
+    <a class="button" href="/help" style="padding:12px 20px;font-size:15px;background:#180d24;border-color:#3d2345;display:inline-flex;align-items:center;gap:8px;">
+      <span style="color:#ff6655;">▶</span> Watch 2-Min Demo
+    </a>
+  </div>
+  <div style="display:flex;gap:22px;justify-content:center;margin-top:32px;color:var(--muted);font-size:13px;flex-wrap:wrap;">
+    <span style="display:inline-flex;align-items:center;gap:6px;"><span class="pulse-green"></span> Zero Runtime Overhead</span>
+    <span style="display:inline-flex;align-items:center;gap:6px;"><span style="color:#6fe0b0;">✓</span> 1-Day Free Trial</span>
+    <span style="display:inline-flex;align-items:center;gap:6px;"><span style="color:#6fe0b0;">✓</span> Verified Against GitHub CI</span>
+  </div>
+</section>
+
+<!-- Interactive Live Incident Simulator -->
+<section style="margin:20px 0 60px;">
+  <div style="text-align:center;margin-bottom:20px;">
+    <div class="eyebrow" style="margin-bottom:6px;">Interactive Preview</div>
+    <h2 style="font-size:26px;margin:0 0 8px;">See the Daemon in Action</h2>
+    <p class="muted" style="max-width:580px;margin:auto;font-size:15px;">Watch an unhandled production traceback get automatically diagnosed and patched.</p>
+  </div>
+  <div class="sim-box" style="background:#0c0714ee;border:1px solid #ff4a3a55;border-radius:16px;box-shadow:0 24px 70px #000, 0 0 35px #9a4dff22;overflow:hidden;-webkit-backdrop-filter:blur(12px);backdrop-filter:blur(12px);max-width:880px;margin:auto;">
+    <div style="background:#170d24;padding:12px 18px;border-bottom:1px solid #3a2338;display:flex;align-items:center;justify-content:space-between;flex-wrap:wrap;gap:12px;">
+      <div style="display:flex;align-items:center;gap:8px;">
+        <span style="width:11px;height:11px;border-radius:50%;background:#ff5f56;display:inline-block"></span>
+        <span style="width:11px;height:11px;border-radius:50%;background:#ffbd2e;display:inline-block"></span>
+        <span style="width:11px;height:11px;border-radius:50%;background:#27c93f;display:inline-block"></span>
+        <span style="font-size:13px;color:#a99dbb;margin-left:8px;font-family:monospace">incident_agent_monitor.py</span>
+      </div>
+      <div style="display:flex;gap:8px;" id="sim-tabs">
+        <button type="button" class="sim-tab" onclick="switchSim(0)" id="tab-0" style="background:#e11d2a2a;color:#ff8a7a;border:1px solid #ff4a3a66;border-radius:6px;padding:5px 12px;font-size:12px;cursor:pointer;display:flex;align-items:center;gap:6px;"><span class="pulse-red"></span> 1. Crash Detected</button>
+        <button type="button" class="sim-tab" onclick="switchSim(1)" id="tab-1" style="background:#ffffff0a;color:#cdbfe0;border:1px solid #3a2338;border-radius:6px;padding:5px 12px;font-size:12px;cursor:pointer;display:flex;align-items:center;gap:6px;">2. AI Diagnosis</button>
+        <button type="button" class="sim-tab" onclick="switchSim(2)" id="tab-2" style="background:#ffffff0a;color:#cdbfe0;border:1px solid #3a2338;border-radius:6px;padding:5px 12px;font-size:12px;cursor:pointer;display:flex;align-items:center;gap:6px;">3. PR &amp; CI Passed</button>
+      </div>
+    </div>
+    
+    <div id="sim-panel-0" style="padding:22px;font-family:monospace;font-size:13px;line-height:1.6;background:#08040d;">
+      <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:12px;flex-wrap:wrap;gap:8px;">
+        <span style="color:#ff5a5a;font-weight:700;display:flex;align-items:center;gap:8px;"><span class="pulse-red"></span> FATAL 500 ERROR IN PRODUCTION</span>
+        <span class="pill red" style="font-size:11px;">14 Occurrences / 2m</span>
+      </div>
+      <div style="color:#a89cb8;background:#130a1c;padding:14px;border-radius:8px;border:1px solid #2f1b33;">
+        <span style="color:#ff7a6a">Traceback (most recent call last):</span><br>
+        &nbsp;&nbsp;File <span style="color:#8ce4c0">"shop/api/checkout.py"</span>, line 81, in checkout<br>
+        &nbsp;&nbsp;&nbsp;&nbsp;price = PRODUCTS[item[<span style="color:#f0cf8a">"product_id"</span>]][<span style="color:#f0cf8a">"price"</span>]<br>
+        <span style="color:#ff4a3a;font-weight:700">KeyError: 'price'</span> — Product ID 104 found in catalog, but item record missing key 'price' during checkout bundle lookup.
+      </div>
+    </div>
+    
+    <div id="sim-panel-1" style="display:none;padding:22px;font-family:monospace;font-size:13px;line-height:1.6;background:#08040d;">
+      <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:12px;flex-wrap:wrap;gap:8px;">
+        <span style="color:#b98aff;font-weight:700;">🧠 AST REASONING ENGINE (Llama-3.3-70B on Groq)</span>
+        <span class="pill amber" style="font-size:11px;"><span class="pulse-amber"></span> Confidence: 97%</span>
+      </div>
+      <div style="color:#d4cae1;background:#140c22;padding:14px;border-radius:8px;border:1px solid #3c2447;">
+        <span style="color:#f0cf8a">ROOT CAUSE HYPOTHESIS:</span><br>
+        • Target: <span style="color:#8ce4c0">checkout()</span> in <span style="color:#8ce4c0">shop/api/checkout.py:81</span><br>
+        • Diagnosis: Direct dictionary indexing without defensive lookup causes unhandled KeyError when product dict lacks 'price'.<br>
+        • Proposed Remediation: Safely query product entry with default fallback: <code>PRODUCTS.get(item["product_id"], {}).get("price", 0)</code>.<br>
+        • Verification Check: Verified against pytest suite with zero regressions.
+      </div>
+    </div>
+
+    <div id="sim-panel-2" style="display:none;padding:22px;font-family:monospace;font-size:13px;line-height:1.6;background:#08040d;">
+      <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:12px;flex-wrap:wrap;gap:8px;">
+        <span style="color:#6fe0b0;font-weight:700;display:flex;align-items:center;gap:6px;"><span class="pulse-green"></span> PULL REQUEST OPENED ON GITHUB</span>
+        <span class="pill green" style="font-size:11px;">✓ CI Checks Passing (42/42)</span>
+      </div>
+      <div style="background:#0e1e17;padding:14px;border-radius:8px;border:1px solid #1f5a49;color:#e2f7ed;">
+        <div style="color:#8ce4c0;margin-bottom:8px;font-weight:700;">PR #42: fix(checkout): defend against missing price attribute</div>
+        <div style="background:#091410;padding:10px;border-radius:6px;font-size:12px;">
+          <span style="color:#ff7a6a">- &nbsp;&nbsp;&nbsp;&nbsp;price = PRODUCTS[item["product_id"]]["price"]</span><br>
+          <span style="color:#6fe0b0">+ &nbsp;&nbsp;&nbsp;&nbsp;price = PRODUCTS.get(item["product_id"], {}).get("price", 0)</span>
+        </div>
+        <div style="margin-top:10px;font-size:11px;color:#8ce4c0;">Branch: <code>agent-daemon/fix-checkout-keyerror</code> · GitHub Action: CI Passed in 1.4s</div>
+      </div>
+    </div>
+  </div>
+</section>
+<script>
+var simIdx = 0;
+function switchSim(n) {
+  simIdx = n;
+  for (var i = 0; i < 3; i++) {
+    var p = document.getElementById('sim-panel-' + i);
+    var t = document.getElementById('tab-' + i);
+    if (!p || !t) continue;
+    if (i === n) {
+      p.style.display = 'block';
+      t.style.background = (i === 0 ? '#e11d2a2a' : (i === 1 ? '#9a4dff2a' : '#0f2f27'));
+      t.style.borderColor = (i === 0 ? '#ff4a3a66' : (i === 1 ? '#b98aff66' : '#1f5a49'));
+      t.style.color = '#fff';
+    } else {
+      p.style.display = 'none';
+      t.style.background = '#ffffff0a';
+      t.style.borderColor = '#3a2338';
+      t.style.color = '#cdbfe0';
+    }
+  }
+}
+setInterval(function() {
+  if (document.hidden) return;
+  simIdx = (simIdx + 1) % 3;
+  switchSim(simIdx);
+}, 4500);
+</script>
+
+<!-- How it works: 4 Modern Step Cards -->
+<section class="section" style="padding-top:10px;">
+  <div style="text-align:center;margin-bottom:28px;">
+    <div class="eyebrow" style="margin-bottom:6px;">Simple Workflow</div>
+    <h2>How it works</h2>
+    <p class="muted" style="max-width:580px;margin:auto;">Four straightforward steps to automated incident resolution.</p>
+  </div>
+  <div style="display:grid;grid-template-columns:repeat(auto-fit,minmax(230px,1fr));gap:16px;">
+    <div class="card hover-float" style="padding:22px;display:flex;flex-direction:column;">
+      <div style="font-size:28px;font-family:var(--serif);font-weight:700;color:#ff6655;margin-bottom:10px;">01</div>
+      <h3 style="font-size:18px;margin-bottom:8px;">Sign in with Google.</h3>
+      <p class="muted" style="font-size:14px;line-height:1.55;margin:0;">No password to create or remember.</p>
+    </div>
+    <div class="card hover-float" style="padding:22px;display:flex;flex-direction:column;">
+      <div style="font-size:28px;font-family:var(--serif);font-weight:700;color:#e3bd74;margin-bottom:10px;">02</div>
+      <h3 style="font-size:18px;margin-bottom:8px;">Get access.</h3>
+      <p class="muted" style="font-size:14px;line-height:1.55;margin:0;">Ask for a free trial or choose a plan. An administrator approves trials, and paid plans open as soon as payment is confirmed.</p>
+    </div>
+    <div class="card hover-float" style="padding:22px;display:flex;flex-direction:column;">
+      <div style="font-size:28px;font-family:var(--serif);font-weight:700;color:#b98aff;margin-bottom:10px;">03</div>
+      <h3 style="font-size:18px;margin-bottom:8px;">Connect your repository.</h3>
+      <p class="muted" style="font-size:14px;line-height:1.55;margin:0;">You give us a GitHub token and we open one pull request that adds monitoring. You review and merge it.</p>
+    </div>
+    <div class="card hover-float" style="padding:22px;display:flex;flex-direction:column;">
+      <div style="font-size:28px;font-family:var(--serif);font-weight:700;color:#6fe0b0;margin-bottom:10px;">04</div>
+      <h3 style="font-size:18px;margin-bottom:8px;">The agent watches.</h3>
+      <p class="muted" style="font-size:14px;line-height:1.55;margin:0;">Repeated errors become incidents with a timeline and a diagnosis. In Pull request mode it also proposes a fix.</p>
+    </div>
+  </div>
+</section>
+
+<!-- Feature Capabilities Grid -->
+<section class="grid" style="margin: 20px 0 45px;">
+  <article class="card hover-float">
+    <div style="font-size:24px;margin-bottom:8px;">🔍</div>
+    <h3>See what happened</h3>
+    <p class="muted" style="font-size:14px;line-height:1.55;">Turn repeated error logs into incidents with a clear timeline and diagnosis.</p>
+  </article>
+  <article class="card hover-float">
+    <div style="font-size:24px;margin-bottom:8px;">🛡️</div>
+    <h3>Keep your code in your control</h3>
+    <p class="muted" style="font-size:14px;line-height:1.55;">The hosted diagnosis worker reads repository files as evidence. It does not run your code or tests or change your repository.</p>
+  </article>
+  <article class="card hover-float">
+    <div style="font-size:24px;margin-bottom:8px;">⚙️</div>
+    <h3>Choose how much it does</h3>
+    <p class="muted" style="font-size:14px;line-height:1.55;">Report only, Pull request, or Auto, which merges only after your GitHub checks pass. Pause monitoring or remove a project and its stored data from your dashboard any time.</p>
+  </article>
+</section>
+
+<!-- Quick Setup: 2 Requirements Before Connecting (Interactive, Expandable Drawers) -->
+<section class="card hover-float" style="padding: 26px 28px; margin-bottom: 50px; background: linear-gradient(160deg,#140a1dee,#09050fee); border: 1px solid #3d2345;">
+  <div style="display:flex;justify-content:space-between;align-items:center;flex-wrap:wrap;gap:14px;margin-bottom:18px;">
+    <div>
+      <h2 style="font-size:22px;margin:0 0 6px;">Before you connect a repository</h2>
+      <p class="muted" style="margin:0;font-size:14px;">Agent Daemon talks to GitHub with a <b>classic</b> personal access token. Fine-grained tokens are not supported. Two things to do first:</p>
+    </div>
+    <span class="pill amber" style="font-size:12px;">Quick Integration Checklist</span>
+  </div>
+
+  <div style="display:grid;grid-template-columns:repeat(auto-fit,minmax(320px,1fr));gap:16px;">
+    <!-- Step 1: Make Private -->
+    <div style="background:#0e0716;border:1px solid #2e1735;border-radius:10px;padding:18px;">
+      <div style="display:flex;align-items:center;gap:10px;margin-bottom:8px;">
+        <span style="background:#ff4a3a22;color:#ff8a7a;border:1px solid #ff4a3a55;padding:2px 8px;border-radius:6px;font-size:12px;font-weight:700;">STEP 1</span>
+        <h3 style="margin:0;font-size:16px;">Make your repository private</h3>
+      </div>
+      <p class="muted" style="font-size:13.5px;line-height:1.5;margin:0 0 10px;">We read your source files and error logs to diagnose problems, and Auto mode only merges fixes in private repositories. A private repository keeps your code and logs away from the public.</p>
+      <details class="setup-drawer">
+        <summary style="cursor:pointer;color:var(--blue);font-size:13px;font-weight:600;display:inline-flex;align-items:center;gap:4px;">
+          <span>Show 5 quick steps</span> <span style="font-size:11px;">▾</span>
+        </summary>
+        <ol class="steps muted" style="font-size:13px;line-height:1.5;margin:10px 0 0;padding-left:18px;">
+          <li>Open your repository on <b>github.com</b> in a browser.</li>
+          <li>Tap or click the <b>Settings</b> tab of the repository (not your profile settings).</li>
+          <li>Stay on <b>General</b> and scroll to the very bottom, to the <b>Danger Zone</b>.</li>
+          <li>Press <b>Change visibility</b>, then <b>Change to private</b>.</li>
+          <li>Read the warnings, type the repository name when GitHub asks, and confirm.</li>
+        </ol>
+      </details>
+    </div>
+
+    <!-- Step 2: Tokens (classic) -->
+    <div style="background:#0e0716;border:1px solid #2e1735;border-radius:10px;padding:18px;">
+      <div style="display:flex;align-items:center;gap:10px;margin-bottom:8px;">
+        <span style="background:#9a4dff22;color:#b98aff;border:1px solid #9a4dff55;padding:2px 8px;border-radius:6px;font-size:12px;font-weight:700;">STEP 2</span>
+        <h3 style="margin:0;font-size:16px;">Create a classic token in Tokens (classic)</h3>
+      </div>
+      <p class="muted" style="font-size:13.5px;line-height:1.5;margin:0 0 10px;">
+        Generate a token with scopes: <span class="pill green" style="padding:2px 8px;font-size:11px;"><code>repo</code></span> and <span class="pill green" style="padding:2px 8px;font-size:11px;"><code>workflow</code></span>.
+      </p>
+      <details class="setup-drawer">
+        <summary style="cursor:pointer;color:var(--blue);font-size:13px;font-weight:600;display:inline-flex;align-items:center;gap:4px;">
+          <span>Show token generation steps</span> <span style="font-size:11px;">▾</span>
+        </summary>
+        <ol class="steps muted" style="font-size:13px;line-height:1.5;margin:10px 0 0;padding-left:18px;">
+          <li>On GitHub press your profile picture, then <b>Settings</b>.</li>
+          <li>At the bottom of the left menu open <b>Developer settings</b>, then <b>Personal access tokens</b>, then <b>Tokens (classic)</b>.</li>
+          <li>Press <b>Generate new token</b>, then <b>Generate new token (classic)</b>.</li>
+          <li>Name it <b>Agent Daemon</b> and pick how long it should last. When it expires, use <b>Update GitHub token</b> on your project page.</li>
+          <li>Tick exactly two boxes: <code>repo</code> and <code>workflow</code>. Leave everything else unticked.</li>
+          <li>Press <b>Generate token</b> and copy it right away. GitHub shows it only once. Paste it into the connect form.</li>
+        </ol>
+      </details>
+      <div style="margin-top:12px;padding-top:10px;border-top:1px solid #281432;font-size:12px;color:var(--muted);">
+        <b>What the agent uses each permission for:</b>
+        <ul style="margin:4px 0 0;padding-left:18px;">
+          <li><code>repo</code>: read your code, create a branch and open pull requests. Nothing is merged unless you choose Auto mode.</li>
+          <li><code>workflow</code>: add a small test workflow file, so Auto mode has a check that must pass before merging.</li>
+        </ul>
+      </div>
+    </div>
+  </div>
+</section>"""
     return _response(body, request)
 
 

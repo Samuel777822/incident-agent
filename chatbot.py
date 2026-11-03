@@ -92,6 +92,8 @@ def answer_visitor_query(user_text: str, history: list[dict] | None = None) -> s
             )
             ans = response.choices[0].message.content.strip()
             if ans:
+                if any(k in text_lower for k in ("troubleshoot", "offline", "guide", "docs", "help")) and "/help" not in ans:
+                    ans += "\n\nFor more detailed step-by-step troubleshooting playbooks and demo videos, check out our Help Centre at /help."
                 return ans
         except Exception as e:
             log.warning("Groq chatbot call failed: %s; using deterministic fallback", e)
