@@ -227,14 +227,21 @@ CREATE TABLE IF NOT EXISTS visitor_tracking (
 
 CREATE TABLE IF NOT EXISTS support_messages (
   id TEXT PRIMARY KEY,
+  ticket_ref TEXT NOT NULL DEFAULT '',
   name TEXT NOT NULL,
   email TEXT NOT NULL,
   subject TEXT NOT NULL,
   message TEXT NOT NULL,
-  status TEXT NOT NULL DEFAULT 'new',
+  status TEXT NOT NULL DEFAULT 'open',
+  assigned_to TEXT NOT NULL DEFAULT '',
+  resolution_note TEXT NOT NULL DEFAULT '',
+  closed_at TEXT NOT NULL DEFAULT '',
+  closed_by TEXT NOT NULL DEFAULT '',
+  updated_at TEXT NOT NULL DEFAULT '',
   created_at TEXT NOT NULL
 );
 CREATE INDEX IF NOT EXISTS idx_support_messages_time ON support_messages(created_at DESC);
+CREATE INDEX IF NOT EXISTS idx_support_messages_status ON support_messages(status, created_at DESC);
 """
 
 
@@ -301,6 +308,12 @@ def init_db() -> None:
             ("trial_requests", "phone", "TEXT NOT NULL DEFAULT ''"),
             ("trial_requests", "referral_source", "TEXT NOT NULL DEFAULT ''"),
             ("trial_requests", "organization", "TEXT NOT NULL DEFAULT ''"),
+            ("support_messages", "ticket_ref", "TEXT NOT NULL DEFAULT ''"),
+            ("support_messages", "assigned_to", "TEXT NOT NULL DEFAULT ''"),
+            ("support_messages", "resolution_note", "TEXT NOT NULL DEFAULT ''"),
+            ("support_messages", "closed_at", "TEXT NOT NULL DEFAULT ''"),
+            ("support_messages", "closed_by", "TEXT NOT NULL DEFAULT ''"),
+            ("support_messages", "updated_at", "TEXT NOT NULL DEFAULT ''"),
             ("manual_payments", "name", "TEXT NOT NULL DEFAULT ''"),
             ("manual_payments", "phone", "TEXT NOT NULL DEFAULT ''"),
             ("manual_payments", "referral_source", "TEXT NOT NULL DEFAULT ''"),
@@ -1554,25 +1567,101 @@ def update_conversation_visitor_details(conversation_id: str, name: str, email: 
         conn.close()
 
 
-def create_support_message(name: str, email: str, subject: str, message: str) -> dict:
+def create_support_ticket(name: str, email: str, subject: str, message: str, assigned_to: str = "") -> dict:
     conn = get_connection()
     try:
         msg_id = _id()
+        ticket_ref = f"TICK-{msg_id[:8].upper()}"
         now = _now()
-        _execute(conn, "INSERT INTO support_messages(id, name, email, subject, message, status, created_at) "
-                       "VALUES(?,?,?,?,?,?,?)",
-                 (msg_id, name.strip(), email.strip().lower(), subject.strip(), message.strip(), "new", now))
+        _execute(conn, """INSERT INTO support_messages(id, ticket_ref, name, email, subject, message, status, assigned_to, resolution_note, closed_at, closed_by, updated_at, created_at)
+                       VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?)""",
+                 (msg_id, ticket_ref, name.strip(), email.strip().lower(), subject.strip() or "General Support Inquiry", message.strip(), "open", assigned_to.strip(), "", "", "", now, now))
         conn.commit()
         row = _execute(conn, "SELECT * FROM support_messages WHERE id = ?", (msg_id,)).fetchone()
-        return dict(row)
+        d = dict(row)
+        if not d.get("ticket_ref"):
+            d["ticket_ref"] = ticket_ref
+        return d
     finally:
         conn.close()
 
 
-def admin_list_support_messages(limit: int = 30) -> list[dict]:
+def create_support_message(name: str, email: str, subject: str, message: str) -> dict:
+    return create_support_ticket(name, email, subject, message)
+
+
+def admin_list_support_messages(limit: int = 50, status: str | None = None) -> list[dict]:
     conn = get_connection()
     try:
-        rows = _execute(conn, "SELECT * FROM support_messages ORDER BY created_at DESC LIMIT ?", (limit,)).fetchall()
-        return [dict(r) for r in rows]
+        if status and status != "all":
+            rows = _execute(conn, "SELECT * FROM support_messages WHERE status = ? ORDER BY created_at DESC LIMIT ?", (status, limit)).fetchall()
+        else:
+            rows = _execute(conn, "SELECT * FROM support_messages ORDER BY created_at DESC LIMIT ?", (limit,)).fetchall()
+        tickets = []
+        for r in rows:
+            d = dict(r)
+            if not d.get("ticket_ref"):
+                d["ticket_ref"] = f"TICK-{d['id'][:8].upper()}"
+            tickets.append(d)
+        return tickets
+    finally:
+        conn.close()
+
+
+def admin_get_support_ticket(ticket_id: str) -> dict | None:
+    conn = get_connection()
+    try:
+        row = _execute(conn, "SELECT * FROM support_messages WHERE id = ? OR ticket_ref = ?", (ticket_id, ticket_id)).fetchone()
+        if not row:
+            return None
+        d = dict(row)
+        if not d.get("ticket_ref"):
+            d["ticket_ref"] = f"TICK-{d['id'][:8].upper()}"
+        return d
+    finally:
+        conn.close()
+
+
+def admin_update_support_ticket(ticket_id: str, status: str, assigned_to: str = "", resolution_note: str = "", actor: str = "") -> dict | None:
+    conn = get_connection()
+    try:
+        row = _execute(conn, "SELECT * FROM support_messages WHERE id = ? OR ticket_ref = ?", (ticket_id, ticket_id)).fetchone()
+        if not row:
+            return None
+        cur = dict(row)
+        now = _now()
+        closed_at = now if status == "closed" and cur.get("status") != "closed" else cur.get("closed_at", "")
+        closed_by = actor if status == "closed" and cur.get("status") != "closed" else cur.get("closed_by", "")
+        res_note = resolution_note.strip() if resolution_note.strip() else cur.get("resolution_note", "")
+        assignee = assigned_to.strip() if assigned_to.strip() else cur.get("assigned_to", "")
+
+        _execute(conn, """UPDATE support_messages 
+                       SET status = ?, assigned_to = ?, resolution_note = ?, closed_at = ?, closed_by = ?, updated_at = ?
+                       WHERE id = ?""",
+                 (status, assignee, res_note, closed_at, closed_by, now, cur["id"]))
+        conn.commit()
+        updated_row = _execute(conn, "SELECT * FROM support_messages WHERE id = ?", (cur["id"],)).fetchone()
+        res = dict(updated_row)
+        if not res.get("ticket_ref"):
+            res["ticket_ref"] = f"TICK-{res['id'][:8].upper()}"
+        return res
+    finally:
+        conn.close()
+
+
+def admin_ticket_stats() -> dict:
+    conn = get_connection()
+    try:
+        rows = _execute(conn, "SELECT status, COUNT(*) as cnt FROM support_messages GROUP BY status").fetchall()
+        counts = {"open": 0, "for_review": 0, "closed": 0, "total": 0}
+        for r in rows:
+            st = str(r["status"]).lower()
+            cnt = int(r["cnt"])
+            if st in counts:
+                counts[st] += cnt
+            else:
+                counts["open"] += cnt
+            counts["total"] += cnt
+        return counts
     finally:
         conn.close()

@@ -482,3 +482,121 @@ def test_indian_standard_time_formatting(web_env):
     ib_formatted = incident_board._fmt_ist("2026-11-03T14:15:00Z")
     assert "03 Nov 2026, 19:45 IST" in ib_formatted
     assert "UTC" not in ib_formatted
+
+
+
+
+def test_support_ticketing_lifecycle(web_env, monkeypatch):
+    import notifications
+    from datetime import timedelta
+
+    customer_emails_sent = []
+    admin_emails_sent = []
+    monkeypatch.setattr(notifications, "notify_customer", lambda to, subj, body, kind="": customer_emails_sent.append((to, subj, body, kind)))
+    monkeypatch.setattr(notifications, "notify_admins", lambda subj, body, kind="": admin_emails_sent.append((subj, body, kind)))
+
+    # 1. Contact form submission creates a support ticket
+    st_get, headers, body = _request("/contact")
+    assert st_get == "200 OK"
+    match = re.search(r"name=['\"]csrf['\"]\s+value=['\"]([^'\"]+)['\"]", body)
+    csrf = match.group(1) if match else "test-csrf"
+    csrf_cookie = _cookie_value(headers, web_app.CSRF_COOKIE)
+    contact_cookie = f"{web_app.CSRF_COOKIE}={csrf_cookie}"
+
+    status, _, body_ok = _request(
+        "/contact",
+        method="POST",
+        form={
+            "csrf": csrf,
+            "name": "Jane Developer",
+            "email": "jane@company.com",
+            "subject": "Issue with auto-fix branch",
+            "message": "The PR opened has failing tests.",
+        },
+        cookie=contact_cookie,
+    )
+    assert status == "200 OK"
+    assert "Thanks for reaching out!" in body_ok
+    assert "TICK-" in body_ok
+
+    # Customer gets ticket confirmation email with ticket ID
+    assert len(customer_emails_sent) == 1
+    to_cust, cust_subj, cust_body, kind = customer_emails_sent[0]
+    assert to_cust == "jane@company.com"
+    assert "TICK-" in cust_subj
+    assert "support ticket" in cust_body.lower() or "ticket reference" in cust_body.lower()
+
+    # Check database status
+    tickets = web_app.portal_db.admin_list_support_messages(10)
+    assert len(tickets) >= 1
+    ticket = [t for t in tickets if t["email"] == "jane@company.com"][0]
+    assert ticket["status"] == "open"
+    assert ticket["ticket_ref"].startswith("TICK-")
+
+    stats = web_app.portal_db.admin_ticket_stats()
+    assert stats["open"] >= 1
+
+    # 2. Admin logs in and views tickets
+    user_id = web_app.portal_db.create_user("admin1@example.com", "hash")
+    admin_csrf = "csrf-adm-" + user_id[:6]
+    session_id = web_app.portal_db.create_session(user_id, admin_csrf, (web_app._now() + timedelta(days=1)).isoformat())
+    admin_cookie = f"{web_app.SESSION_COOKIE}={web_app._signed_cookie(session_id)}"
+
+    st, _, admin_html = _request("/admin", cookie=admin_cookie)
+    assert st == "200 OK"
+    assert "Support Tickets" in admin_html
+    assert ticket["ticket_ref"] in admin_html
+
+    # 3. Admin transitions status to 'for_review' and assigns to admin1
+    st, hdrs, _ = _request(
+        "/admin",
+        method="POST",
+        cookie=admin_cookie,
+        form={
+            "csrf": admin_csrf,
+            "action": "update_support_ticket",
+            "ticket_id": ticket["id"],
+            "status": "for_review",
+            "assigned_to": "admin1@example.com",
+            "resolution_note": "",
+        },
+    )
+    assert st == "303 See Other"
+    loc = dict(hdrs).get("Location", "")
+    assert "ticket_updated" in loc
+
+    updated_t = web_app.portal_db.admin_get_support_ticket(ticket["id"])
+    assert updated_t["status"] == "for_review"
+    assert updated_t["assigned_to"] == "admin1@example.com"
+
+    # 4. Admin closes ticket with resolution note
+    st, hdrs, _ = _request(
+        "/admin",
+        method="POST",
+        cookie=admin_cookie,
+        form={
+            "csrf": admin_csrf,
+            "action": "update_support_ticket",
+            "ticket_id": ticket["id"],
+            "status": "closed",
+            "assigned_to": "admin1@example.com",
+            "resolution_note": "Fixed branch permission configuration in repo settings.",
+        },
+    )
+    assert st == "303 See Other"
+    assert "ticket_closed" in dict(hdrs).get("Location", "")
+
+    closed_t = web_app.portal_db.admin_get_support_ticket(ticket["id"])
+    assert closed_t["status"] == "closed"
+    assert closed_t["closed_at"] != ""
+    assert closed_t["closed_by"] == "admin1@example.com"
+    assert closed_t["resolution_note"] == "Fixed branch permission configuration in repo settings."
+
+    # Customer automatically receives closing resolution email
+    closing_emails = [e for e in customer_emails_sent if e[3] == "ticket_closed"]
+    assert len(closing_emails) == 1
+    to_c, sub_c, body_c, _ = closing_emails[0]
+    assert to_c == "jane@company.com"
+    assert f"[Ticket #{closed_t['ticket_ref']}] Resolved:" in sub_c
+    assert "Fixed branch permission configuration in repo settings." in body_c
+    assert "Agent Daemon team of engineers" in body_c

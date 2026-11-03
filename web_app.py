@@ -1491,29 +1491,47 @@ def _page_contact(request: Request) -> Response:
             error_html = "<div class='alert'>Please provide a valid email address.</div>"
             return _render_contact_page(request, error_html, name, email, subject, message)
 
-        # Save to database
-        portal_db.create_support_message(name, email, subject or "General Support Inquiry", message)
+        # Save to database as a support ticket
+        ticket = portal_db.create_support_ticket(name, email, subject or "General Support Inquiry", message)
+        ticket_ref = ticket.get("ticket_ref") or f"TICK-{ticket['id'][:8].upper()}"
+
+        # Send confirmation email to customer with ticket thread reference
+        cust_subj = f"[Ticket #{ticket_ref}] We received your inquiry: {subject or 'General Support'}"
+        cust_body = (
+            f"Hi {name},\n\n"
+            f"Thank you for contacting Agent Daemon Support. We have created support ticket #{ticket_ref} for your inquiry.\n\n"
+            f"Ticket Reference: #{ticket_ref}\n"
+            f"Subject: {subject or 'General Support Inquiry'}\n"
+            f"Status: Open\n\n"
+            f"Our team of engineers has been notified and will investigate your request. You will receive an email update once your ticket is reviewed or resolved.\n\n"
+            f"Your Inquiry:\n"
+            f"{message}\n\n"
+            f"— Agent Daemon Team of Engineers"
+        )
+        notifications.notify_customer(email, cust_subj, cust_body, "ticket_received")
 
         # Notify admins
-        email_subj = f"[Agent Daemon Support] {subject or 'New Inquiry'} from {name}"
+        email_subj = f"[Ticket #{ticket_ref}] New Support Ticket: {subject or 'New Inquiry'} from {name}"
         email_body = (
-            f"You received a new message from the Agent Daemon Contact & Support page:\n\n"
+            f"A new support ticket #{ticket_ref} was opened from the Contact form:\n\n"
+            f"Ticket ID: #{ticket_ref}\n"
             f"From: {name} ({email})\n"
             f"Subject: {subject or 'General Support Inquiry'}\n"
-            f"Time: {_now()}\n\n"
+            f"Status: Open\n"
+            f"Time: {_fmt_time(_now())}\n\n"
             f"Message:\n{message}\n\n"
-            f"View in Admin Operations:\n{_base_url()}/admin#support-inquiries"
+            f"Manage and assign in Admin Tickets:\n{_base_url()}/admin#support-tickets"
         )
-        notifications.notify_admins(email_subj, email_body, "support_inquiry")
+        notifications.notify_admins(email_subj, email_body, "support_ticket")
 
         success_html = (
             "<section class='card form-card' style='text-align:center'>"
-            "<div class='eyebrow'>Message Received</div>"
+            f"<div class='eyebrow'>Ticket #{ticket_ref} Opened</div>"
             "<h1>Thanks for reaching out!</h1>"
-            f"<p class='muted'>We've delivered your message to our founders and support team. We will get back to you at <b>{_escape(email)}</b> shortly.</p>"
+            f"<p class='muted'>We've opened support ticket <b>#{ticket_ref}</b> and delivered it to the Agent Daemon team of engineers. A confirmation email has been sent to <b>{_escape(email)}</b>.</p>"
             "<div class='actions' style='justify-content:center;margin-top:24px'>"
             "<a class='button primary' href='/'>Return to Home</a>"
-            "<a class='button' href='/about'>Meet the Team</a>"
+            "<a class='button' href='/about'>About Us</a>"
             "</div>"
             "</section>"
         )
@@ -1527,7 +1545,7 @@ def _render_contact_page(request: Request, flash: str = "", name: str = "", emai
         "<section class='about-hero' style='padding-bottom:10px'>"
         "<div class='eyebrow'>Support &amp; Inquiries</div>"
         "<h1>Contact Our Team</h1>"
-        "<p>Have questions about Agent Daemon, need help setting up monitoring on your repository, or want to discuss enterprise features? Reach out directly to our founders and engineering team.</p>"
+        "<p>Have questions about Agent Daemon, need help setting up monitoring on your repository, or want to discuss enterprise features? Reach out directly to the Agent Daemon team of engineers.</p>"
         "</section>"
         f"<section class='card form-card' style='margin-top:20px;max-width:580px'>"
         f"{flash}"
@@ -1596,6 +1614,8 @@ _ADMIN_MESSAGES = {
     "bad_request": ("red", "That action was not valid."),
     "test_email_ok": ("green", "Test email accepted by the provider for every admin. Check both inboxes."),
     "test_email_failed": ("red", "Test email failed. See the Email status table below for the exact reason."),
+    "ticket_closed": ("green", "Support ticket marked resolved and closed. Customer was sent a resolution email."),
+    "ticket_updated": ("green", "Support ticket updated successfully."),
 }
 
 
@@ -1672,6 +1692,41 @@ def _admin_action(request):
     if action == "send_test_email":
         results = notifications.send_test_to_admins()
         return done("test_email_ok" if results and all(ok for _, ok, _ in results) else "test_email_failed")
+    if action == "update_support_ticket":
+        ticket_id = form.get("ticket_id", "").strip()
+        new_status = form.get("status", "").strip().lower()
+        assigned_to = form.get("assigned_to", "").strip()
+        resolution_note = form.get("resolution_note", "").strip()
+        if new_status not in ("open", "for_review", "closed"):
+            return done("bad_request")
+        ticket = portal_db.admin_update_support_ticket(
+            ticket_id, new_status, assigned_to=assigned_to,
+            resolution_note=resolution_note, actor=actor
+        )
+        if not ticket:
+            return done("not_found")
+        ticket_ref = ticket.get("ticket_ref") or f"TICK-{ticket['id'][:8].upper()}"
+        if new_status == "closed":
+            res_text = resolution_note if resolution_note else "Your inquiry has been investigated and marked resolved by our engineering team."
+            user_subject = f"[Ticket #{ticket_ref}] Resolved: {ticket['subject']}"
+            user_body = (
+                f"Hi {ticket['name']},\n\n"
+                f"Your support ticket #{ticket_ref} regarding '{ticket['subject']}' has been marked as resolved and closed by {actor}.\n\n"
+                f"Resolution Details:\n"
+                f"{res_text}\n\n"
+                f"Original Request:\n"
+                f"{ticket['message']}\n\n"
+                f"If you have further questions or if your issue persists, feel free to submit a new inquiry or reply through our contact form at {_base_url()}/contact.\n\n"
+                f"Best regards,\nAgent Daemon team of engineers"
+            )
+            notifications.notify_customer(ticket["email"], user_subject, user_body, "ticket_closed")
+            notifications.notify_admins(
+                f"[Ticket #{ticket_ref}] Closed by {actor}",
+                f"Support ticket #{ticket_ref} ({ticket['subject']}) was closed by {actor}.\nResolution: {res_text}",
+                "ticket_admin"
+            )
+            return done("ticket_closed")
+        return done("ticket_updated")
     return done("bad_request")
 
 
@@ -1693,6 +1748,7 @@ def _admin_view(request):
 
     def card(value, label):
         return f"<div class='stat'><b>{_escape(value)}</b><span>{_escape(label)}</span></div>"
+    ticket_stats = portal_db.admin_ticket_stats()
     cards = "".join([
         card(stats["customers"], "customers"),
         card(f"{stats['active']}", f"active ({stats['paid_active']} paid, {stats['trial_active']} trial)"),
@@ -1701,6 +1757,7 @@ def _admin_view(request):
         card(stats["pending_payments"], "UPI payments to confirm"),
         card(f"{live}/{stats['projects']}", "apps live / connected"),
         card(stats["open_incidents"], f"open incidents ({stats['needs_human']} need a human)"),
+        card(f"{ticket_stats['open']}", f"open support tickets ({ticket_stats['total']} total)"),
     ])
 
     pending_trials = [t for t in trials if t["status"] == "pending"]
@@ -1847,16 +1904,88 @@ def _admin_view(request):
     chat_table = _table(["Visitor", "Status", "Latest Message", "Action"], chat_rows, "No visitor conversations yet.")
     chat_section = f"<h2 id='live-chats'>Live visitor conversations &amp; inquiries</h2>{chat_table}"
 
-    # Support messages
-    support_msgs = portal_db.admin_list_support_messages(20)
+    # Support Tickets & Issue Tracking
+    support_msgs = portal_db.admin_list_support_messages(50)
     support_rows = []
     for s in support_msgs:
-        support_rows.append(f"<tr><td><b>{_escape(s['name'])}</b><br><small class='muted'>{_escape(s['email'])}</small></td>"
-                            f"<td><b>{_escape(s['subject'])}</b><br><span style='font-size:13px;color:var(--muted)'>{_escape(s['message'])}</span></td>"
-                            f"<td><small class='muted'>{_escape(_fmt_time(s['created_at']))}</small></td>"
-                            f"<td><a class='button' href='mailto:{_escape(s['email'])}?subject=Re:%20{quote(s['subject'])}'>Reply by Email</a></td></tr>")
-    support_table = _table(["From", "Inquiry", "Time", "Action"], support_rows, "No support inquiries submitted yet.")
-    support_section = f"<h2 id='support-inquiries'>Support Inquiries (Contact Form)</h2>{support_table}" 
+        t_ref = s.get("ticket_ref") or f"TICK-{s['id'][:8].upper()}"
+        st = (s.get("status") or "open").lower()
+        if st == "closed":
+            pill_color = "green"
+            st_label = "Closed"
+        elif st == "for_review":
+            pill_color = "violet"
+            st_label = "For Review"
+        else:
+            pill_color = "amber"
+            st_label = "Open"
+
+        status_badge = _pill(st_label, pill_color)
+        assigned_val = s.get("assigned_to") or ""
+        assigned_badge = f"<span class='pill'>{_escape(assigned_val)}</span>" if assigned_val else "<span class='muted'>Unassigned</span>"
+
+        ticket_cell = f"<b>#{_escape(t_ref)}</b><br>{status_badge}"
+        from_cell = f"<b>{_escape(s['name'])}</b><br><small class='muted'>{_escape(s['email'])}</small>"
+
+        msg_body = _escape(s['message']).replace("\n", "<br>")
+        res_display = ""
+        if s.get("resolution_note"):
+            res_display = f"<div style='margin-top:6px;padding:6px 10px;background:rgba(111,224,176,0.1);border-left:3px solid #6fe0b0;border-radius:4px;font-size:12px;color:#a9f0d1'><b>Resolution:</b> {_escape(s['resolution_note'])}</div>"
+
+        inquiry_cell = (
+            f"<b>{_escape(s['subject'])}</b><br>"
+            f"<div style='max-width:320px;font-size:12.5px;color:#cfc5dc;margin-top:4px;word-break:break-word'>{msg_body}</div>"
+            f"{res_display}"
+        )
+
+        created_ts = _escape(_fmt_time(s['created_at']))
+        time_cell = f"<small class='muted'>Created: {created_ts}</small>"
+        if s.get("closed_at"):
+            time_cell += f"<br><small class='muted'>Closed: {_escape(_fmt_time(s['closed_at']))}</small>"
+        time_cell += f"<br><small class='muted'>Assigned: {assigned_badge}</small>"
+
+        admin_options = ["<option value=''>-- Unassigned --</option>"]
+        for adm in admins:
+            sel = "selected" if assigned_val.lower() == adm.lower() else ""
+            admin_options.append(f"<option value='{_escape(adm)}' {sel}>{_escape(adm)}</option>")
+        admin_select_html = "".join(admin_options)
+
+        action_form = (
+            f"<form method='post' action='/admin' style='display:flex;flex-direction:column;gap:6px;min-width:180px'>"
+            f"<input type='hidden' name='csrf' value='{csrf}'>"
+            f"<input type='hidden' name='action' value='update_support_ticket'>"
+            f"<input type='hidden' name='ticket_id' value='{_escape(s['id'])}'>"
+            f"<div style='display:flex;gap:6px'>"
+            f"<select name='status' style='background:#0a0610;color:#fff;border:1px solid #3a2338;border-radius:6px;padding:4px 6px;font-size:12px;flex:1'>"
+            f"<option value='open' {'selected' if st == 'open' else ''}>Open</option>"
+            f"<option value='for_review' {'selected' if st == 'for_review' else ''}>For Review</option>"
+            f"<option value='closed' {'selected' if st == 'closed' else ''}>Closed</option>"
+            f"</select>"
+            f"<select name='assigned_to' style='background:#0a0610;color:#fff;border:1px solid #3a2338;border-radius:6px;padding:4px 6px;font-size:12px;flex:1'>"
+            f"{admin_select_html}"
+            f"</select>"
+            f"</div>"
+            f"<input name='resolution_note' type='text' placeholder='Resolution note (sent on close)...' value='{_escape(s.get('resolution_note', ''))}' style='background:#0a0610;color:#fff;border:1px solid #3a2338;border-radius:6px;padding:4px 8px;font-size:11.5px'>"
+            f"<div style='display:flex;gap:6px;align-items:center'>"
+            f"<button class='button primary' type='submit' style='padding:4px 10px;font-size:11.5px;flex:1'>Update</button>"
+            f"<a class='button' href='mailto:{_escape(s['email'])}?subject={quote("[Ticket #" + t_ref + "] Re: " + s['subject'])}' style='padding:4px 8px;font-size:11.5px' title='Reply via Email'>Email</a>"
+            f"</div>"
+            f"</form>"
+        )
+
+        support_rows.append(f"<tr><td>{ticket_cell}</td><td>{from_cell}</td><td>{inquiry_cell}</td><td>{time_cell}</td><td>{action_form}</td></tr>")
+
+    support_table = _table(["Ticket", "Requester", "Inquiry & Resolution", "Timeline & Assigned", "Manage Ticket"], support_rows, "No support tickets submitted yet.")
+    support_section = (
+        f"<h2 id='support-tickets'>Support Tickets &amp; Inquiries</h2>"
+        f"<div class='stats' style='margin-bottom:14px'>"
+        f"<span class='pill amber'>{ticket_stats['open']} Open</span>"
+        f"<span class='pill' style='color:#b98aff;border-color:#5b1fa8'>{ticket_stats['for_review']} For Review</span>"
+        f"<span class='pill green'>{ticket_stats['closed']} Closed</span>"
+        f"<span class='pill'>{ticket_stats['total']} Total Tickets</span>"
+        f"</div>"
+        f"{support_table}"
+    )
 
     admin_chat_modal = """
 <div id="admin-chat-modal" style="display:none;position:fixed;bottom:20px;right:20px;width:380px;height:520px;background:#120a1b;border:1px solid #ff4a3a66;border-radius:14px;box-shadow:0 15px 50px #000;z-index:99999;flex-direction:column;overflow:hidden">
