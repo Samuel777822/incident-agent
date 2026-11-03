@@ -992,6 +992,9 @@ def _api_chat_messages(request: Request) -> Response:
     conv = portal_db.get_or_create_conversation(request.visitor_id)
     after = request.query.get("after", [""])[0]
     msgs = portal_db.list_chat_messages(conv["id"], after_time=after)
+    for m in msgs:
+        if m.get("sender") in ("bot", "admin"):
+            m["text"] = chatbot.sanitize_chat_text(m.get("text", ""))
     return Response(json.dumps({"messages": msgs, "conversation_id": conv["id"]}), "200 OK",
                     [("Content-Type", "application/json"), ("Cache-Control", "no-store")])
 
@@ -1025,7 +1028,7 @@ def _api_chat_send(request: Request) -> Response:
 
     # Generate AI Assistant response
     history = portal_db.list_chat_messages(conv["id"])
-    reply = chatbot.answer_visitor_query(text, history)
+    reply = chatbot.sanitize_chat_text(chatbot.answer_visitor_query(text, history))
     bot_msg = portal_db.add_chat_message(conv["id"], "bot", reply, "AI Assistant")
 
     return Response(json.dumps({
