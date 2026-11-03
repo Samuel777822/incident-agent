@@ -18,9 +18,8 @@ DAEMON_KNOWLEDGE = """
 Product: Agent Daemon (hosted at https://incident-agent-portal.onrender.com)
 Tagline: When production breaks, get to the cause faster. AI incident response for Python services.
 
-FOUNDERS:
-1. Abhay Samuel H - Co-Founder & CTO. Computer Science Engineering student at BMSCE, Bangalore. Built the monitoring client, incident pipeline, automated fix PRs, and the customer/admin portal. Email: naveenachandra371@gmail.com, GitHub: https://github.com/Samuel777822.
-2. Pranav V Rao - Co-Founder & Systems Architect. AI & ML Engineering student. Architected backend infrastructure, Codex integration, uptime monitoring, autonomous worker agent, and Render deployments. Email: pranavvrao1@gmail.com, GitHub: https://github.com/pranavvrao1-ai.
+TEAM:
+Agent Daemon is built and maintained by the Agent Daemon team of engineers.
 Project Repository: https://github.com/Samuel777822/incident-agent
 
 HOW IT WORKS:
@@ -47,9 +46,7 @@ HELP CENTRE, DEMO & TROUBLESHOOTING:
 - Troubleshooting playbooks: solving 'Offline' status, GitHub API 401/403/404 errors, auto-fix 'needs_human' safety gates, CI check auto-merge rules, and Render idle sleep.
 
 CONTACT & LIVE SUPPORT:
-Founders are available directly via this chat, our Contact form at /contact, or by email:
-- pranavvrao1@gmail.com
-- naveenachandra371@gmail.com
+The Agent Daemon team of engineers is available directly via this chat or our Contact form at /contact.
 """
 
 SYSTEM_PROMPT = f"""You are the friendly, helpful AI Assistant for Agent Daemon.
@@ -61,7 +58,7 @@ KNOWLEDGE BASE:
 GUIDELINES:
 1. Be concise, warm, professional, and accurate.
 2. Help users understand how Agent Daemon solves production errors, how easy it is to install, and how pricing works.
-3. If they want to talk to the founders, assure them that Abhay and Pranav will see their messages right here in the chat and by email, and encourage them to leave their name or email address.
+3. If they want to talk to the team, assure them that the Agent Daemon team of engineers will see their messages right here in the chat, and encourage them to leave their name or email address.
 4. Keep replies within 2-4 sentences or short bullet points unless more detail is specifically requested.
 5. Do not invent features or make up technical guarantees outside the knowledge base.
 """
@@ -102,7 +99,7 @@ def answer_visitor_query(user_text: str, history: list[dict] | None = None) -> s
     if any(k in text_lower for k in ("help", "guide", "doc", "troubleshoot", "demo", "video", "offline", "tutorial", "how to")):
         return (
             "You can find complete setup guides, troubleshooting playbooks, and our full video walkthrough demo "
-            "in our Help Centre at /help! You can also view our contact page at /contact to reach our founders directly."
+            "in our Help Centre at /help! You can also view our contact page at /contact to reach our engineering team directly."
         )
 
     if any(k in text_lower for k in ("price", "cost", "plan", "free", "trial", "payment", "pay", "upi")):
@@ -114,9 +111,9 @@ def answer_visitor_query(user_text: str, history: list[dict] | None = None) -> s
 
     if any(k in text_lower for k in ("founder", "team", "who built", "who are you", "abhay", "pranav")):
         return (
-            "Agent Daemon is built by two co-founders: Abhay Samuel H (Co-Founder & CTO) and Pranav V Rao (Co-Founder & Systems Architect). "
+            "Agent Daemon is built by the Agent Daemon team of engineers. "
             "They designed it to give developer teams 24/7 AI incident response without on-call burnout. "
-            "Feel free to drop your questions or contact details here—they read incoming messages!"
+            "Feel free to drop your questions or contact details here—our engineering team reviews incoming messages!"
         )
 
     if any(k in text_lower for k in ("how does it work", "how it works", "what is", "features", "python", "github")):
@@ -129,7 +126,7 @@ def answer_visitor_query(user_text: str, history: list[dict] | None = None) -> s
     if any(k in text_lower for k in ("contact", "email", "talk", "human", "support", "online", "hello", "hi", "hey")):
         return (
             "Hello! I am the Agent Daemon assistant. You can chat with our team right here! "
-            "If our founders (Abhay & Pranav) are currently away, leave your message or email and they will follow up shortly."
+            "If the Agent Daemon team of engineers is currently away, leave your message or email and they will follow up shortly."
         )
 
     return (

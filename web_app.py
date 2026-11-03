@@ -750,7 +750,7 @@ def _razorpay_settings(plan: str = "yearly"):
 
 def _upi_uri(plan: str) -> str:
     vpa = os.getenv("UPI_ID", "7975291636@ptsbi").strip()
-    name = os.getenv("UPI_PAYEE_NAME", "Pranav V Rao").strip()
+    name = os.getenv("UPI_PAYEE_NAME", "Agent Daemon").strip()
     amount = PLANS[plan]["rupees"]
     parts = {"pa": vpa, "pn": name, "am": f"{amount:.2f}", "cu": "INR", "tn": f"Agent Daemon {plan}"}
     return "upi://pay?" + "&".join(f"{key}={quote(value, safe='@')}" for key, value in parts.items())
@@ -863,7 +863,7 @@ def _page_about(request):
         <svg width="15" height="15" viewBox="0 0 16 16" fill="currentColor" aria-hidden="true"><path d="M2 2.5A2.5 2.5 0 014.5 0h8.75a.75.75 0 01.75.75v12.5a.75.75 0 01-.75.75h-2.5a.75.75 0 110-1.5h1.75v-2h-8a1 1 0 00-.714 1.7.75.75 0 01-1.072 1.05A2.495 2.495 0 012 11.5v-9zm10.5-1h-8a1 1 0 00-1 1v6.708A2.486 2.486 0 014.5 9h8V1.5z"/></svg>
         Repository
       </a>
-      <a class="founder-link" href="mailto:naveenachandra371@gmail.com">
+      <a class="founder-link" href="/contact">
         <svg width="15" height="15" viewBox="0 0 16 16" fill="currentColor" aria-hidden="true"><path d="M1.75 2h12.5c.966 0 1.75.784 1.75 1.75v8.5A1.75 1.75 0 0114.25 14H1.75A1.75 1.75 0 010 12.25v-8.5C0 2.784.784 2 1.75 2zm0 1.5a.25.25 0 00-.25.25v.725l6.5 3.9 6.5-3.9v-.725a.25.25 0 00-.25-.25H1.75zm13 2.748l-6.236 3.742a.5.5 0 01-.528 0L1.5 6.248v5.502c0 .138.112.25.25.25h12.5a.25.25 0 00.25-.25V6.248z"/></svg>
         Email
       </a>
@@ -898,7 +898,7 @@ def _page_about(request):
         <svg width="15" height="15" viewBox="0 0 16 16" fill="currentColor" aria-hidden="true"><path d="M2 2.5A2.5 2.5 0 014.5 0h8.75a.75.75 0 01.75.75v12.5a.75.75 0 01-.75.75h-2.5a.75.75 0 110-1.5h1.75v-2h-8a1 1 0 00-.714 1.7.75.75 0 01-1.072 1.05A2.495 2.495 0 012 11.5v-9zm10.5-1h-8a1 1 0 00-1 1v6.708A2.486 2.486 0 014.5 9h8V1.5z"/></svg>
         Repository
       </a>
-      <a class="founder-link" href="mailto:pranavvrao1@gmail.com">
+      <a class="founder-link" href="/contact">
         <svg width="15" height="15" viewBox="0 0 16 16" fill="currentColor" aria-hidden="true"><path d="M1.75 2h12.5c.966 0 1.75.784 1.75 1.75v8.5A1.75 1.75 0 0114.25 14H1.75A1.75 1.75 0 010 12.25v-8.5C0 2.784.784 2 1.75 2zm0 1.5a.25.25 0 00-.25.25v.725l6.5 3.9 6.5-3.9v-.725a.25.25 0 00-.25-.25H1.75zm13 2.748l-6.236 3.742a.5.5 0 01-.528 0L1.5 6.248v5.502c0 .138.112.25.25.25h12.5a.25.25 0 00.25-.25V6.248z"/></svg>
         Email
       </a>
@@ -1416,7 +1416,7 @@ application = get_wsgi_application()</div>
     <details class="accordion-item">
       <summary class="accordion-summary">How does the 1-day free trial work?</summary>
       <div class="accordion-body">
-        <p>Every customer is eligible for one 1-day free trial. Submit a request on the <a href="/billing">Billing page</a>, and our founders (Abhay &amp; Pranav) will approve it promptly, activating 24 hours of unrestricted autonomous incident response.</p>
+        <p>Every customer is eligible for one 1-day free trial. Submit a request on the <a href="/billing">Billing page</a>, and the Agent Daemon team of engineers will approve it promptly, activating 24 hours of unrestricted autonomous incident response.</p>
       </div>
     </details>
 
@@ -1548,11 +1548,11 @@ def _render_contact_page(request: Request, flash: str = "", name: str = "", emai
         "</div>"
         "<div class='actions' style='margin-top:22px'>"
         "<button class='button primary' type='submit'>Send Message to Support</button>"
-        "<a class='button' href='/about'>About Founders</a>"
+        "<a class='button' href='/about'>About Us</a>"
         "</div>"
         "</form>"
         "<div style='margin-top:28px;padding-top:20px;border-top:1px solid #28182f;font-size:13px;color:var(--muted)'>"
-        "Direct founder inboxes: <a href='mailto:pranavvrao1@gmail.com'>pranavvrao1@gmail.com</a> · <a href='mailto:naveenachandra371@gmail.com'>naveenachandra371@gmail.com</a>"
+        "Direct support: Inquiries reach the Agent Daemon team of engineers immediately."
         "</div>"
         "</section>"
     )
@@ -2558,7 +2558,7 @@ def _page_manual_payment(request):
     vpa = os.getenv("UPI_ID", "7975291636@ptsbi").strip()
     qr_html = f"<img src='{_escape(qr)}' alt='UPI QR code for ₹{rupees}' width='260' height='260'>" if qr else "<p style='color:#222'>QR code unavailable. Use the button below.</p>"
     plain_uri = "upi://pay?" + "&".join(f"{key}={quote(value, safe='@')}" for key, value in
-                                       {"pa": vpa, "pn": os.getenv("UPI_PAYEE_NAME", "Pranav V Rao").strip(), "cu": "INR"}.items())
+                                       {"pa": vpa, "pn": os.getenv("UPI_PAYEE_NAME", "Agent Daemon").strip(), "cu": "INR"}.items())
     plain_qr = _qr_data_uri(plain_uri)
     plain_html = f"<img src='{_escape(plain_qr)}' alt='UPI QR code without an amount' width='220' height='220'>" if plain_qr else ""
 

@@ -244,7 +244,7 @@ CHAT_JS = r"""
   // Widget Button
   var btn = document.createElement('div');
   btn.className = 'daemon-chat-btn';
-  btn.title = 'Chat with Founders & AI';
+  btn.title = 'Chat with Support & AI';
   btn.innerHTML = `
     <div class="daemon-chat-badge"></div>
     <svg viewBox="0 0 24 24"><path d="M20 2H4c-1.1 0-2 .9-2 2v18l4-4h14c1.1 0 2-.9 2-2V4c0-1.1-.9-2-2-2zm0 14H6l-2 2V4h16v12z"/></svg>
@@ -259,7 +259,7 @@ CHAT_JS = r"""
         <div class="daemon-chat-avatar">AD</div>
         <div class="daemon-chat-info">
           <h4>Agent Daemon Live</h4>
-          <span class="daemon-chat-status">Founders & AI Online</span>
+          <span class="daemon-chat-status">Engineers & AI Online</span>
         </div>
       </div>
       <button class="daemon-chat-close">&times;</button>
@@ -268,7 +268,7 @@ CHAT_JS = r"""
     <div class="daemon-chat-chips">
       <span class="daemon-chip" data-q="How does Agent Daemon work?">How it works</span>
       <span class="daemon-chip" data-q="What are the pricing & plans?">Pricing & Plans</span>
-      <span class="daemon-chip" data-q="Who are the founders?">Co-Founders</span>
+      <span class="daemon-chip" data-q="Who built Agent Daemon?">Engineering Team</span>
     </div>
     <div class="daemon-chat-lead" id="daemon-lead-row" style="display:none;">
       <input type="text" id="daemon-lead-contact" placeholder="Your name or email (optional)">
@@ -328,7 +328,7 @@ CHAT_JS = r"""
     }).catch(function(){});
     appendMessage({
       sender: 'bot',
-      text: "Thanks! We've saved your contact info. Abhay & Pranav can also follow up with you directly."
+      text: "Thanks! We've saved your contact info. The Agent Daemon team of engineers will follow up with you directly."
     });
   });
 
@@ -338,7 +338,7 @@ CHAT_JS = r"""
     if (m.sender === 'admin') {
       var tag = document.createElement('div');
       tag.className = 'tag';
-      tag.textContent = m.sender_name || 'Founder / Admin';
+      tag.textContent = m.sender_name || 'Agent Daemon Engineer';
       div.appendChild(tag);
       var t = document.createElement('div');
       t.textContent = m.text;
@@ -355,7 +355,7 @@ CHAT_JS = r"""
     if (msgBox.children.length === 0) {
       appendMessage({
         sender: 'bot',
-        text: "👋 Hi! Welcome to Agent Daemon. I'm your AI incident assistant. Our founders (Abhay & Pranav) are also on live notifications. How can we help you today?"
+        text: "👋 Hi! Welcome to Agent Daemon. I'm your AI incident assistant. The Agent Daemon team of engineers is also on live notifications. How can we help you today?"
       });
     }
   }
@@ -403,7 +403,7 @@ CHAT_JS = r"""
       sendBtn.disabled = false;
       appendMessage({
         sender: 'bot',
-        text: "Thanks for your message! Our founders have been notified and will review it shortly."
+        text: "Thanks for your message! The Agent Daemon team of engineers has been notified and will review it shortly."
       });
     });
   }

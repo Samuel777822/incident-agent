@@ -59,7 +59,7 @@ def render_footer_html() -> str:
       <span class="muted">· Autonomous AI on-call engineer for Python services.</span>
     </div>
     <div class="muted" style="font-size:13px">
-      &copy; 2026 Agent Daemon · By Abhay Samuel H &amp; Pranav V Rao · Built for resilient engineering teams.
+      &copy; 2026 Agent Daemon · By Agent Daemon team of engineers · Built for resilient engineering teams.
     </div>
   </div>
 </footer>"""
@@ -139,7 +139,7 @@ def pricing_page_html(signed_in: bool = False) -> str:
     <ul style="color:#d1c4df;font-size:14px;line-height:1.7;padding-left:18px;margin-bottom:24px">
       <li>Full access to Automatic, PR-only &amp; Report modes</li>
       <li>Instant error ingestion &amp; Groq AI diagnosis</li>
-      <li>Approved directly by founders within 1-2 hours</li>
+      <li>Approved directly by the Agent Daemon team of engineers within 1-2 hours</li>
     </ul>
     <a class="button" style="width:100%;text-align:center" href="{cta_href}">Request Free Trial</a>
   </article>
@@ -165,7 +165,7 @@ def pricing_page_html(signed_in: bool = False) -> str:
     <ul style="color:#d1c4df;font-size:14px;line-height:1.7;padding-left:18px;margin-bottom:24px">
       <li>Everything in Monthly with 365 days of coverage</li>
       <li>Priority worker diagnosis queue</li>
-      <li>Direct Slack / WhatsApp founder escalation access</li>
+      <li>Direct Slack / WhatsApp engineering escalation access</li>
     </ul>
     <a class="button primary" style="width:100%;text-align:center" href="{cta_href}">{cta_text}</a>
   </article>
@@ -201,24 +201,24 @@ def changelog_page_html() -> str:
 
   <article class="card" style="margin-bottom:20px">
     <div style="display:flex;justify-content:space-between;align-items:center;flex-wrap:wrap;gap:10px;margin-bottom:12px">
-      <h3 style="margin:0;color:var(--silver)">v1.2 &mdash; Direct Support &amp; Founder Alerts</h3>
+      <h3 style="margin:0;color:var(--silver)">v1.2 &mdash; Direct Support &amp; Incident Alerts</h3>
       <span class="pill">Oct 2026</span>
     </div>
     <ul style="color:#d1c4df;font-size:14px;line-height:1.7;padding-left:18px">
       <li><b>Contact Us Page (/contact):</b> Dedicated inquiry form with guest submission capability and CSRF protection.</li>
-      <li><b>Founder Instant Alerts:</b> Automated Brevo/Resend HTTPS notifications dispatching to Abhay &amp; Pranav upon form submission.</li>
+      <li><b>Instant Incident Alerts:</b> Automated Brevo/Resend HTTPS notifications dispatching to the Agent Daemon team of engineers upon form submission.</li>
       <li><b>Admin Inquiries Console:</b> Manage incoming support queries with one-click email reply links.</li>
     </ul>
   </article>
 
   <article class="card" style="margin-bottom:20px">
     <div style="display:flex;justify-content:space-between;align-items:center;flex-wrap:wrap;gap:10px;margin-bottom:12px">
-      <h3 style="margin:0;color:var(--silver)">v1.1 &mdash; AI Assistant &amp; Live Founder Chat</h3>
+      <h3 style="margin:0;color:var(--silver)">v1.1 &mdash; AI Assistant &amp; Live Chat</h3>
       <span class="pill">Oct 2026</span>
     </div>
     <ul style="color:#d1c4df;font-size:14px;line-height:1.7;padding-left:18px">
       <li><b>Groq LLM Chatbot:</b> Embedded dark-mode conversational assistant answering visitor queries about features, pricing, and architecture.</li>
-      <li><b>Admin Chat Console:</b> Live multi-tab messaging drawer for founders to take over chat sessions in real time.</li>
+      <li><b>Admin Chat Console:</b> Live multi-tab messaging drawer for the Agent Daemon team of engineers to take over chat sessions in real time.</li>
       <li><b>Visitor Telemetry:</b> Anonymous visitor journey tracking with automated alert deduplication.</li>
     </ul>
   </article>
@@ -293,7 +293,7 @@ def faq_page_html() -> str:
   <details class="accordion-item">
     <summary class="accordion-summary">How does the 1-day free trial work?</summary>
     <div class="accordion-body">
-      <p>Every customer is eligible for one 1-day free trial. Submit a request on the <a href="/billing">Billing page</a>, and our founders (Abhay &amp; Pranav) will approve it promptly, activating 24 hours of unrestricted autonomous incident response.</p>
+      <p>Every customer is eligible for one 1-day free trial. Submit a request on the <a href="/billing">Billing page</a>, and the Agent Daemon team of engineers will approve it promptly, activating 24 hours of unrestricted autonomous incident response.</p>
     </div>
   </details>
 
@@ -318,7 +318,7 @@ def privacy_policy_page_html() -> str:
 
 <section class="card" style="margin-top:36px;padding:32px;line-height:1.7;color:#d1c4df">
   <h3 style="color:var(--silver);margin-bottom:8px">1. Introduction</h3>
-  <p>Agent Daemon ("we", "us", or "our"), operated by founders Abhay Samuel H and Pranav V Rao, is committed to safeguarding the privacy and security of developers and organizations using our autonomous on-call monitoring and remediation platform.</p>
+  <p>Agent Daemon ("we", "us", or "our"), operated by the Agent Daemon team of engineers, is committed to safeguarding the privacy and security of developers and organizations using our autonomous on-call monitoring and remediation platform.</p>
 
   <h3 style="color:var(--silver);margin:24px 0 8px">2. Information We Collect</h3>
   <ul>
@@ -334,7 +334,7 @@ def privacy_policy_page_html() -> str:
   <p>You may delete any connected project at any time through your dashboard. Deletion permanently purges all stored incidents, decrypted tokens, and telemetry associated with that project. You may also revoke the GitHub Personal Access Token directly from GitHub at any time.</p>
 
   <h3 style="color:var(--silver);margin:24px 0 8px">5. Contact Information</h3>
-  <p>If you have questions regarding your data privacy or would like to request data deletion, contact us at <a href="mailto:pranavvrao1@gmail.com">pranavvrao1@gmail.com</a> or through our <a href="/contact">Contact Page</a>.</p>
+  <p>If you have questions regarding your data privacy or would like to request data deletion, contact us through our <a href="/contact">Contact Page</a>.</p>
 </section>"""
 
 
@@ -355,7 +355,7 @@ def terms_of_service_page_html() -> str:
 
   <h3 style="color:var(--silver);margin:24px 0 8px">3. Subscriptions &amp; Billing</h3>
   <ul>
-    <li><b>Free Trial:</b> Limited to one 1-day free trial per customer, subject to founder approval.</li>
+    <li><b>Free Trial:</b> Limited to one 1-day free trial per customer, subject to approval by the Agent Daemon team of engineers.</li>
     <li><b>Paid Plans:</b> Paid access is available for &#8377;100 (30 days) and &#8377;1,000 (365 days). Payments made via Paytm UPI QR are activated upon administrative verification of the provided UTR reference.</li>
     <li><b>Renewal &amp; Expiry:</b> If a plan expires, project monitoring is safely paused without data loss until renewal.</li>
   </ul>
@@ -364,7 +364,7 @@ def terms_of_service_page_html() -> str:
   <p>You agree not to use Agent Daemon to violate applicable laws, reverse engineer our proprietary diagnosis pipelines, or connect repositories containing malicious software.</p>
 
   <h3 style="color:var(--silver);margin:24px 0 8px">5. Limitation of Liability</h3>
-  <p>In no event shall Agent Daemon, its founders, or contributors be liable for any indirect, incidental, or consequential damages resulting from downtime, software defects, or pull request merges.</p>
+  <p>In no event shall Agent Daemon, its engineering team, or contributors be liable for any indirect, incidental, or consequential damages resulting from downtime, software defects, or pull request merges.</p>
 </section>"""
 
 
