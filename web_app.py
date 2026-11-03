@@ -633,9 +633,12 @@ def _parse_iso(value):
     return parsed if parsed.tzinfo else parsed.replace(tzinfo=timezone.utc)
 
 
+IST = timezone(timedelta(hours=5, minutes=30), name="IST")
+
+
 def _fmt_time(value) -> str:
     parsed = _parse_iso(value)
-    return parsed.astimezone(timezone.utc).strftime("%d %b %Y, %H:%M UTC") if parsed else "never"
+    return parsed.astimezone(IST).strftime("%d %b %Y, %H:%M IST") if parsed else "never" 
 
 
 def _ago(value) -> str:
@@ -1804,7 +1807,7 @@ def _admin_view(request):
     incident_rows = []
     for item in portal_db.admin_recent_incidents(10):
         pr = f"<a href='{_escape(item['pr_url'])}' target='_blank' rel='noopener'>PR · CI {_escape(item['ci_status'])}</a>" if item.get("pr_url") else ""
-        incident_rows.append(f"<tr><td>{_escape(_ago(item['last_seen']))}</td><td>{_escape(item['project_name'])}<br><small class='muted'>{_escape(item['owner_email'])}</small></td>"
+        incident_rows.append(f"<tr><td><span title='{_escape(_fmt_time(item['last_seen']))}'>{_escape(_ago(item['last_seen']))}</span><br><small class='muted'>{_escape(_fmt_time(item['last_seen']))}</small></td><td>{_escape(item['project_name'])}<br><small class='muted'>{_escape(item['owner_email'])}</small></td>"
                              f"<td>{_escape(item['signature'])}</td><td>{_escape(_incident_label(item['status']))}</td><td>{pr}</td></tr>")
 
     worker_seen = portal_db.worker_last_seen()
@@ -1818,7 +1821,7 @@ def _admin_view(request):
     notif_rows = []
     for item in portal_db.recent_notifications(10):
         result = _pill("accepted", "green") if item["ok"] else _pill("failed", "red")
-        notif_rows.append(f"<tr><td>{_escape(_ago(item['created_at']))}</td><td>{_escape(item['recipient'])}</td><td>{_escape(item['kind'])}</td>"
+        notif_rows.append(f"<tr><td><span title='{_escape(_fmt_time(item['created_at']))}'>{_escape(_ago(item['created_at']))}</span><br><small class='muted'>{_escape(_fmt_time(item['created_at']))}</small></td><td>{_escape(item['recipient'])}</td><td>{_escape(item['kind'])}</td>"
                           f"<td>{result}<br><small class='muted'>{_escape(item['detail'])}</small></td></tr>")
     system = (f"<h2>System</h2><div class='stats'>{worker}{email_state}{payments_state}{_pill('Database: ' + portal_db.database_kind())}</div>"
               f"<form method='post' action='/admin' style='margin-top:12px'><input type='hidden' name='csrf' value='{csrf}'>"
@@ -1887,7 +1890,14 @@ function pollAdminMessages() {
           var isMe = m.sender === 'admin';
           div.style.cssText = 'padding:8px 12px;border-radius:10px;font-size:13px;max-width:85%;word-break:break-word;' + 
             (isMe ? 'align-self:flex-end;background:#5b1fa8;color:#fff;' : 'align-self:flex-start;background:#211432;border:1px solid #3a2338;color:#eee;');
-          div.innerHTML = (m.sender_name ? '<div style="font-size:10px;font-weight:700;color:#ff8a7a;margin-bottom:3px">' + m.sender_name + '</div>' : '') + m.text;
+          var tStr = '';
+          if (m.created_at) {
+            try {
+              var d = new Date(m.created_at);
+              tStr = ' <span style="font-size:10px;opacity:0.6;font-weight:normal;float:right">' + d.toLocaleTimeString('en-IN', {timeZone: 'Asia/Kolkata', hour: '2-digit', minute:'2-digit'}) + ' IST</span>';
+            } catch(e) {}
+          }
+          div.innerHTML = (m.sender_name ? '<div style="font-size:10px;font-weight:700;color:#ff8a7a;margin-bottom:3px">' + m.sender_name + tStr + '</div>' : (tStr ? '<div style="margin-bottom:2px">' + tStr + '</div>' : '')) + m.text;
           box.appendChild(div);
           adminLastPoll = m.created_at;
         });
@@ -1960,7 +1970,7 @@ def _page_trial_request(request):
             f"  - Mobile / WhatsApp: {user_phone}\n"
             f"  - How they found us: {user_ref}\n"
             f"  - Organization / Project: {user_org}\n"
-            f"  - Requested At: {trial.get('requested_at', 'Just now')}\n\n"
+            f"  - Requested At: {_fmt_time(trial.get('requested_at'))}\n\n"
             f"Review and approve or reject on the admin page:\n{_base_url()}/admin"
         )
         notifications.notify_admins(
@@ -2020,7 +2030,7 @@ def _page_dashboard(request):
     feed_rows = []
     for item in portal_db.recent_activity(user_id, 8):
         pr = f"<a href='{_escape(item['pr_url'])}' target='_blank' rel='noopener'>Open PR</a>" if item.get("pr_url") else ""
-        feed_rows.append(f"<tr><td>{_escape(_ago(item['last_seen']))}</td><td>{_escape(item['project_name'])}</td>"
+        feed_rows.append(f"<tr><td><span title='{_escape(_fmt_time(item['last_seen']))}'>{_escape(_ago(item['last_seen']))}</span><br><small class='muted'>{_escape(_fmt_time(item['last_seen']))}</small></td><td>{_escape(item['project_name'])}</td>"
                          f"<td><a href='/projects/{_escape(item['project_id'])}/incidents/{_escape(item['id'])}'>{_escape(item['signature'])}</a></td>"
                          f"<td>{_escape(_incident_label(item['status']))}</td><td>{pr}</td></tr>")
     feed = _table(["When", "Project", "Error", "What the agent did", "Fix"], feed_rows,
@@ -2334,7 +2344,7 @@ def _page_incident(request, project_id, incident_id):
     diff = "".join(f"<article class='card'><div class='row'><strong>{_escape(f['file_path'])}</strong><span class='pill'>{_escape(f['ci_result'])}</span></div><pre style='overflow:auto;white-space:pre-wrap;color:#c7d2e4'>{_escape(f['diff'])}</pre></article>" for f in fixes) or "<div class='empty'>No proposed fix has been saved yet.</div>"
     pr_link = (f"<p><a class='button primary' href='{_escape(incident['pr_url'])}' target='_blank' rel='noopener'>Open fix pull request</a></p>"
                if incident.get("pr_url") else "")
-    body = f"<section class='section'><p><a href='/projects/{_escape(project_id)}'>← {_escape(project['name'])}</a></p><div class='eyebrow'>Incident</div><h1>{_escape(incident['signature'])}</h1><div class='stats'><span class='pill'>{_escape(incident_board.stage_for(incident, project['mode'])['headline'])}</span><span class='pill'>Occurrences · {_escape(incident['occurrences'])}</span><span class='pill'>CI · {_escape(incident['ci_status'])}</span></div>{pr_link}<article class='card'><h2>What happened</h2><p>{_escape(incident['root_cause']) or 'Diagnosis is pending.'}</p><p class='muted' style='white-space:pre-wrap'>{_escape(incident['report'])}</p></article><h2>Proposed changes</h2>{diff}</section>"
+    body = f"<section class='section'><p><a href='/projects/{_escape(project_id)}'>← {_escape(project['name'])}</a></p><div class='eyebrow'>Incident</div><h1>{_escape(incident['signature'])}</h1><div class='stats'><span class='pill'>{_escape(incident_board.stage_for(incident, project['mode'])['headline'])}</span><span class='pill'>Occurrences · {_escape(incident['occurrences'])}</span><span class='pill'>CI · {_escape(incident['ci_status'])}</span><span class='pill'>Last seen · {_escape(_fmt_time(incident.get('last_seen')))}</span></div>{pr_link}<article class='card'><h2>What happened</h2><p>{_escape(incident['root_cause']) or 'Diagnosis is pending.'}</p><p class='muted' style='white-space:pre-wrap'>{_escape(incident['report'])}</p></article><h2>Proposed changes</h2>{diff}</section>"
     return _response(body, request)
 
 
@@ -2522,7 +2532,7 @@ def _page_manual_payment(request):
                 f"Payment Details:\n"
                 f"  - Plan: {plan.title()} (INR {PLANS[plan]['rupees']})\n"
                 f"  - UPI Reference (UTR): {ref}\n"
-                f"  - Submitted: {payment.get('created_at', 'Just now')}\n\n"
+                f"  - Submitted: {_fmt_time(payment.get('created_at'))}\n\n"
                 f"Open your Paytm app and look for a payment of INR {PLANS[plan]['rupees']} with this reference. "
                 f"If you see it, confirm it here: {_base_url()}/admin"
             )

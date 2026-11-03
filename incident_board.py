@@ -13,7 +13,7 @@ from __future__ import annotations
 
 import html
 import re
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 
 LIVE_JS_VERSION = "1"
 
@@ -23,6 +23,22 @@ _DIAGNOSING = {"diagnosing", "queued", "processing"}
 
 def _e(value) -> str:
     return html.escape(str(value if value is not None else ""), quote=True)
+
+
+IST = timezone(timedelta(hours=5, minutes=30), name="IST")
+
+
+def _fmt_ist(value) -> str:
+    text = str(value or "").strip()
+    if not text:
+        return ""
+    try:
+        moment = datetime.fromisoformat(text.replace("Z", "+00:00"))
+    except ValueError:
+        return ""
+    if moment.tzinfo is None:
+        moment = moment.replace(tzinfo=timezone.utc)
+    return moment.astimezone(IST).strftime("%d %b %Y, %H:%M IST")
 
 
 def _ago(value) -> str:
@@ -172,7 +188,11 @@ def render_board(project_id: str, incidents: list, mode: str) -> str:
         cause = (cause[:160] + "…") if len(cause) > 160 else cause
         category = str(inc.get("category") or "").replace("_", " ")
         confidence = str(inc.get("confidence") or "")
-        meta = [f"{_e(inc.get('occurrences'))} events", f"last seen {_e(_ago(inc.get('last_seen')))}"]
+        ist_ts = _fmt_ist(inc.get('last_seen'))
+        ago_label = f"last seen {_e(_ago(inc.get('last_seen')))}"
+        if ist_ts:
+            ago_label = f"<span title='{_e(ist_ts)}'>{ago_label} ({_e(ist_ts)})</span>"
+        meta = [f"{_e(inc.get('occurrences'))} events", ago_label]
         if category:
             meta.append(_e(category + (f" · {confidence} confidence" if confidence else "")))
         buttons = []

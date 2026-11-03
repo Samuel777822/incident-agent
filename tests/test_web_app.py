@@ -466,3 +466,17 @@ def test_structured_footer_and_all_links(web_env):
     # 6. Verify removed links are not in footer HTML
     for removed in ("Partnerships", "Careers", "System Status", "Cookie Policy"):
         assert removed not in body, f"{removed} should not be in footer"
+
+
+def test_indian_standard_time_formatting(web_env):
+    from web_app import _fmt_time
+    import incident_board
+    # Given a UTC timestamp: 2026-11-03T14:15:00Z (+5:30 -> 19:45 IST)
+    formatted = _fmt_time("2026-11-03T14:15:00Z")
+    assert "03 Nov 2026, 19:45 IST" in formatted
+    assert "UTC" not in formatted
+
+    # incident_board helper
+    ib_formatted = incident_board._fmt_ist("2026-11-03T14:15:00Z")
+    assert "03 Nov 2026, 19:45 IST" in ib_formatted
+    assert "UTC" not in ib_formatted
