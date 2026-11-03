@@ -1,3 +1,105 @@
+HOME_JS = """(function() {
+  var hStage = 0;
+  var heroTimer = null;
+
+  function resetHeroTimer() {
+    if (heroTimer) clearInterval(heroTimer);
+    heroTimer = setInterval(function() {
+      if (document.hidden) return;
+      hStage = (hStage + 1) % 4;
+      applyHeroStage(hStage);
+    }, 5000);
+  }
+
+  function applyHeroStage(n) {
+    hStage = n;
+    for (var i = 0; i < 4; i++) {
+      var v = document.getElementById('hview-' + i);
+      var b = document.getElementById('hstage-' + i);
+      if (v) {
+        v.style.display = (i === n) ? 'block' : 'none';
+      }
+      if (b) {
+        if (i === n) b.classList.add('active');
+        else b.classList.remove('active');
+      }
+    }
+  }
+
+  function applyShowcaseStage(n) {
+    for (var i = 0; i < 4; i++) {
+      var p = document.getElementById('sc-pane-' + i);
+      var b = document.getElementById('sc-btn-' + i);
+      if (p) {
+        p.style.display = (i === n) ? 'block' : 'none';
+      }
+      if (b) {
+        if (i === n) b.classList.add('active');
+        else b.classList.remove('active');
+      }
+    }
+  }
+
+  window.setHeroStage = function(n) {
+    applyHeroStage(n);
+    resetHeroTimer();
+  };
+
+  window.switchShowcase = function(n) {
+    applyShowcaseStage(n);
+  };
+
+  function initHomeInteractivity() {
+    for (var i = 0; i < 4; i++) {
+      (function(idx) {
+        var btn = document.getElementById('hstage-' + idx);
+        if (btn) {
+          btn.addEventListener('click', function(e) {
+            e.preventDefault();
+            window.setHeroStage(idx);
+          });
+        }
+      })(i);
+    }
+
+    for (var j = 0; j < 4; j++) {
+      (function(idx) {
+        var btn = document.getElementById('sc-btn-' + idx);
+        if (btn) {
+          btn.addEventListener('click', function(e) {
+            e.preventDefault();
+            window.switchShowcase(idx);
+          });
+        }
+      })(j);
+    }
+
+    document.querySelectorAll('a[href^="#"]').forEach(function(anchor) {
+      anchor.addEventListener('click', function(e) {
+        var href = this.getAttribute('href');
+        if (href && href.length > 1) {
+          var target = document.querySelector(href);
+          if (target) {
+            e.preventDefault();
+            target.scrollIntoView({ behavior: 'smooth', block: 'start' });
+            if (history.pushState) {
+              history.pushState(null, null, href);
+            }
+          }
+        }
+      });
+    });
+
+    resetHeroTimer();
+  }
+
+  if (document.readyState === 'loading') {
+    document.addEventListener('DOMContentLoaded', initHomeInteractivity);
+  } else {
+    initHomeInteractivity();
+  }
+})();"""
+
 """Homepage presentation module for Agent Daemon.
 
 Delivers a high-conversion, developer-centric SaaS landing page inspired by
@@ -143,6 +245,9 @@ HOMEPAGE_CSS = """
   box-shadow: 0 10px 32px rgba(209, 18, 31, 0.45), 0 0 24px rgba(154, 77, 255, 0.35);
   transition: all 0.22s ease;
   cursor: pointer;
+  position: relative;
+  z-index: 20;
+  pointer-events: auto !important;
 }
 .btn-hero-primary:hover {
   transform: translateY(-2px);
@@ -164,6 +269,9 @@ HOMEPAGE_CSS = """
   backdrop-filter: blur(10px);
   transition: all 0.22s ease;
   cursor: pointer;
+  position: relative;
+  z-index: 20;
+  pointer-events: auto !important;
 }
 .btn-hero-secondary:hover {
   background: rgba(35, 18, 48, 0.95);
@@ -243,6 +351,14 @@ HOMEPAGE_CSS = """
   align-items: center;
   gap: 7px;
   transition: all 0.18s ease;
+  position: relative;
+  z-index: 20;
+  pointer-events: auto !important;
+  user-select: none;
+}
+.dash-topbar, .dash-stage-nav {
+  position: relative;
+  z-index: 15;
 }
 .dash-stage-btn:hover {
   background: rgba(255, 255, 255, 0.08);
@@ -642,16 +758,16 @@ def render_homepage_html() -> str:
       </div>
       
       <div class="dash-stage-nav" id="hero-stage-nav">
-        <button class="dash-stage-btn active" onclick="setHeroStage(0)" id="hstage-0">
+        <button type="button" class="dash-stage-btn active" onclick="setHeroStage(0)" id="hstage-0">
           <span class="pulse-dot-red"></span> 1. Error Spike
         </button>
-        <button class="dash-stage-btn" onclick="setHeroStage(1)" id="hstage-1">
+        <button type="button" class="dash-stage-btn" onclick="setHeroStage(1)" id="hstage-1">
           {ICON_LAYERS} 2. Clustered Incident
         </button>
-        <button class="dash-stage-btn" onclick="setHeroStage(2)" id="hstage-2">
+        <button type="button" class="dash-stage-btn" onclick="setHeroStage(2)" id="hstage-2">
           {ICON_CPU} 3. AI Root Cause
         </button>
-        <button class="dash-stage-btn" onclick="setHeroStage(3)" id="hstage-3">
+        <button type="button" class="dash-stage-btn" onclick="setHeroStage(3)" id="hstage-3">
           {ICON_PR} 4. Proposed GitHub PR
         </button>
       </div>
@@ -1037,16 +1153,16 @@ def render_homepage_html() -> str:
   <div style="max-width:960px;margin:auto">
     <!-- Showcase Tabs -->
     <div style="display:flex;justify-content:center;gap:10px;margin-bottom:22px;flex-wrap:wrap">
-      <button class="dash-stage-btn active" onclick="switchShowcase(0)" id="sc-btn-0">
+      <button type="button" class="dash-stage-btn active" onclick="switchShowcase(0)" id="sc-btn-0">
         <span class="pulse-dot-red"></span> Error Detected
       </button>
-      <button class="dash-stage-btn" onclick="switchShowcase(1)" id="sc-btn-1">
+      <button type="button" class="dash-stage-btn" onclick="switchShowcase(1)" id="sc-btn-1">
         {ICON_LAYERS} Incident Created
       </button>
-      <button class="dash-stage-btn" onclick="switchShowcase(2)" id="sc-btn-2">
+      <button type="button" class="dash-stage-btn" onclick="switchShowcase(2)" id="sc-btn-2">
         {ICON_CPU} Root Cause Identified
       </button>
-      <button class="dash-stage-btn" onclick="switchShowcase(3)" id="sc-btn-3">
+      <button type="button" class="dash-stage-btn" onclick="switchShowcase(3)" id="sc-btn-3">
         {ICON_PR} Fix Proposed
       </button>
     </div>
@@ -1183,43 +1299,9 @@ def render_homepage_html() -> str:
 </section>
 
 <!-- INTERACTIVE SCRIPTS -->
+<script src="/assets/home.js"></script>
 <script>
-var hStage = 0;
-function setHeroStage(n) {
-  hStage = n;
-  for (var i = 0; i < 4; i++) {
-    var v = document.getElementById('hview-' + i);
-    var b = document.getElementById('hstage-' + i);
-    if (!v || !b) continue;
-    if (i === n) {
-      v.style.display = 'block';
-      b.classList.add('active');
-    } else {
-      v.style.display = 'none';
-      b.classList.remove('active');
-    }
-  }
-}
-setInterval(function() {
-  if (document.hidden) return;
-  hStage = (hStage + 1) % 4;
-  setHeroStage(hStage);
-}, 4500);
-
-function switchShowcase(n) {
-  for (var i = 0; i < 4; i++) {
-    var p = document.getElementById('sc-pane-' + i);
-    var b = document.getElementById('sc-btn-' + i);
-    if (!p || !b) continue;
-    if (i === n) {
-      p.style.display = 'block';
-      b.classList.add('active');
-    } else {
-      p.style.display = 'none';
-      b.classList.remove('active');
-    }
-  }
-}
+{HOME_JS_INLINE}
 </script>
 """
     for token, icon in [
@@ -1236,6 +1318,7 @@ function switchShowcase(n) {
         ("{ICON_CLOCK}", ICON_CLOCK),
         ("{ICON_PLAY}", ICON_PLAY),
         ("{ICON_ARROW}", ICON_ARROW),
+        ("{HOME_JS_INLINE}", HOME_JS),
     ]:
         html = html.replace(token, icon)
     return html

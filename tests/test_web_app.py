@@ -74,9 +74,24 @@ def test_login_page_offers_google_only(web_env):
 
 
 def test_home_page_explains_the_product_and_the_github_token(web_env):
-    _, _, body = _request("/")
+    status, headers, body = _request("/")
+    assert status == "200 OK"
     for text in ("How it works", "Make your repository private", "Tokens (classic)", "<code>repo</code>", "<code>workflow</code>"):
         assert text in body
+    assert 'id="hstage-0"' in body
+    assert 'id="hstage-1"' in body
+    assert 'id="hstage-2"' in body
+    assert 'id="hstage-3"' in body
+    assert "/assets/home.js" in body
+    assert "setHeroStage" in body
+    # Verify CSP permits inline and self scripts
+    csp = dict(headers)["Content-Security-Policy"]
+    assert "script-src 'self' 'unsafe-inline'" in csp
+    # Verify /assets/home.js is served
+    h_status, h_headers, h_body = _request("/assets/home.js")
+    assert h_status == "200 OK"
+    assert "setHeroStage" in h_body
+    assert "switchShowcase" in h_body
 
 
 def test_email_signup_and_login_are_gone(web_env):
