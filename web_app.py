@@ -537,8 +537,8 @@ def _csrf(request: Request) -> str:
 
 def _response(body, request=None, status="200 OK", headers=None):
     defaults = [("Content-Type", "text/html; charset=utf-8"), ("Cache-Control", "no-store"),
-                ("X-Content-Type-Options", "nosniff"), ("Referrer-Policy", "same-origin"),
-                ("Content-Security-Policy", "default-src 'self'; script-src 'self' 'unsafe-inline'; style-src 'self' 'unsafe-inline' https://fonts.googleapis.com; font-src 'self' https://fonts.gstatic.com; img-src 'self' data: https://i.ytimg.com https://img.youtube.com; frame-src 'self' https://www.youtube.com https://www.youtube-nocookie.com; form-action 'self'; frame-ancestors 'none'; base-uri 'none'")]
+                ("X-Content-Type-Options", "nosniff"), ("Referrer-Policy", "strict-origin-when-cross-origin"),
+                ("Content-Security-Policy", "default-src 'self'; script-src 'self' 'unsafe-inline'; style-src 'self' 'unsafe-inline' https://fonts.googleapis.com; font-src 'self' https://fonts.gstatic.com; img-src 'self' data: https://*.ytimg.com https://*.youtube.com https://i.ytimg.com https://img.youtube.com; frame-src 'self' https://www.youtube.com https://www.youtube-nocookie.com; child-src 'self' https://www.youtube.com https://www.youtube-nocookie.com; form-action 'self'; frame-ancestors 'none'; base-uri 'none'")]
     response = Response(_layout("Agent Daemon", body, request), status, defaults + list(headers or []))
     if request and request.new_csrf_cookie:
         response.headers.append(request.new_csrf_cookie)
@@ -1098,7 +1098,7 @@ def _page_help(request: Request) -> Response:
 <!-- 1. Video Demo Section -->
 <section class="video-card help-section" id="video" data-category="video">
   <div class="video-frame-wrap">
-    <iframe src="https://www.youtube-nocookie.com/embed/Y3neE_B2d-M" title="Agent Daemon Demo &amp; Walkthrough" allow="accelerometer; autoplay; clipboard-write; encrypted-media; gyroscope; picture-in-picture" allowfullscreen loading="lazy"></iframe>
+    <iframe src="https://www.youtube.com/embed/Y3neE_B2d-M?rel=0" title="Agent Daemon Demo &amp; Walkthrough" allow="accelerometer; autoplay; clipboard-write; encrypted-media; gyroscope; picture-in-picture; web-share" referrerpolicy="strict-origin-when-cross-origin" allowfullscreen></iframe>
   </div>
   <div class="video-info">
     <div>

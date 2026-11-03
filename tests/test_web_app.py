@@ -386,6 +386,8 @@ def test_help_center_page_and_navigation(web_env):
     assert status == "200 OK"
     assert "Agent Daemon Help Centre" in body
     assert "Y3neE_B2d-M" in body  # YouTube video ID embed
+    assert 'referrerpolicy="strict-origin-when-cross-origin"' in body
+    assert "https://www.youtube.com/embed/Y3neE_B2d-M" in body
     assert "Remediation Modes" in body
     assert "Automatic Mode" in body
     assert "Pull Request Only" in body
