@@ -15,7 +15,9 @@ def render_footer_html() -> str:
     <div class="footer-col">
       <div class="footer-heading">Product</div>
       <ul class="footer-links">
+        <li><a href="#how-it-works">How It Works</a></li>
         <li><a href="/features">Features</a></li>
+        <li><a href="#security">Security</a></li>
         <li><a href="/pricing">Pricing</a></li>
         <li><a href="/docs">Documentation</a></li>
         <li><a href="/changelog">Changelog</a></li>
@@ -26,6 +28,7 @@ def render_footer_html() -> str:
       <ul class="footer-links">
         <li><a href="/about">About Us</a></li>
         <li><a href="/contact">Contact Us</a></li>
+        <li><a href="/support">Support</a></li>
       </ul>
     </div>
     <div class="footer-col">
@@ -40,6 +43,13 @@ def render_footer_html() -> str:
       <ul class="footer-links">
         <li><a href="/privacy">Privacy Policy</a></li>
         <li><a href="/terms">Terms of Service</a></li>
+      </ul>
+    </div>
+    <div class="footer-col">
+      <div class="footer-heading">Account</div>
+      <ul class="footer-links">
+        <li><a href="/login">Sign In</a></li>
+        <li><a href="/login">Get Started</a></li>
       </ul>
     </div>
   </div>
