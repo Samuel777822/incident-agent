@@ -242,6 +242,29 @@ CREATE TABLE IF NOT EXISTS support_messages (
 );
 CREATE INDEX IF NOT EXISTS idx_support_messages_time ON support_messages(created_at DESC);
 CREATE INDEX IF NOT EXISTS idx_support_messages_status ON support_messages(status, created_at DESC);
+
+CREATE TABLE IF NOT EXISTS java_waitlist (
+  id TEXT PRIMARY KEY,
+  email TEXT NOT NULL UNIQUE,
+  consent INTEGER NOT NULL DEFAULT 1,
+  source TEXT NOT NULL DEFAULT 'homepage_banner',
+  created_at TEXT NOT NULL,
+  notification_sent INTEGER NOT NULL DEFAULT 0,
+  notification_sent_at TEXT NOT NULL DEFAULT '',
+  status TEXT NOT NULL DEFAULT 'subscribed',
+  unsubscribe_token TEXT NOT NULL DEFAULT '',
+  delivery_error TEXT NOT NULL DEFAULT '',
+  attempt_count INTEGER NOT NULL DEFAULT 0
+);
+CREATE INDEX IF NOT EXISTS idx_java_waitlist_email ON java_waitlist(email);
+CREATE INDEX IF NOT EXISTS idx_java_waitlist_status ON java_waitlist(status, notification_sent);
+
+CREATE TABLE IF NOT EXISTS banner_analytics (
+  id TEXT PRIMARY KEY,
+  event_type TEXT NOT NULL,
+  created_at TEXT NOT NULL
+);
+CREATE INDEX IF NOT EXISTS idx_banner_analytics_event ON banner_analytics(event_type, created_at DESC);
 """
 
 
@@ -314,6 +337,14 @@ def init_db() -> None:
             ("support_messages", "closed_at", "TEXT NOT NULL DEFAULT ''"),
             ("support_messages", "closed_by", "TEXT NOT NULL DEFAULT ''"),
             ("support_messages", "updated_at", "TEXT NOT NULL DEFAULT ''"),
+            ("java_waitlist", "consent", "INTEGER NOT NULL DEFAULT 1"),
+            ("java_waitlist", "source", "TEXT NOT NULL DEFAULT 'homepage_banner'"),
+            ("java_waitlist", "notification_sent", "INTEGER NOT NULL DEFAULT 0"),
+            ("java_waitlist", "notification_sent_at", "TEXT NOT NULL DEFAULT ''"),
+            ("java_waitlist", "status", "TEXT NOT NULL DEFAULT 'subscribed'"),
+            ("java_waitlist", "unsubscribe_token", "TEXT NOT NULL DEFAULT ''"),
+            ("java_waitlist", "delivery_error", "TEXT NOT NULL DEFAULT ''"),
+            ("java_waitlist", "attempt_count", "INTEGER NOT NULL DEFAULT 0"),
             ("manual_payments", "name", "TEXT NOT NULL DEFAULT ''"),
             ("manual_payments", "phone", "TEXT NOT NULL DEFAULT ''"),
             ("manual_payments", "referral_source", "TEXT NOT NULL DEFAULT ''"),
@@ -1662,6 +1693,187 @@ def admin_ticket_stats() -> dict:
             else:
                 counts["open"] += cnt
             counts["total"] += cnt
+        return counts
+    finally:
+        conn.close()
+
+
+
+# --- Java Integration Waitlist & Launch Notification Functions ---
+
+def register_java_waitlist(email: str, consent: bool = True, source: str = "homepage_banner") -> tuple[bool, str, dict]:
+    """Register an email address for the Java launch announcement.
+    Returns (success, reason, record_dict).
+    reason is one of: 'created', 'reactivated', 'duplicate'
+    """
+    clean_email = email.strip().lower()
+    conn = get_connection()
+    try:
+        row = _execute(conn, "SELECT * FROM java_waitlist WHERE email = ?", (clean_email,)).fetchone()
+        now = _now()
+        if row:
+            d = dict(row)
+            if d.get("status") == "subscribed":
+                return False, "duplicate", d
+            # Reactivate previously unsubscribed email
+            _execute(conn, """UPDATE java_waitlist 
+                           SET status = 'subscribed', notification_sent = 0, delivery_error = '', consent = ? 
+                           WHERE email = ?""", (1 if consent else 0, clean_email))
+            conn.commit()
+            updated = _execute(conn, "SELECT * FROM java_waitlist WHERE email = ?", (clean_email,)).fetchone()
+            return True, "reactivated", dict(updated)
+
+        rec_id = _id()
+        unsub_token = uuid.uuid4().hex + uuid.uuid4().hex[:8]
+        _execute(conn, """INSERT INTO java_waitlist(id, email, consent, source, created_at, notification_sent, 
+                                                 notification_sent_at, status, unsubscribe_token, delivery_error, attempt_count)
+                       VALUES(?,?,?,?,?,?,?,?,?,?,?)""",
+                 (rec_id, clean_email, 1 if consent else 0, source.strip() or "homepage_banner",
+                  now, 0, "", "subscribed", unsub_token, "", 0))
+        conn.commit()
+        created = _execute(conn, "SELECT * FROM java_waitlist WHERE id = ?", (rec_id,)).fetchone()
+        return True, "created", dict(created)
+    finally:
+        conn.close()
+
+
+def unsubscribe_java_waitlist(token_or_email: str) -> tuple[bool, str]:
+    """Unsubscribe a user from Java launch notifications using their token or email."""
+    val = token_or_email.strip()
+    if not val:
+        return False, ""
+    conn = get_connection()
+    try:
+        row = _execute(conn, "SELECT * FROM java_waitlist WHERE unsubscribe_token = ? OR email = ?", (val, val.lower())).fetchone()
+        if not row:
+            return False, ""
+        clean_email = row["email"]
+        _execute(conn, "UPDATE java_waitlist SET status = 'unsubscribed' WHERE id = ?", (row["id"],))
+        conn.commit()
+        return True, clean_email
+    finally:
+        conn.close()
+
+
+def get_java_waitlist_stats() -> dict:
+    """Return aggregated statistics on Java waitlist registrations and notification progress."""
+    conn = get_connection()
+    try:
+        rows = _execute(conn, "SELECT status, notification_sent, attempt_count FROM java_waitlist").fetchall()
+        stats = {
+            "total_interested": len(rows),
+            "subscribed": 0,
+            "unsubscribed": 0,
+            "sent": 0,
+            "pending": 0,
+            "failed": 0,
+        }
+        for r in rows:
+            st = r["status"]
+            sent = r["notification_sent"]
+            attempts = r["attempt_count"]
+            if st == "subscribed":
+                stats["subscribed"] += 1
+                if sent:
+                    stats["sent"] += 1
+                else:
+                    stats["pending"] += 1
+                    if attempts > 0:
+                        stats["failed"] += 1
+            elif st == "unsubscribed":
+                stats["unsubscribed"] += 1
+                if sent:
+                    stats["sent"] += 1
+        return stats
+    finally:
+        conn.close()
+
+
+def list_java_waitlist(limit: int = 100) -> list[dict]:
+    """List registered users for admin view."""
+    conn = get_connection()
+    try:
+        rows = _execute(conn, "SELECT * FROM java_waitlist ORDER BY created_at DESC LIMIT ?", (limit,)).fetchall()
+        return [dict(r) for r in rows]
+    finally:
+        conn.close()
+
+
+def get_pending_java_launch_recipients() -> list[dict]:
+    """Return all subscribers who have not yet received the official launch notification."""
+    conn = get_connection()
+    try:
+        rows = _execute(conn, """SELECT * FROM java_waitlist 
+                               WHERE status = 'subscribed' AND notification_sent = 0 
+                               ORDER BY created_at ASC""").fetchall()
+        return [dict(r) for r in rows]
+    finally:
+        conn.close()
+
+
+def get_failed_java_launch_recipients() -> list[dict]:
+    """Return subscribers whose notification attempt failed and are ready to be retried."""
+    conn = get_connection()
+    try:
+        rows = _execute(conn, """SELECT * FROM java_waitlist 
+                               WHERE status = 'subscribed' AND notification_sent = 0 AND attempt_count > 0 
+                               ORDER BY created_at ASC""").fetchall()
+        return [dict(r) for r in rows]
+    finally:
+        conn.close()
+
+
+def mark_java_notification_sent(record_id: str) -> None:
+    """Mark a subscriber as successfully notified."""
+    conn = get_connection()
+    try:
+        now = _now()
+        _execute(conn, """UPDATE java_waitlist 
+                       SET notification_sent = 1, notification_sent_at = ?, delivery_error = '' 
+                       WHERE id = ?""", (now, record_id))
+        conn.commit()
+    finally:
+        conn.close()
+
+
+def mark_java_notification_failed(record_id: str, error: str) -> None:
+    """Record a failed delivery attempt and error detail for safe retry."""
+    conn = get_connection()
+    try:
+        _execute(conn, """UPDATE java_waitlist 
+                       SET attempt_count = attempt_count + 1, delivery_error = ? 
+                       WHERE id = ?""", (str(error)[:300], record_id))
+        conn.commit()
+    finally:
+        conn.close()
+
+
+def record_banner_event(event_type: str) -> None:
+    """Record an analytics event for the homepage announcement banner."""
+    clean_type = event_type.strip().lower()[:50]
+    if not clean_type:
+        return
+    conn = get_connection()
+    try:
+        _execute(conn, "INSERT INTO banner_analytics(id, event_type, created_at) VALUES(?,?,?)",
+                 (_id(), clean_type, _now()))
+        conn.commit()
+    finally:
+        conn.close()
+
+
+def get_banner_analytics() -> dict:
+    """Return counts of banner impressions, dismissals, registration attempts, etc."""
+    conn = get_connection()
+    try:
+        rows = _execute(conn, "SELECT event_type, COUNT(*) as cnt FROM banner_analytics GROUP BY event_type").fetchall()
+        counts = {"impression": 0, "dismiss": 0, "attempt": 0, "success": 0, "duplicate": 0}
+        for r in rows:
+            et = str(r["event_type"]).lower()
+            if et in counts:
+                counts[et] = int(r["cnt"])
+            else:
+                counts[et] = int(r["cnt"])
         return counts
     finally:
         conn.close()

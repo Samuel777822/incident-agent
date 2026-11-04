@@ -17,6 +17,7 @@ def render_footer_html() -> str:
       <ul class="footer-links">
         <li><a href="#how-it-works">How It Works</a></li>
         <li><a href="/features">Features</a></li>
+        <li><a href="#java-announcement" id="footer-java-link">Java Integration <span style="font-size:10px;padding:2px 6px;border-radius:4px;background:rgba(227,189,116,0.2);color:#e3bd74;font-weight:700;margin-left:4px">SOON</span></a></li>
         <li><a href="#security">Security</a></li>
         <li><a href="/pricing">Pricing</a></li>
         <li><a href="/docs">Documentation</a></li>

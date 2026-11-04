@@ -43,11 +43,154 @@ HOME_JS = """(function() {
   window.setHeroStage = function(n) {
     applyHeroStage(n);
     resetHeroTimer();
+    initJavaBanner();
   };
 
   window.switchShowcase = function(n) {
     applyShowcaseStage(n);
   };
+
+  
+  // Java Announcement Banner Interactivity & Registration
+  function initJavaBanner() {
+    var banner = document.getElementById('java-announcement');
+    var closeBtn = document.getElementById('java-banner-close');
+    var form = document.getElementById('java-waitlist-form');
+    var emailInput = document.getElementById('java-email-input');
+    var submitBtn = document.getElementById('java-submit-btn');
+    var errDiv = document.getElementById('java-form-error');
+    var successDiv = document.getElementById('java-register-success');
+    var footerLink = document.getElementById('footer-java-link');
+
+    if (!banner) return;
+
+    // 1. Check persistent dismissal in localStorage
+    try {
+      if (localStorage.getItem('agent_daemon_java_banner_dismissed') === 'true') {
+        banner.style.display = 'none';
+      } else {
+        // Record banner impression once per browser session
+        if (!sessionStorage.getItem('agent_daemon_java_imp_sent')) {
+          sessionStorage.setItem('agent_daemon_java_imp_sent', '1');
+          fetch('/api/banner-analytics', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ event: 'impression' })
+          }).catch(function() {});
+        }
+      }
+    } catch(e) {}
+
+    // 2. Close button dismisses banner & persists to localStorage
+    if (closeBtn) {
+      closeBtn.addEventListener('click', function(e) {
+        e.preventDefault();
+        banner.style.opacity = '0';
+        banner.style.transform = 'translateY(-10px)';
+        setTimeout(function() {
+          banner.style.display = 'none';
+        }, 250);
+        try {
+          localStorage.setItem('agent_daemon_java_banner_dismissed', 'true');
+          fetch('/api/banner-analytics', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ event: 'dismiss' })
+          }).catch(function() {});
+        } catch(e) {}
+      });
+    }
+
+    // 3. Footer link re-opens banner if dismissed and smooth-scrolls
+    if (footerLink) {
+      footerLink.addEventListener('click', function(e) {
+        e.preventDefault();
+        banner.style.display = 'block';
+        banner.style.opacity = '1';
+        banner.style.transform = 'none';
+        banner.scrollIntoView({ behavior: 'smooth', block: 'center' });
+        if (emailInput) {
+          setTimeout(function() { emailInput.focus(); }, 400);
+        }
+      });
+    }
+
+    // 4. Form submission handler
+    if (form && emailInput && submitBtn) {
+      form.addEventListener('submit', function(e) {
+        e.preventDefault();
+        var email = emailInput.value ? emailInput.value.trim() : '';
+        if (errDiv) {
+          errDiv.style.display = 'none';
+          errDiv.textContent = '';
+        }
+
+        // Email validation regex
+        var emailRe = /^[^\\s@]+@[^\\s@]+\\.[^\\s@]+$/;
+        if (!email || !emailRe.test(email)) {
+          if (errDiv) {
+            errDiv.textContent = 'Please enter a valid email address.';
+            errDiv.style.display = 'block';
+          }
+          emailInput.focus();
+          return;
+        }
+
+        // Loading state
+        submitBtn.disabled = true;
+        var btnText = submitBtn.querySelector('.btn-text');
+        var btnSpinner = submitBtn.querySelector('.btn-spinner');
+        if (btnText) btnText.textContent = 'Registering...';
+        if (btnSpinner) btnSpinner.style.display = 'inline-block';
+
+        fetch('/api/java-waitlist', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ email: email })
+        })
+        .then(function(res) {
+          return res.json().then(function(data) {
+            return { ok: res.ok, status: res.status, data: data };
+          });
+        })
+        .then(function(result) {
+          submitBtn.disabled = false;
+          if (btnText) btnText.textContent = 'Notify Me at Launch';
+          if (btnSpinner) btnSpinner.style.display = 'none';
+
+          if (result.ok && result.data.status === 'ok') {
+            form.style.display = 'none';
+            if (successDiv) {
+              successDiv.style.display = 'block';
+            }
+          } else if (result.data.status === 'duplicate') {
+            form.style.display = 'none';
+            if (successDiv) {
+              var t = successDiv.querySelector('.success-title');
+              var d = successDiv.querySelector('.success-desc');
+              if (t) t.textContent = "You're already on the list!";
+              if (d) d.textContent = "We have your email on file and will notify you the moment Java integration officially launches.";
+              successDiv.style.display = 'block';
+            }
+          } else {
+            if (errDiv) {
+              errDiv.textContent = result.data.error || 'Registration failed. Please try again.';
+              errDiv.style.display = 'block';
+            }
+          }
+        })
+        .catch(function(err) {
+          submitBtn.disabled = false;
+          if (btnText) btnText.textContent = 'Notify Me at Launch';
+          if (btnSpinner) btnSpinner.style.display = 'none';
+          if (errDiv) {
+            errDiv.textContent = 'Network error. Please check your connection and try again.';
+            errDiv.style.display = 'block';
+          }
+        });
+      });
+    }
+  }
 
   function initHomeInteractivity() {
     for (var i = 0; i < 4; i++) {
@@ -91,6 +234,7 @@ HOME_JS = """(function() {
     });
 
     resetHeroTimer();
+    initJavaBanner();
   }
 
   if (document.readyState === 'loading') {
@@ -123,6 +267,358 @@ ICON_PLAY = """<svg class="h-icon-sm" viewBox="0 0 24 24" fill="currentColor"><p
 ICON_ARROW = """<svg class="h-icon-sm" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><line x1="5" y1="12" x2="19" y2="12"/><polyline points="12 5 19 12 12 19"/></svg>"""
 
 HOMEPAGE_CSS = """
+
+/* ===== JAVA ANNOUNCEMENT BANNER STYLES ===== */
+.java-announcement-banner {
+  position: relative;
+  margin: 18px auto 38px auto;
+  border-radius: 18px;
+  background: radial-gradient(ellipse at 85% 20%, rgba(227, 189, 116, 0.15) 0%, rgba(154, 77, 255, 0.08) 45%, rgba(18, 10, 27, 0.95) 85%), #0e0817;
+  border: 1px solid rgba(227, 189, 116, 0.35);
+  box-shadow: 0 16px 45px rgba(0, 0, 0, 0.55), 0 0 35px rgba(227, 189, 116, 0.12);
+  overflow: hidden;
+  transition: all 0.3s cubic-bezier(0.16, 1, 0.3, 1);
+}
+.java-announcement-banner::before {
+  content: "";
+  position: absolute;
+  top: 0;
+  left: 0;
+  right: 0;
+  height: 2px;
+  background: linear-gradient(90deg, #ff4a3a, #e3bd74, #9a4dff, #6fe0b0);
+}
+.java-banner-close {
+  position: absolute;
+  top: 14px;
+  right: 16px;
+  width: 32px;
+  height: 32px;
+  background: rgba(255, 255, 255, 0.06);
+  border: 1px solid rgba(255, 255, 255, 0.12);
+  border-radius: 50%;
+  color: #cfc5dc;
+  font-size: 20px;
+  line-height: 28px;
+  text-align: center;
+  cursor: pointer;
+  z-index: 10;
+  transition: all 0.2s ease;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+}
+.java-banner-close:hover {
+  background: rgba(255, 74, 58, 0.25);
+  border-color: #ff4a3a;
+  color: #ffffff;
+  transform: scale(1.08);
+}
+.java-banner-inner {
+  display: grid;
+  grid-template-columns: 1.15fr 0.85fr;
+  gap: 36px;
+  padding: 32px 36px 36px 36px;
+  align-items: center;
+}
+.java-badge-wrap {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  margin-bottom: 14px;
+  flex-wrap: wrap;
+}
+.java-badge-pill {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  padding: 4px 12px;
+  border-radius: 20px;
+  background: rgba(227, 189, 116, 0.18);
+  border: 1px solid #e3bd74;
+  color: #f7dfa5;
+  font-size: 11.5px;
+  font-weight: 750;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+  animation: pulseAmberGlow 2.5s infinite;
+}
+.java-badge-icon {
+  font-size: 14px;
+}
+.java-tech-tag {
+  font-size: 12px;
+  color: #a99dbb;
+  font-family: Consolas, Monaco, monospace;
+}
+.java-announcement-kicker {
+  font-size: 13.5px;
+  font-weight: 800;
+  letter-spacing: 0.12em;
+  text-transform: uppercase;
+  color: #ff7a6b;
+  margin-bottom: 8px;
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+.java-banner-headline {
+  margin: 0 0 12px 0;
+  font-size: 30px;
+  line-height: 1.22;
+  font-weight: 800;
+  letter-spacing: -0.025em;
+  color: #ffffff;
+}
+.java-banner-desc {
+  margin: 0 0 22px 0;
+  font-size: 15px;
+  line-height: 1.6;
+  color: #cfc5dc;
+  max-width: 580px;
+}
+
+/* Form card inside banner */
+.java-register-card {
+  background: rgba(18, 10, 27, 0.85);
+  border: 1px solid rgba(227, 189, 116, 0.28);
+  border-radius: 14px;
+  padding: 20px 22px;
+  box-shadow: 0 8px 24px rgba(0, 0, 0, 0.4);
+}
+.java-register-header {
+  margin-bottom: 12px;
+}
+.java-reg-title {
+  font-size: 16px;
+  font-weight: 750;
+  color: #ffffff;
+  margin-bottom: 4px;
+}
+.java-reg-sub {
+  font-size: 13px;
+  color: #a99dbb;
+  line-height: 1.45;
+}
+.java-input-group {
+  display: flex;
+  gap: 10px;
+  margin-bottom: 10px;
+}
+.java-input-wrapper {
+  position: relative;
+  flex: 1;
+}
+.java-input-icon {
+  position: absolute;
+  left: 14px;
+  top: 50%;
+  transform: translateY(-50%);
+  color: #a99dbb;
+  font-size: 15px;
+  pointer-events: none;
+}
+.java-email-input {
+  width: 100%;
+  padding: 12px 14px 12px 38px;
+  background: #08040d;
+  border: 1px solid #3a2338;
+  border-radius: 9px;
+  color: #ffffff;
+  font-size: 14px;
+  outline: none;
+  transition: all 0.2s ease;
+}
+.java-email-input:focus {
+  border-color: #e3bd74;
+  box-shadow: 0 0 0 3px rgba(227, 189, 116, 0.25);
+  background: #0d0714;
+}
+.java-submit-btn {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 8px;
+  padding: 12px 22px;
+  background: linear-gradient(135deg, #e3bd74, #ff4a3a);
+  color: #0c0612;
+  font-size: 14px;
+  font-weight: 750;
+  border: none;
+  border-radius: 9px;
+  cursor: pointer;
+  white-space: nowrap;
+  transition: all 0.25s ease;
+  box-shadow: 0 4px 16px rgba(227, 189, 116, 0.35);
+}
+.java-submit-btn:hover {
+  transform: translateY(-2px);
+  box-shadow: 0 6px 22px rgba(227, 189, 116, 0.5);
+  color: #000000;
+}
+.java-submit-btn:disabled {
+  opacity: 0.65;
+  cursor: not-allowed;
+  transform: none;
+}
+.java-privacy-note {
+  font-size: 12px;
+  color: #8f82a3;
+  display: flex;
+  align-items: center;
+  gap: 6px;
+}
+.java-form-error {
+  margin-top: 10px;
+  padding: 8px 12px;
+  border-radius: 6px;
+  background: rgba(225, 29, 42, 0.15);
+  border: 1px solid rgba(225, 29, 42, 0.4);
+  color: #ff8580;
+  font-size: 12.5px;
+}
+
+/* Success state */
+.java-register-success {
+  text-align: center;
+  padding: 16px 12px;
+  animation: floatSubtle 3s infinite ease-in-out;
+}
+.success-icon-wrap {
+  width: 48px;
+  height: 48px;
+  margin: 0 auto 12px auto;
+  border-radius: 50%;
+  background: rgba(111, 224, 176, 0.18);
+  border: 1px solid #6fe0b0;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  color: #6fe0b0;
+  font-size: 24px;
+  font-weight: 900;
+  box-shadow: 0 0 20px rgba(111, 224, 176, 0.35);
+}
+.java-register-success .success-title {
+  font-size: 20px;
+  font-weight: 800;
+  color: #ffffff;
+  margin-bottom: 6px;
+}
+.java-register-success .success-desc {
+  font-size: 14px;
+  color: #cfc5dc;
+  margin: 0 0 12px 0;
+  line-height: 1.5;
+}
+.java-register-success .success-tag {
+  display: inline-block;
+  padding: 4px 12px;
+  border-radius: 12px;
+  background: rgba(227, 189, 116, 0.15);
+  border: 1px solid rgba(227, 189, 116, 0.3);
+  color: #f7dfa5;
+  font-size: 12px;
+  font-weight: 650;
+}
+
+/* Code visual component on right */
+.java-banner-visual {
+  display: flex;
+  justify-content: center;
+}
+.java-code-window {
+  width: 100%;
+  max-width: 420px;
+  background: #090510;
+  border: 1px solid #3a2338;
+  border-radius: 12px;
+  overflow: hidden;
+  box-shadow: 0 12px 30px rgba(0, 0, 0, 0.6);
+  font-family: Consolas, Monaco, monospace;
+}
+.java-code-header {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: 10px 14px;
+  background: #130a1c;
+  border-bottom: 1px solid #28172c;
+}
+.java-mac-dots {
+  display: flex;
+  gap: 6px;
+}
+.jdot {
+  width: 10px;
+  height: 10px;
+  border-radius: 50%;
+}
+.jdot-red { background: #ff5f56; }
+.jdot-yellow { background: #ffbd2e; }
+.jdot-green { background: #27c93f; }
+.java-code-filename {
+  font-size: 11px;
+  color: #a99dbb;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.java-code-body {
+  padding: 16px 18px;
+  font-size: 12px;
+  line-height: 1.6;
+  color: #e0d8ea;
+}
+.code-line { white-space: nowrap; }
+.code-line.indent { padding-left: 14px; }
+.code-line.indent-2 { padding-left: 28px; }
+.code-line.indent-3 { padding-left: 42px; }
+.c-kw { color: #ff7a6b; font-weight: bold; }
+.c-cls { color: #6fe0b0; }
+.c-ann { color: #e3bd74; }
+.c-str { color: #87d37c; }
+.c-var { color: #9a4dff; }
+.c-fn { color: #75a7ff; }
+.c-alert { margin-top: 4px; color: #ff8580; font-size: 11.5px; }
+.c-diag { color: #f7dfa5; font-size: 11.5px; padding-left: 16px; }
+.c-fix { margin-top: 4px; color: #6fe0b0; font-size: 11.5px; }
+.java-code-footer {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: 8px 14px;
+  background: #11091a;
+  border-top: 1px solid #231427;
+  font-size: 11px;
+  color: #cfc5dc;
+}
+.j-stat {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+}
+
+@media (max-width: 860px) {
+  .java-banner-inner {
+    grid-template-columns: 1fr;
+    padding: 26px 20px 24px 20px;
+    gap: 24px;
+  }
+  .java-banner-headline {
+    font-size: 24px;
+  }
+  .java-input-group {
+    flex-direction: column;
+  }
+  .java-submit-btn {
+    width: 100%;
+  }
+  .java-banner-visual {
+    display: none;
+  }
+}
+
 /* ===== MASTER REDESIGN STYLES — LINEAR / VERCEL / STRIPE LEVEL QUALITY ===== */
 .h-icon { width: 22px; height: 22px; display: inline-block; vertical-align: middle; flex-shrink: 0; }
 .h-icon-sm { width: 16px; height: 16px; display: inline-block; vertical-align: middle; flex-shrink: 0; }
@@ -709,6 +1205,100 @@ HOMEPAGE_CSS = """
 def render_homepage_html() -> str:
     """Returns the complete, high-converting redesigned homepage markup."""
     html = """
+
+<!-- JAVA INTEGRATION ANNOUNCEMENT BANNER -->
+<section class="java-announcement-banner" id="java-announcement" aria-label="Java Integration Announcement">
+  <button type="button" class="java-banner-close" id="java-banner-close" aria-label="Dismiss Announcement" title="Dismiss announcement">&times;</button>
+  
+  <div class="java-banner-inner">
+    <div class="java-banner-content">
+      <div class="java-badge-wrap">
+        <span class="java-badge-pill">
+          <span class="java-badge-icon">☕</span>
+          <span class="java-badge-text">COMING SOON</span>
+        </span>
+        <span class="java-tech-tag">Spring Boot · Quarkus · JVM</span>
+      </div>
+
+      <div class="java-announcement-kicker">JAVA IS COMING TO AGENT DAEMON!</div>
+      <h2 class="java-banner-headline">Your Java Applications Are Next.</h2>
+      
+      <p class="java-banner-desc">
+        We're expanding Agent Daemon beyond Python. Java integration is coming soon, bringing intelligent incident detection, AI-powered diagnosis and automated debugging capabilities to Java developers.
+      </p>
+
+      <!-- REGISTRATION FORM -->
+      <div class="java-register-card" id="java-register-card">
+        <div class="java-register-header">
+          <div class="java-reg-title">Be the First to Know.</div>
+          <div class="java-reg-sub">Leave your email address and we'll notify you as soon as Java integration is officially available.</div>
+        </div>
+
+        <form id="java-waitlist-form" class="java-waitlist-form" novalidate>
+          <div class="java-input-group">
+            <div class="java-input-wrapper">
+              <span class="java-input-icon">✉</span>
+              <input type="email" id="java-email-input" name="email" class="java-email-input" placeholder="Enter your email address" autocomplete="email" required>
+            </div>
+            <button type="submit" id="java-submit-btn" class="java-submit-btn">
+              <span class="btn-text">Notify Me at Launch</span>
+              <span class="btn-spinner" style="display:none;width:14px;height:14px;border:2px solid #000;border-top-color:transparent;border-radius:50%;animation:spin 0.8s linear infinite;"></span>
+            </button>
+          </div>
+          <div class="java-privacy-note">
+            <span>🔒</span> We'll only use your email to notify you about the Java integration launch.
+          </div>
+          <div id="java-form-error" class="java-form-error" style="display:none;" role="alert"></div>
+        </form>
+
+        <!-- SUCCESS STATE -->
+        <div id="java-register-success" class="java-register-success" style="display:none;">
+          <div class="success-icon-wrap">
+            <span class="success-check">✓</span>
+          </div>
+          <div class="success-title">You're on the list!</div>
+          <p class="success-desc">We'll send you an email the moment Java integration launches. Stay tuned!</p>
+          <div class="success-tag">☕ Registered for Official Java Launch Notification</div>
+        </div>
+      </div>
+    </div>
+
+    <!-- JAVA VISUAL / TERMINAL COMPONENT -->
+    <div class="java-banner-visual">
+      <div class="java-code-window">
+        <div class="java-code-header">
+          <div class="java-mac-dots">
+            <span class="jdot jdot-red"></span>
+            <span class="jdot jdot-yellow"></span>
+            <span class="jdot jdot-green"></span>
+          </div>
+          <span class="java-code-filename">PaymentController.java — Agent Daemon JVM</span>
+        </div>
+        <div class="java-code-body">
+          <div class="code-line"><span class="c-kw">@RestController</span></div>
+          <div class="code-line"><span class="c-kw">@AgentDaemonMonitored</span></div>
+          <div class="code-line"><span class="c-kw">public class</span> <span class="c-cls">PaymentController</span> {</div>
+          <div class="code-line indent"><span class="c-ann">@PostMapping</span>(<span class="c-str">"/process"</span>)</div>
+          <div class="code-line indent"><span class="c-kw">public</span> <span class="c-cls">ResponseEntity</span>&lt;?&gt; <span class="c-fn">pay</span>(<span class="c-cls">Order</span> req) {</div>
+          <div class="code-line indent-2"><span class="c-kw">try</span> { <span class="c-var">gateway</span>.charge(req); }</div>
+          <div class="code-line indent-2"><span class="c-kw">catch</span> (<span class="c-cls">NullPointerException</span> ex) {</div>
+          <div class="code-line indent-3 c-alert"><span class="pulse-dot-red"></span> <span class="c-err">AI Root Cause Identified:</span></div>
+          <div class="code-line indent-3 c-diag"><em>Missing null check on user.cardToken</em></div>
+          <div class="code-line indent-3 c-fix"><span class="pulse-dot-green"></span> <b>Proposed PR #104 ready for review</b></div>
+          <div class="code-line indent-2">}</div>
+          <div class="code-line indent">}</div>
+          <div class="code-line">}</div>
+        </div>
+        <div class="java-code-footer">
+          <div class="j-stat"><span class="pulse-dot-green"></span> <span>JVM Agent Bytecode Hook</span></div>
+          <div class="j-stat"><span style="color:#e3bd74;">☕</span> <span>JDK 17 / 21 LTS Ready</span></div>
+        </div>
+      </div>
+    </div>
+
+  </div>
+</section>
+
 <!-- HERO SECTION -->
 <section class="hero-v2">
   <div class="hero-badge">

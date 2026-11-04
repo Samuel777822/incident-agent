@@ -1616,6 +1616,9 @@ _ADMIN_MESSAGES = {
     "test_email_failed": ("red", "Test email failed. See the Email status table below for the exact reason."),
     "ticket_closed": ("green", "Support ticket marked resolved and closed. Customer was sent a resolution email."),
     "ticket_updated": ("green", "Support ticket updated successfully."),
+    "java_test_email_ok": ("green", "Test Java launch email successfully sent to admin inbox(es)."),
+    "java_launch_triggered": ("green", "Official Java launch announcement dispatched to eligible waitlist subscribers."),
+    "java_retry_complete": ("green", "Retry of failed Java launch notifications completed."),
 }
 
 
@@ -1634,6 +1637,7 @@ def _page_admin(request):
 def _admin_action(request):
     form = request.form
     actor = request.session["email"]
+    admins = _admin_emails()
     action = form.get("action", "")
     done = lambda key: _redirect("/admin?msg=" + key)
     if action == "approve_trial":
@@ -1727,6 +1731,40 @@ def _admin_action(request):
             )
             return done("ticket_closed")
         return done("ticket_updated")
+    if action == "send_java_test_email":
+        html, text = notifications.render_java_launch_email(actor, "admin-preview-token", _base_url())
+        results = []
+        for adm in admins:
+            ok, detail = notifications.send_now(adm, "[TEST] Java Has Arrived at Agent Daemon!", text, kind="admin_test", html=html)
+            results.append((adm, ok, detail))
+        return done("java_test_email_ok" if results and all(ok for _, ok, _ in results) else "test_email_failed")
+    if action == "trigger_java_launch":
+        confirm = form.get("confirm_launch", "").strip()
+        if confirm != "yes":
+            return done("bad_request")
+        recipients = portal_db.get_pending_java_launch_recipients()
+        sent_count = 0
+        failed_count = 0
+        for rec in recipients:
+            html, text = notifications.render_java_launch_email(rec["email"], rec["unsubscribe_token"], _base_url())
+            ok, detail = notifications.send_now(rec["email"], "Java Has Arrived at Agent Daemon!", text, kind="java_launch", html=html)
+            if ok:
+                portal_db.mark_java_notification_sent(rec["id"])
+                sent_count += 1
+            else:
+                portal_db.mark_java_notification_failed(rec["id"], detail)
+                failed_count += 1
+        return done("java_launch_triggered")
+    if action == "retry_failed_java_notifications":
+        failed_recipients = portal_db.get_failed_java_launch_recipients()
+        for rec in failed_recipients:
+            html, text = notifications.render_java_launch_email(rec["email"], rec["unsubscribe_token"], _base_url())
+            ok, detail = notifications.send_now(rec["email"], "Java Has Arrived at Agent Daemon!", text, kind="java_launch", html=html)
+            if ok:
+                portal_db.mark_java_notification_sent(rec["id"])
+            else:
+                portal_db.mark_java_notification_failed(rec["id"], detail)
+        return done("java_retry_complete")
     return done("bad_request")
 
 
@@ -1749,6 +1787,8 @@ def _admin_view(request):
     def card(value, label):
         return f"<div class='stat'><b>{_escape(value)}</b><span>{_escape(label)}</span></div>"
     ticket_stats = portal_db.admin_ticket_stats()
+    java_stats = portal_db.get_java_waitlist_stats()
+    banner_stats = portal_db.get_banner_analytics()
     cards = "".join([
         card(stats["customers"], "customers"),
         card(f"{stats['active']}", f"active ({stats['paid_active']} paid, {stats['trial_active']} trial)"),
@@ -1758,6 +1798,7 @@ def _admin_view(request):
         card(f"{live}/{stats['projects']}", "apps live / connected"),
         card(stats["open_incidents"], f"open incidents ({stats['needs_human']} need a human)"),
         card(f"{ticket_stats['open']}", f"open support tickets ({ticket_stats['total']} total)"),
+        card(f"{java_stats['total_interested']}", f"Java waitlist ({java_stats['sent']} notified)"),
     ])
 
     pending_trials = [t for t in trials if t["status"] == "pending"]
@@ -1987,6 +2028,78 @@ def _admin_view(request):
         f"{support_table}"
     )
 
+    # Java Waitlist & Launch Management
+    java_subscribers = portal_db.list_java_waitlist(100)
+    java_rows = []
+    for sub in java_subscribers:
+        st_badge = _pill("Subscribed", "green") if sub.get("status") == "subscribed" else _pill("Unsubscribed", "gray")
+        if sub.get("notification_sent"):
+            notif_badge = _pill("Notified", "green")
+            notif_detail = f"<small class='muted'>{_escape(_fmt_time(sub.get('notification_sent_at', '')))}</small>"
+        elif sub.get("attempt_count", 0) > 0:
+            notif_badge = _pill(f"Failed ({sub['attempt_count']} tries)", "red")
+            notif_detail = f"<small style='color:#ff8580'>{_escape(sub.get('delivery_error', ''))}</small>"
+        else:
+            notif_badge = _pill("Pending Launch", "amber")
+            notif_detail = "<small class='muted'>Waiting for launch trigger</small>"
+
+        time_cell = f"<small class='muted'>{_escape(_fmt_time(sub['created_at']))}</small>"
+        java_rows.append(
+            f"<tr><td><b>{_escape(sub['email'])}</b></td>"
+            f"<td>{st_badge}</td>"
+            f"<td>{notif_badge}<br>{notif_detail}</td>"
+            f"<td>{time_cell}</td></tr>"
+        )
+    java_table = _table(["Email Address", "Status", "Launch Notification", "Registered Time"], java_rows, "No users on Java waitlist yet.")
+
+    retry_btn = ""
+    if java_stats["failed"] > 0:
+        retry_btn = (
+            f"<form method='post' action='/admin' style='display:inline'>"
+            f"<input type='hidden' name='csrf' value='{csrf}'>"
+            f"<input type='hidden' name='action' value='retry_failed_java_notifications'>"
+            f"<button class='button' type='submit' style='border-color:#ff4a3a;color:#ff7a6b'>Retry {java_stats['failed']} Failed Notifications</button>"
+            f"</form>"
+        )
+
+    java_section = (
+        f"<h2 id='java-waitlist-admin'>☕ Java Integration Launch &amp; Waitlist</h2>"
+        f"<div class='stats' style='margin-bottom:14px;display:flex;gap:8px;flex-wrap:wrap'>"
+        f"<span class='pill' style='color:#f7dfa5;border-color:#e3bd74'>☕ {java_stats['total_interested']} Total Interested</span>"
+        f"<span class='pill green'>{java_stats['subscribed']} Subscribed</span>"
+        f"<span class='pill green'>{java_stats['sent']} Sent</span>"
+        f"<span class='pill amber'>{java_stats['pending']} Pending</span>"
+        f"<span class='pill red'>{java_stats['failed']} Failed</span>"
+        f"<span class='pill'>{java_stats['unsubscribed']} Unsubscribed</span>"
+        f"<span class='pill'>{banner_stats.get('impression', 0)} Banner Views</span>"
+        f"<span class='pill'>{banner_stats.get('dismiss', 0)} Dismissals</span>"
+        f"</div>"
+        f"<div class='card' style='margin-bottom:18px;background:rgba(227,189,116,0.06);border:1px solid rgba(227,189,116,0.25);padding:18px 20px;border-radius:12px'>"
+        f"<div style='font-size:15px;font-weight:700;color:#ffffff;margin-bottom:6px'>Official Java Launch Control Center</div>"
+        f"<p class='muted' style='font-size:13px;margin:0 0 14px 0'>"
+        f"Triggering official launch sends the branded announcement email to all pending active waitlist subscribers ({java_stats['pending']} users). "
+        f"Duplicate notifications are strictly prevented. You can also test delivery by sending a preview to yourself first."
+        f"</p>"
+        f"<div style='display:flex;gap:12px;align-items:center;flex-wrap:wrap'>"
+        f"<form method='post' action='/admin' style='display:inline'>"
+        f"<input type='hidden' name='csrf' value='{csrf}'>"
+        f"<input type='hidden' name='action' value='send_java_test_email'>"
+        f"<button class='button' type='submit'>Send Test Launch Email to Admins</button>"
+        f"</form>"
+        f"<form method='post' action='/admin' style='display:flex;gap:8px;align-items:center' onsubmit='return confirm(\"Are you sure you want to trigger the official Java launch announcement to all registered waitlist subscribers?\");'>"
+        f"<input type='hidden' name='csrf' value='{csrf}'>"
+        f"<input type='hidden' name='action' value='trigger_java_launch'>"
+        f"<label style='font-size:12.5px;color:#cfc5dc;display:flex;align-items:center;gap:6px;cursor:pointer'>"
+        f"<input type='checkbox' name='confirm_launch' value='yes' required> Confirm launch"
+        f"</label>"
+        f"<button class='button primary' type='submit' style='background:linear-gradient(135deg,#e3bd74,#ff4a3a);color:#000;font-weight:750'>🚀 Launch Java Support &amp; Notify Waitlist</button>"
+        f"</form>"
+        f"{retry_btn}"
+        f"</div>"
+        f"</div>"
+        f"{java_table}"
+    )
+
     admin_chat_modal = """
 <div id="admin-chat-modal" style="display:none;position:fixed;bottom:20px;right:20px;width:380px;height:520px;background:#120a1b;border:1px solid #ff4a3a66;border-radius:14px;box-shadow:0 15px 50px #000;z-index:99999;flex-direction:column;overflow:hidden">
   <div style="padding:12px 16px;background:#1e0f2c;border-bottom:1px solid #3a2338;display:flex;justify-content:space-between;align-items:center">
@@ -2061,6 +2174,7 @@ setInterval(() => {
             f"<h2>Recent incidents and fixes</h2>{_table(['When', 'App', 'Error', 'Agent status', 'Fix'], incident_rows, 'No incidents yet.')}"
             f"{chat_section}"
             f"{support_section}"
+            f"{java_section}"
             f"{system}</section>" + admin_chat_modal)
     return _response(body, request)
 
@@ -2947,6 +3061,12 @@ def _dispatch(request: Request) -> Response:
         return Response(homepage.HOME_JS, "200 OK",
                         [("Content-Type", "application/javascript; charset=utf-8"),
                          ("Cache-Control", "public, max-age=300"), ("X-Content-Type-Options", "nosniff")])
+    if request.path == "/api/java-waitlist":
+        return _api_java_waitlist(request)
+    if request.path == "/api/banner-analytics":
+        return _api_banner_analytics(request)
+    if request.path == "/unsubscribe":
+        return _page_unsubscribe(request)
     if request.path == "/api/visitor/track":
         return _api_visitor_track(request)
     if request.path == "/api/chat/messages":
@@ -3046,7 +3166,7 @@ def _dispatch(request: Request) -> Response:
 def application(environ, start_response):
     try:
         request = Request(environ)
-        if request.method == "POST" and request.path not in ("/login", "/signup", "/contact", "/support", "/webhooks/razorpay", "/ingest", "/heartbeat", "/api/visitor/track", "/api/chat/send", "/api/chat/save-contact") and not request.session:
+        if request.method == "POST" and request.path not in ("/login", "/signup", "/contact", "/support", "/webhooks/razorpay", "/ingest", "/heartbeat", "/api/visitor/track", "/api/chat/send", "/api/chat/save-contact", "/api/java-waitlist", "/api/banner-analytics", "/unsubscribe") and not request.session:
             response = _redirect("/login")
         else:
             response = _dispatch(request)
@@ -3078,3 +3198,103 @@ def main():
 if __name__ == "__main__":
     main()
 
+
+
+
+def _api_java_waitlist(request: Request) -> Response:
+    if request.method != "POST":
+        return Response(json.dumps({"error": "Method not allowed"}), "405 Method Not Allowed", [("Content-Type", "application/json")])
+
+    client_ip = request.environ.get("HTTP_X_FORWARDED_FOR", "").split(",")[0].strip() or request.environ.get("REMOTE_ADDR", "127.0.0.1")
+    if not portal_db.check_login_rate_limit(f"java_waitlist:{client_ip}", maximum=15, window_seconds=300):
+        return Response(json.dumps({"error": "Too many requests. Please wait a few moments before trying again."}),
+                        "429 Too Many Requests", [("Content-Type", "application/json")])
+
+    email = str(request.form.get("email", "")).strip()
+    if not email or not EMAIL_RE.fullmatch(email.lower()):
+        portal_db.record_banner_event("attempt_invalid")
+        return Response(json.dumps({"error": "Please enter a valid email address."}),
+                        "400 Bad Request", [("Content-Type", "application/json")])
+
+    portal_db.record_banner_event("attempt")
+    ok, reason, rec = portal_db.register_java_waitlist(email)
+    if reason == "duplicate":
+        portal_db.record_banner_event("duplicate")
+        return Response(json.dumps({
+            "status": "duplicate",
+            "message": "You're already on the list! We'll notify you at launch."
+        }), "200 OK", [("Content-Type", "application/json")])
+
+    portal_db.record_banner_event("success")
+    return Response(json.dumps({
+        "status": "ok",
+        "message": "You're on the list! We'll send you an email the moment Java integration launches. Stay tuned!"
+    }), "200 OK", [("Content-Type", "application/json")])
+
+
+def _api_banner_analytics(request: Request) -> Response:
+    if request.method != "POST":
+        return Response(json.dumps({"error": "Method not allowed"}), "405 Method Not Allowed", [("Content-Type", "application/json")])
+    event = str(request.form.get("event", "")).strip().lower()
+    if event in ("impression", "dismiss", "attempt", "success", "duplicate"):
+        portal_db.record_banner_event(event)
+    return Response(json.dumps({"ok": True}), "200 OK", [("Content-Type", "application/json")])
+
+
+def _page_unsubscribe(request: Request) -> Response:
+    token = request.query.get("token", [""])[0] if request.method == "GET" else request.form.get("token", "")
+    token = token.strip()
+
+    if request.method == "POST":
+        ok, email = portal_db.unsubscribe_java_waitlist(token)
+        if ok:
+            body = (
+                "<section class='card form-card' style='text-align:center'>"
+                "<div class='eyebrow'>Unsubscribed</div>"
+                "<h1>You've Been Unsubscribed</h1>"
+                f"<p class='muted'><b>{_escape(email)}</b> has been removed from the Java launch announcement list. You will not receive any further emails regarding this launch.</p>"
+                "<div class='actions' style='justify-content:center;margin-top:24px'>"
+                "<a class='button primary' href='/'>Return to Home</a>"
+                "</div>"
+                "</section>"
+            )
+            return _response(body, request)
+        else:
+            body = (
+                "<section class='card form-card' style='text-align:center'>"
+                "<div class='eyebrow'>Error</div>"
+                "<h1>Invalid Unsubscribe Link</h1>"
+                "<p class='muted'>We could not find an active subscription matching this link. You may already be unsubscribed.</p>"
+                "<div class='actions' style='justify-content:center;margin-top:24px'>"
+                "<a class='button' href='/'>Return to Home</a>"
+                "</div>"
+                "</section>"
+            )
+            return _response(body, request, status="400 Bad Request")
+
+    # GET request
+    if not token:
+        body = (
+            "<section class='card form-card' style='text-align:center'>"
+            "<h1>Unsubscribe</h1>"
+            "<p class='muted'>No unsubscribe token was provided. Please use the link included in your email.</p>"
+            "<div class='actions' style='justify-content:center;margin-top:24px'>"
+            "<a class='button' href='/'>Return to Home</a>"
+            "</div>"
+            "</section>"
+        )
+        return _response(body, request, status="400 Bad Request")
+
+    body = (
+        "<section class='card form-card' style='text-align:center'>"
+        "<div class='eyebrow'>Subscription Management</div>"
+        "<h1>Unsubscribe from Java Launch Updates?</h1>"
+        "<p class='muted'>Press the button below to confirm that you no longer wish to receive the announcement email when Java integration launches on Agent Daemon.</p>"
+        f"<form method='post' action='/unsubscribe' style='margin-top:24px'>"
+        f"<input type='hidden' name='token' value='{_escape(token)}'>"
+        "<button class='button primary' type='submit' style='background:#e11d2a'>Confirm Unsubscribe</button> "
+        "<a class='button' href='/'>Cancel</a>"
+        "</form>"
+        "</section>"
+    )
+    return _response(body, request)
