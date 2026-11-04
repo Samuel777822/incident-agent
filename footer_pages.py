@@ -9,8 +9,25 @@ from __future__ import annotations
 import os
 
 
-def render_footer_html() -> str:
-    return """<footer class="wrap footer">
+WEBSITE_LAST_UPDATED = os.getenv("WEBSITE_LAST_UPDATED", "04-11-2026")
+
+
+def render_visitor_counter_tiles(count: int) -> str:
+    """Format the cumulative visitor count into prominent NIC/government-portal style digit cells."""
+    digits = f"{max(count, 0):06d}"
+    return "".join(f'<span class="gov-digit-tile">{d}</span>' for d in digits)
+
+
+def render_footer_html(visitor_count: int | None = None) -> str:
+    if visitor_count is None:
+        try:
+            import portal_db
+            visitor_count = portal_db.get_total_unique_visitors()
+        except Exception:
+            visitor_count = 0
+
+    tiles_html = render_visitor_counter_tiles(visitor_count)
+    return f"""<footer class="wrap footer">
   <div class="footer-grid">
     <div class="footer-col">
       <div class="footer-heading">Product</div>
@@ -54,6 +71,59 @@ def render_footer_html() -> str:
       </ul>
     </div>
   </div>
+  
+  <!-- NIC-INSPIRED WEBSITE INFORMATION STRIP -->
+  <div class="gov-info-strip" aria-label="Website Information and Visitor Statistics">
+    <div class="gov-info-container">
+      
+      <!-- LEFT: VISITOR COUNTER -->
+      <div class="gov-info-block gov-visitors-block">
+        <div class="gov-info-icon-wrap" aria-hidden="true" title="Visitor Count">
+          <svg class="gov-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+            <path d="M17 21v-2a4 4 0 0 0-4-4H5a4 4 0 0 0-4 4v2"></path>
+            <circle cx="9" cy="7" r="4"></circle>
+            <path d="M23 21v-2a4 4 0 0 0-3-3.87"></path>
+            <path d="M16 3.13a4 4 0 0 1 0 7.75"></path>
+          </svg>
+        </div>
+        <div class="gov-info-content">
+          <div class="gov-info-label">TOTAL VISITORS SINCE LAUNCH</div>
+          <div class="gov-odometer-wrap" id="gov-visitor-display" data-target="{visitor_count}">
+            {tiles_html}
+          </div>
+        </div>
+      </div>
+
+      <!-- CENTER SEPARATING DIVIDER -->
+      <div class="gov-info-divider" aria-hidden="true"></div>
+
+      <!-- RIGHT: WEBSITE LAST UPDATED -->
+      <div class="gov-info-block gov-updated-block">
+        <div class="gov-info-icon-wrap" aria-hidden="true" title="Website Last Updated Date">
+          <svg class="gov-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+            <rect x="3" y="4" width="18" height="18" rx="2" ry="2"></rect>
+            <line x1="16" y1="2" x2="16" y2="6"></line>
+            <line x1="8" y1="2" x2="8" y2="6"></line>
+            <line x1="3" y1="10" x2="21" y2="10"></line>
+            <path d="M8 14h.01"></path>
+            <path d="M12 14h.01"></path>
+            <path d="M16 14h.01"></path>
+            <path d="M8 18h.01"></path>
+            <path d="M12 18h.01"></path>
+            <path d="M16 18h.01"></path>
+          </svg>
+        </div>
+        <div class="gov-info-content">
+          <div class="gov-info-label">WEBSITE LAST UPDATED</div>
+          <div class="gov-date-badge">
+            <span class="gov-date-val">{WEBSITE_LAST_UPDATED}</span>
+          </div>
+        </div>
+      </div>
+
+    </div>
+  </div>
+
   <div class="footer-bottom">
     <div class="footer-brand-line">
       <span class="brand"><span class="brand-mark">A</span>Agent Daemon</span>

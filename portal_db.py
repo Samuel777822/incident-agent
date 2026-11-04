@@ -13,6 +13,7 @@ import sqlite3
 import uuid
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
+import re
 
 SCHEMA = """
 CREATE TABLE IF NOT EXISTS users (
@@ -1875,5 +1876,53 @@ def get_banner_analytics() -> dict:
             else:
                 counts[et] = int(r["cnt"])
         return counts
+    finally:
+        conn.close()
+
+
+_BOT_REGEX = re.compile(
+    r"(googlebot|bingbot|yandexbot|duckduckbot|baiduspider|slurp|twitterbot|facebookexternalhit|"
+    r"linkedinbot|embedly|quora link preview|showyoubot|outbrain|pinterest|slackbot|vkshare|"
+    r"w3c_validator|headlesschrome|curl|wget|python-requests|urllib|postman|uptimerobot|"
+    r"pingdom|render|crawler|spider|bot\b)",
+    re.IGNORECASE
+)
+
+
+def record_unique_visitor(visitor_id: str, user_agent: str = "") -> bool:
+    """Record a unique website visitor in visitor_tracking.
+    Filters bots and automated requests.
+    Returns True if this is a newly recorded unique visitor.
+    """
+    clean_id = str(visitor_id or "").strip()
+    if not clean_id or not re.fullmatch(r"[0-9a-f-]{36}", clean_id):
+        return False
+    if user_agent and _BOT_REGEX.search(user_agent):
+        return False
+    conn = get_connection()
+    try:
+        now = _now()
+        row = _execute(conn, "SELECT visitor_id, visit_count FROM visitor_tracking WHERE visitor_id = ?",
+                       (clean_id,)).fetchone()
+        if not row:
+            _execute(conn, "INSERT INTO visitor_tracking(visitor_id, first_seen, last_notified, visit_count) VALUES(?,?,?,1)",
+                     (clean_id, now, now))
+            conn.commit()
+            return True
+        else:
+            _execute(conn, "UPDATE visitor_tracking SET visit_count = visit_count + 1 WHERE visitor_id = ?",
+                     (clean_id,))
+            conn.commit()
+            return False
+    finally:
+        conn.close()
+
+
+def get_total_unique_visitors() -> int:
+    """Return the cumulative number of unique human website visitors recorded to date."""
+    conn = get_connection()
+    try:
+        row = _execute(conn, "SELECT COUNT(*) as cnt FROM visitor_tracking").fetchone()
+        return int(row["cnt"]) if row else 0
     finally:
         conn.close()

@@ -314,6 +314,130 @@ CSS += """
 
 
 CSS += homepage.HOMEPAGE_CSS
+CSS += """
+/* ===== NIC-INSPIRED WEBSITE INFORMATION STRIP ===== */
+.gov-info-strip {
+  margin: 32px 0 24px 0;
+  padding: 18px 24px;
+  background: rgba(18, 10, 27, 0.75);
+  border: 1px solid rgba(227, 189, 116, 0.22);
+  border-radius: 12px;
+  box-shadow: inset 0 1px 0 rgba(255, 255, 255, 0.05), 0 8px 24px rgba(0, 0, 0, 0.45);
+}
+.gov-info-container {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 24px;
+}
+.gov-info-block {
+  display: flex;
+  align-items: center;
+  gap: 16px;
+  flex: 1;
+}
+.gov-visitors-block {
+  justify-content: flex-start;
+}
+.gov-updated-block {
+  justify-content: flex-end;
+}
+.gov-info-icon-wrap {
+  width: 44px;
+  height: 44px;
+  border-radius: 10px;
+  background: #090510;
+  border: 1px solid rgba(227, 189, 116, 0.25);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  color: #e3bd74;
+  flex-shrink: 0;
+  box-shadow: 0 4px 12px rgba(0, 0, 0, 0.5);
+}
+.gov-updated-block .gov-info-icon-wrap {
+  border-color: rgba(111, 224, 176, 0.25);
+  color: #6fe0b0;
+}
+.gov-icon {
+  width: 22px;
+  height: 22px;
+}
+.gov-info-content {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+.gov-info-label {
+  font-size: 11px;
+  font-weight: 750;
+  letter-spacing: 0.1em;
+  color: #a99dbb;
+  text-transform: uppercase;
+}
+.gov-odometer-wrap {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+}
+.gov-digit-tile {
+  display: inline-block;
+  min-width: 24px;
+  padding: 4px 6px;
+  text-align: center;
+  background: linear-gradient(180deg, #180d24 0%, #0c0613 49%, #050208 51%, #100818 100%);
+  border: 1px solid rgba(227, 189, 116, 0.35);
+  border-radius: 5px;
+  font-family: Consolas, Monaco, "Courier New", monospace;
+  font-size: 17px;
+  font-weight: 800;
+  color: #f7dfa5;
+  box-shadow: inset 0 1px 2px rgba(255, 255, 255, 0.1), 0 2px 6px rgba(0, 0, 0, 0.6);
+  line-height: 1.2;
+}
+.gov-info-divider {
+  width: 1px;
+  height: 46px;
+  background: linear-gradient(180deg, transparent, rgba(227, 189, 116, 0.3), transparent);
+  flex-shrink: 0;
+}
+.gov-date-badge {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  padding: 5px 14px;
+  background: #090510;
+  border: 1px solid rgba(111, 224, 176, 0.35);
+  border-radius: 7px;
+  box-shadow: inset 0 1px 2px rgba(0, 0, 0, 0.6);
+}
+.gov-date-val {
+  font-family: Consolas, Monaco, "Courier New", monospace;
+  font-size: 15px;
+  font-weight: 750;
+  color: #6fe0b0;
+  letter-spacing: 0.08em;
+}
+
+@media (max-width: 768px) {
+  .gov-info-strip {
+    padding: 16px 18px;
+  }
+  .gov-info-container {
+    flex-direction: column;
+    align-items: stretch;
+    gap: 16px;
+  }
+  .gov-info-divider {
+    width: 100%;
+    height: 1px;
+    background: linear-gradient(90deg, transparent, rgba(227, 189, 116, 0.3), transparent);
+  }
+  .gov-info-block {
+    justify-content: flex-start;
+  }
+}
+"""
 
 def _escape(value) -> str:
     if isinstance(value, int) and not isinstance(value, bool):
@@ -519,7 +643,17 @@ def _layout(title: str, body: str, request: Request | None = None) -> str:
     is_admin = _is_admin(request) if request else False
     csrf_token = _csrf(request) if (request and signed_in) else ""
     links = footer_pages.render_header_nav_html(signed_in=signed_in, is_admin=is_admin, csrf_token=csrf_token)
-    return f"""<!doctype html><html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><meta name="description" content="AI incident response for Python apps"><title>{_escape(title)} · {APP_NAME}</title><link rel="preconnect" href="https://fonts.googleapis.com"><link rel="preconnect" href="https://fonts.gstatic.com" crossorigin><link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Cinzel:wght@500;700&amp;family=Cinzel+Decorative:wght@700&amp;display=swap"><style>{CSS}</style></head><body><header class="wrap nav"><a class="brand" href="/"><span class="brand-mark">A</span>{APP_NAME}</a><nav class="navlinks">{links}</nav></header><main class="wrap">{body}</main>{footer_pages.render_footer_html()}<script src="/assets/home.js" defer></script><script src="/assets/chat.js" defer></script></body></html>"""
+    visitor_count = 0
+    if request:
+        try:
+            ua = request.environ.get("HTTP_USER_AGENT", "") or request.environ.get("User-Agent", "")
+            if request.method == "GET" and request.path not in ("/heartbeat", "/ingest", "/webhooks/razorpay"):
+                portal_db.record_unique_visitor(request.visitor_id, user_agent=ua)
+            visitor_count = portal_db.get_total_unique_visitors()
+        except Exception:
+            pass
+    footer_markup = footer_pages.render_footer_html(visitor_count=visitor_count)
+    return f"""<!doctype html><html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><meta name="description" content="AI incident response for Python apps"><title>{_escape(title)} · {APP_NAME}</title><link rel="preconnect" href="https://fonts.googleapis.com"><link rel="preconnect" href="https://fonts.gstatic.com" crossorigin><link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Cinzel:wght@500;700&amp;family=Cinzel+Decorative:wght@700&amp;display=swap"><style>{CSS}</style></head><body><header class="wrap nav"><a class="brand" href="/"><span class="brand-mark">A</span>{APP_NAME}</a><nav class="navlinks">{links}</nav></header><main class="wrap">{body}</main>{footer_markup}<script src="/assets/home.js" defer></script><script src="/assets/chat.js" defer></script></body></html>"""
 
 
 def _csrf(request: Request) -> str:
@@ -974,6 +1108,8 @@ def _api_visitor_track(request: Request) -> Response:
     visitor_id = request.visitor_id
     path = request.form.get("path", "/") if isinstance(request.form, dict) else "/"
     ref = request.form.get("referrer", "") if isinstance(request.form, dict) else ""
+    ua = request.environ.get("HTTP_USER_AGENT", "") or request.environ.get("User-Agent", "")
+    portal_db.record_unique_visitor(visitor_id, user_agent=ua)
     should_notify = portal_db.track_visitor_visit(visitor_id)
     if should_notify:
         notifications.notify_admins(
@@ -982,7 +1118,9 @@ def _api_visitor_track(request: Request) -> Response:
             f"Live admin console: {_base_url()}/admin#live-chats",
             "visitor_alert"
         )
-    resp = Response(json.dumps({"ok": True}), "200 OK", [("Content-Type", "application/json")])
+    total_count = portal_db.get_total_unique_visitors()
+    resp = Response(json.dumps({"ok": True, "count": total_count, "last_updated": footer_pages.WEBSITE_LAST_UPDATED}),
+                    "200 OK", [("Content-Type", "application/json")])
     if getattr(request, "new_visitor_cookie", None):
         resp.headers.append(request.new_visitor_cookie)
     return resp

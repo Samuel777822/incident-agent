@@ -44,6 +44,7 @@ HOME_JS = """(function() {
     applyHeroStage(n);
     resetHeroTimer();
     initJavaBanner();
+    initVisitorCounter();
   };
 
   window.switchShowcase = function(n) {
@@ -192,6 +193,42 @@ HOME_JS = """(function() {
     }
   }
 
+  
+  // Smooth animated count-up for NIC-inspired visitor counter
+  function initVisitorCounter() {
+    var display = document.getElementById('gov-visitor-display');
+    if (!display) return;
+    var targetStr = display.getAttribute('data-target') || '0';
+    var target = parseInt(targetStr, 10);
+    if (isNaN(target) || target <= 0) return;
+
+    function renderDigits(n) {
+      var s = ('000000' + n).slice(-Math.max(6, ('' + n).length));
+      var h = '';
+      for (var i = 0; i < s.length; i++) {
+        h += '<span class="gov-digit-tile">' + s[i] + '</span>';
+      }
+      display.innerHTML = h;
+    }
+
+    var startVal = 0;
+    var duration = 1200;
+    var startTime = null;
+    function anim(ts) {
+      if (!startTime) startTime = ts;
+      var prog = Math.min((ts - startTime) / duration, 1);
+      var ease = 1 - Math.pow(1 - prog, 3);
+      var cur = Math.floor(startVal + (target - startVal) * ease);
+      renderDigits(cur);
+      if (prog < 1) {
+        window.requestAnimationFrame(anim);
+      } else {
+        renderDigits(target);
+      }
+    }
+    window.requestAnimationFrame(anim);
+  }
+
   function initHomeInteractivity() {
     for (var i = 0; i < 4; i++) {
       (function(idx) {
@@ -235,6 +272,7 @@ HOME_JS = """(function() {
 
     resetHeroTimer();
     initJavaBanner();
+    initVisitorCounter();
   }
 
   if (document.readyState === 'loading') {
