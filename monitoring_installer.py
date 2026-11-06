@@ -61,7 +61,8 @@ def detect_stacks(paths) -> set[str]:
     if any(p.lower().endswith((".html", ".htm")) for p in relevant): stacks.add("browser")
     return stacks
 
-ENTRY_CANDIDATES = ("app.py", "main.py", "wsgi.py", "server.py", "run.py", "application.py", "manage.py", "index.py")
+ENTRY_CANDIDATES = ("app.py", "main.py", "wsgi.py", "server.py", "run.py", "application.py", "manage.py", "index.py",
+                    "src/app.py", "src/main.py", "src/server.py", "backend/app.py", "backend/main.py")
 PYTHON_IMPORT_LINE = "import incident_agent_monitor  # Agent Daemon runtime monitoring"
 
 def _python_client_source():
@@ -121,7 +122,7 @@ def _java_package(source: str) -> str:
 
 def _java_monitor_source(package: str) -> str:
     package_decl = f"package {package};" if package else ""
-    return JAVA_MONITOR_TEMPLATE.replace("{package_decl}", package_decl)
+    return JAVA_MONITOR_TEMPLATE.replace("{package_decl}", package_decl).replace("{{", "{").replace("}}", "}")
 
 def _inject_html_monitor(source: str):
     if "agent-daemon-monitor.js" in source: return source
