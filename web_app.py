@@ -2990,7 +2990,9 @@ def _install_monitoring(project_id: str, user_id: str, project: dict, token: str
         return dict(result, ok=True)
     portal_db.record_install_pr(project_id, user_id, result["url"], ci_state)
     portal_db.audit(project_id, "monitoring_pr_opened", {"pr_url": result["url"], "merged": result["merged"],
-                                                          "patched_file": result["patched_file"], "key_embedded": result["embedded_key"],
+                                                          "patched_files": result.get("patched_files", []), "stacks": result.get("stacks", []),
+                                                          "server_key_embedded": result.get("embedded_key"),
+                                                          "public_key_embedded": result.get("public_key_embedded"),
                                                           "workflow_added": result.get("workflow_added"), "had_ci": result.get("had_ci")})
     return dict(result, ok=True)
 
@@ -3007,10 +3009,14 @@ def _install_summary(result: dict, project_id: str) -> str:
             return "<div class='card'><h3>Monitoring setup</h3><p class='muted'>Everything is already installed, and this repository already has a GitHub Actions workflow.</p></div>"
         return ("<div class='card'><h3>Nothing changed yet</h3><p class='muted'>GitHub still does not let this token write workflow files.</p>"
                 + _workflow_fix_steps() + "</div>")
-    if result.get("patched_file"):
-        notes.append(f"One line was added to <code>{_escape(result['patched_file'])}</code> so monitoring starts with your app.")
+    stacks = result.get("stacks") or []
+    if stacks:
+        notes.append("Detected and configured runtime monitoring for: <b>" + _escape(", ".join(stacks)) + "</b>.")
+    patched_files = result.get("patched_files") or ([result["patched_file"]] if result.get("patched_file") else [])
+    if patched_files:
+        notes.append("Automatic startup hooks were added to: " + ", ".join("<code>" + _escape(p) + "</code>" for p in patched_files) + ".")
     elif not result.get("entry_file"):
-        notes.append("We could not find your app's main file, so add <code>import incident_agent_monitor</code> as the first import of it.")
+        notes.append("No safe startup file could be identified automatically. Adapter files and integration notes are included in the pull request.")
     if result.get("workflow_added"):
         notes.append("A GitHub Actions workflow was added that checks your code and runs your tests on every pull request. "
                      "Auto mode merges a fix only after that check passes.")
