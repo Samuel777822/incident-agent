@@ -13,6 +13,15 @@ envVarGroups:
     envVars:
       - key: APP_ENV
         value: production
+      # Share secure login/OAuth cookies between agentdaemon.xyz and www.agentdaemon.xyz.
+      - key: COOKIE_DOMAIN
+        value: agentdaemon.xyz
+      - key: GOOGLE_CLIENT_ID
+        sync: false
+      - key: GOOGLE_CLIENT_SECRET
+        sync: false
+      - key: GOOGLE_REDIRECT_URI
+        value: https://agentdaemon.xyz/auth/google/callback
       - key: DATABASE_URL
         fromDatabase:
           name: incident-agent-db
