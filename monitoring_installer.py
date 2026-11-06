@@ -29,7 +29,13 @@ def _request(url: str, token: str, method: str = "GET", payload=None):
         elif exc.code == 403:
             message = "GitHub denied this token. Confirm it can read this repository and create branches and pull requests."
         elif exc.code == 404:
-            message = "GitHub could not find this repository, branch, or pull request for the supplied token."
+            if "/git/ref/heads/" in url or "/branches/" in url:
+                what = "branch"
+            elif "/pulls" in url:
+                what = "pull request"
+            else:
+                what = "repository"
+            message = f"GitHub could not find the {what} for this token."
         else:
             message = f"GitHub could not complete the request (HTTP {exc.code}). Try again later."
         raise GitHubInstallError(message) from None
@@ -64,6 +70,7 @@ def detect_stacks(paths) -> set[str]:
 ENTRY_CANDIDATES = ("app.py", "main.py", "wsgi.py", "server.py", "run.py", "application.py", "manage.py", "index.py",
                     "src/app.py", "src/main.py", "src/server.py", "backend/app.py", "backend/main.py")
 PYTHON_IMPORT_LINE = "import incident_agent_monitor  # Agent Daemon runtime monitoring"
+IMPORT_LINE = PYTHON_IMPORT_LINE
 
 def _python_client_source():
     return Path(__file__).with_name("agent_monitor_client.py").read_text(encoding="utf-8")
@@ -83,6 +90,11 @@ def _insert_python_import(source: str):
         else: break
     lines.insert(insert_at, PYTHON_IMPORT_LINE)
     return "\n".join(lines)
+
+def _insert_import(source: str):
+    """Backward-compatible name retained for the existing Python installer API."""
+    return _insert_python_import(source)
+
 
 def _js_entry_candidates(package):
     candidates = []
@@ -161,9 +173,11 @@ jobs:
           exit "$code"
 """
 
-def _repo_tree(api: str, token: str, commit_sha: str):
-    data = _request(f"{api}/git/trees/{urllib.parse.quote(commit_sha, safe='')}?recursive=1", token)
-    return [item["path"] for item in (data.get("tree") or []) if item.get("type") == "blob" and isinstance(item.get("path"), str)]
+def _repo_tree(api: str, token: str, tree_sha: str):
+    data = _request(f"{api}/git/trees/{urllib.parse.quote(tree_sha, safe='')}?recursive=1", token)
+    if not isinstance(data, dict) or not isinstance(data.get("tree"), list):
+        return []
+    return [item["path"] for item in data["tree"] if item.get("type") == "blob" and isinstance(item.get("path"), str)]
 
 def _read_file(api: str, token: str, ref: str, path: str):
     endpoint = f"{api}/contents/{urllib.parse.quote(path, safe='/')}?ref={urllib.parse.quote(ref, safe='')}"
@@ -197,6 +211,8 @@ def _setup_guide(project_id, stacks, patched_files, private_key_embedded, public
         lines += ["", "- incident_agent_config.json contains only a project-scoped, write-only reporting token. It cannot read project data or change settings; submissions are rate-limited."]
     if "browser" in stacks:
         lines += ["", "- Browser reports contain error metadata only; page contents, form values, and request bodies are not sent."]
+    if not patched_files and not stacks:
+        lines += ["", "- For a custom Python entrypoint, add `import incident_agent_monitor` as an early import after any module docstring and future imports."]
     if "java" in stacks:
         lines += ["", "- The Java adapter uses only the JDK standard library and requires Java 11+."]
     if workflow: lines += ["", f"- {WORKFLOW_PATH} adds a Python syntax/test workflow because no GitHub Actions workflow was found."]
@@ -234,13 +250,22 @@ def open_monitoring_pr(*, owner: str, repo: str, base_branch: str, project_id: s
     ref = urllib.parse.quote(base_branch, safe="")
     base = _request(f"{api}/git/ref/heads/{ref}", token)["object"]["sha"]
     base_commit = _request(f"{api}/git/commits/{base}", token)
-    branch = f"agent-daemon/monitor-{project_id.replace('-', '')[:12]}"
+    branch = f"agent-daemon/install-{project_id.replace('-', '')[:12]}"
     try:
         _request(f"{api}/git/ref/heads/{urllib.parse.quote(branch, safe='/')}", token)
         branch += f"-{int(time.time())}"
     except GitHubInstallError: pass
 
     paths = _repo_tree(api, token, base_commit["tree"]["sha"])
+    if not paths:
+        # Compatibility fallback for GitHub proxies and restricted test doubles that
+        # cannot expose recursive trees: probe conservative, well-known project markers.
+        candidates = list(ENTRY_CANDIDATES) + [
+            "package.json", "pom.xml", "build.gradle", "build.gradle.kts",
+            "index.html", "public/index.html", "src/main/java/Main.java",
+            "Main.java", "Application.java",
+        ]
+        paths = [path for path in candidates if _read_file(api, token, base_branch, path) is not None]
     stacks = detect_stacks(paths)
     files = {}
     patched_files = []
