@@ -2645,6 +2645,11 @@ def _page_dashboard(request):
     return _response(body, request)
 
 
+def _derive_browser_ingest_key(ingest_key: str) -> str:
+    """Derive a write-only browser token without exposing the server ingest key."""
+    return hmac.new(ingest_key.encode("utf-8"), b"agent-daemon-browser-ingest-v1", hashlib.sha256).hexdigest()
+
+
 def _encrypt_token(token: str) -> str:
     key = os.getenv("TOKEN_ENCRYPTION_KEY", "")
     if not key:
@@ -2765,10 +2770,12 @@ def _page_new_project(request):
                      "instead of merging automatically.</div>")
     ingest_key = secrets.token_urlsafe(32)
     ingest_hash = hashlib.sha256(ingest_key.encode()).hexdigest()
+    browser_ingest_key = _derive_browser_ingest_key(ingest_key)
+    browser_ingest_hash = hashlib.sha256(browser_ingest_key.encode()).hexdigest()
     try:
         project_id = portal_db.create_project(user_id, name=name,
             repo_owner=owner, repo_name=repo.removesuffix(".git"), branch=branch, mode=mode,
-            token_ciphertext=ciphertext, ingest_key_hash=ingest_hash,
+            token_ciphertext=ciphertext, ingest_key_hash=ingest_hash, browser_ingest_key_hash=browser_ingest_hash,
             app_url=request.form.get("app_url", "").strip(), ai_consent_at=portal_db._now(),
             ingest_key_ciphertext=_encrypt_token(ingest_key), watch_mode=watch_mode, enforce_slots=not _is_admin(request))
     except ValueError:
@@ -2963,10 +2970,15 @@ def _install_monitoring(project_id: str, user_id: str, project: dict, token: str
     automatically when GitHub allows it. If the branch name was wrong, the repository's default is used and saved.
     """
     try:
+        browser_key = _derive_browser_ingest_key(ingest_key)
+        browser_hash = hashlib.sha256(browser_key.encode()).hexdigest()
+        # Backfill the restricted browser token for projects created before this migration.
+        portal_db.set_project_browser_ingest_key_hash(project_id, user_id, browser_hash)
         result = open_monitoring_pr(
             owner=project["repo_owner"], repo=project["repo_name"], base_branch=project["branch"],
             project_id=project_id, token=token, ingest_url=_base_url() + "/ingest",
-            ingest_key=ingest_key, auto_merge=True)
+            ingest_key=ingest_key, browser_ingest_url=_base_url() + "/ingest/browser",
+            browser_ingest_key=browser_key, auto_merge=True)
     except (GitHubInstallError, RuntimeError) as exc:
         return {"ok": False, "error": str(exc)}
     if result.get("base_branch") and result["base_branch"] != project["branch"]:
@@ -3079,7 +3091,9 @@ def _page_rotate_ingest_key(request, project_id):
         return _response("<h1>Project not found</h1>", request, "404 Not Found")
     key = secrets.token_urlsafe(32)
     key_hash = hashlib.sha256(key.encode("utf-8")).hexdigest()
-    if not portal_db.rotate_project_ingest_key(project_id, user_id, key_hash, _encrypt_token(key)):
+    browser_key = _derive_browser_ingest_key(key)
+    browser_hash = hashlib.sha256(browser_key.encode("utf-8")).hexdigest()
+    if not portal_db.rotate_project_ingest_key(project_id, user_id, key_hash, _encrypt_token(key), browser_hash):
         return _response("<h1>Project not found</h1>", request, "404 Not Found")
     portal_db.audit(project_id, "ingest_key_rotated")
     body = f"<section class='card form-card'><h1>New ingest key</h1><p class='muted'>The previous key is invalid now. Copy this value into your app environment; it will not be shown again.</p><div class='alert'><code>{_escape(key)}</code></div><a class='button primary' href='/projects/{_escape(project_id)}'>Back to project</a></section>"
@@ -3577,6 +3591,67 @@ def _page_ingest(request):
                            "incident_id": incident_id}, "202 Accepted" if inserted else "200 OK")
 
 
+def _page_browser_ingest(request):
+    """Accept error reports using a project-scoped write-only public token."""
+    if request.method != "POST" or not request.raw_body:
+        return _json_response({"error": "POST one error event."}, "400 Bad Request")
+    if len(request.raw_body) > 16 * 1024:
+        return _json_response({"error": "Event is too large."}, "413 Payload Too Large")
+    try:
+        data = json.loads(request.raw_body.decode("utf-8"))
+    except (UnicodeDecodeError, json.JSONDecodeError):
+        return _json_response({"error": "Invalid JSON event."}, "400 Bad Request")
+    if not isinstance(data, dict):
+        return _json_response({"error": "Invalid event."}, "400 Bad Request")
+    project_key = str(data.get("project_key", "")).strip()
+    if not re.fullmatch(r"[A-Fa-f0-9]{64}", project_key):
+        return _json_response({"error": "Invalid project reporting token."}, "401 Unauthorized")
+    project = portal_db.get_project_by_browser_ingest_hash(hashlib.sha256(project_key.encode()).hexdigest())
+    if not project:
+        return _json_response({"error": "Invalid project reporting token."}, "401 Unauthorized")
+    origin = request.environ.get("HTTP_ORIGIN", "")
+    app_url = str(project.get("app_url") or "").strip()
+    if origin and app_url:
+        try:
+            expected_host = (urlsplit(app_url).hostname or "").lower()
+            actual_host = (urlsplit(origin).hostname or "").lower()
+            if expected_host and actual_host and expected_host.removeprefix("www.") != actual_host.removeprefix("www."):
+                return _json_response({"error": "Origin not allowed for this project."}, "403 Forbidden")
+        except ValueError:
+            return _json_response({"error": "Invalid origin."}, "403 Forbidden")
+    if project["paused"] or not portal_db.user_has_active_access(project["user_id"]):
+        return _json_response({"accepted": False, "reason": "access_not_active"}, "202 Accepted")
+    if not portal_db.allow_ingest(project["id"], maximum=20):
+        return _json_response({"error": "Browser ingest rate limit exceeded."}, "429 Too Many Requests")
+    event = data.get("event")
+    if not isinstance(event, dict):
+        return _json_response({"error": "event must be an object."}, "400 Bad Request")
+    message = str(event.get("message") or "").strip()
+    if not message:
+        return _json_response({"error": "message is required."}, "400 Bad Request")
+    traceback_text = str(event.get("traceback") or "")[:12000]
+    if not traceback_text:
+        return _json_response({"error": "traceback is required."}, "400 Bad Request")
+    level = str(event.get("level") or "ERROR").upper()
+    if level not in {"ERROR", "CRITICAL"}:
+        return _json_response({"error": "Only error events are accepted."}, "400 Bad Request")
+    timestamp = str(event.get("timestamp") or "")
+    try:
+        parsed = datetime.fromisoformat(timestamp.replace("Z", "+00:00"))
+        if parsed.tzinfo is None:
+            parsed = parsed.replace(tzinfo=timezone.utc)
+        timestamp = parsed.astimezone(timezone.utc).isoformat(timespec="seconds")
+    except ValueError:
+        timestamp = _now().isoformat(timespec="seconds")
+    message = message[:4000]
+    signature = _incident_signature(message, traceback_text, event)
+    incident_id, inserted = portal_db.ingest_event(project["id"], timestamp=timestamp,
+        level=level, message=message, traceback=traceback_text, signature=signature)
+    portal_db.set_project_connected(project["id"])
+    return _json_response({"accepted": inserted, "duplicate": not inserted,
+                           "incident_id": incident_id}, "202 Accepted" if inserted else "200 OK")
+
+
 def _page_heartbeat(request):
     if request.method != "POST":
         return _json_response({"error": "POST required."}, "405 Method Not Allowed")
@@ -3709,6 +3784,8 @@ def _dispatch(request: Request) -> Response:
         return _razorpay_webhook(request)
     if request.path == "/ingest":
         return _page_ingest(request)
+    if request.path == "/ingest/browser":
+        return _page_browser_ingest(request)
     if request.path == "/heartbeat":
         return _page_heartbeat(request)
     if request.path == "/projects/new":
@@ -3750,7 +3827,7 @@ def application(environ, start_response):
     try:
         request = Request(environ)
         if (request.method == "POST" and not request.session and not request.path.startswith("/webhooks/github/")
-                and request.path not in ("/login", "/signup", "/contact", "/support", "/webhooks/razorpay", "/ingest", "/heartbeat",
+                and request.path not in ("/login", "/signup", "/contact", "/support", "/webhooks/razorpay", "/ingest", "/ingest/browser", "/heartbeat",
                                          "/api/visitor/track", "/api/chat/send", "/api/chat/save-contact")):
             response = _redirect("/login")
         else:
