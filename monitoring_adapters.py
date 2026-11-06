@@ -51,14 +51,19 @@ NODE_CJS_SOURCE = r'''/* Agent Daemon Node.js runtime monitor. No third-party de
       req.end(body);
     } catch (_) {}
   }
+  function redact(value) {
+    return String(value || "").replace(/Bearer\\s+\\S+/gi, "Bearer [redacted]")
+      .replace(/sk-or-v1-[A-Za-z0-9_-]+/gi, "[redacted-key]")
+      .replace(/sk-[A-Za-z0-9_-]{12,}/gi, "[redacted-key]");
+  }
   function report(message, stack, type) {
     if (sending || !allowed()) return;
     const event = {
       timestamp: new Date().toISOString(),
       level: "ERROR",
       service: "node-runtime",
-      message: String(message || "Runtime error").slice(0, 4000),
-      traceback: String(stack || "").slice(-12000),
+      message: redact(message || "Runtime error").slice(0, 4000),
+      traceback: redact(stack || "").slice(-12000),
       exception_type: String(type || "Error").slice(0, 200)
     };
     if (!event.traceback) event.traceback = new Error(event.message).stack || event.message;
@@ -127,11 +132,16 @@ if (!globalThis.__agentDaemonMonitorInstalled) {
       req.on("error",()=>{}); req.on("timeout",()=>req.destroy()); req.end(body);
     } catch {}
   }
+  function redact(value) {
+    return String(value || "").replace(/Bearer\\s+\\S+/gi, "Bearer [redacted]")
+      .replace(/sk-or-v1-[A-Za-z0-9_-]+/gi, "[redacted-key]")
+      .replace(/sk-[A-Za-z0-9_-]{12,}/gi, "[redacted-key]");
+  }
   function report(message, stack, type) {
     if (sending || !allowed()) return;
     const event = { timestamp:new Date().toISOString(), level:"ERROR", service:"node-runtime",
-      message:String(message || "Runtime error").slice(0,4000),
-      traceback:String(stack || "").slice(-12000), exception_type:String(type || "Error").slice(0,200) };
+      message:redact(message || "Runtime error").slice(0,4000),
+      traceback:redact(stack || "").slice(-12000), exception_type:String(type || "Error").slice(0,200) };
     if (!event.traceback) event.traceback = new Error(event.message).stack || event.message;
     sending = true;
     try {
@@ -169,12 +179,17 @@ BROWSER_SOURCE = r'''/* Agent Daemon browser monitor. Its project key can only s
     if (sent >= 20) return false;
     sent += 1; return true;
   }
+  function redact(value) {
+    return String(value || "").replace(/Bearer\\s+\\S+/gi, "Bearer [redacted]")
+      .replace(/sk-or-v1-[A-Za-z0-9_-]+/gi, "[redacted-key]")
+      .replace(/sk-[A-Za-z0-9_-]{12,}/gi, "[redacted-key]");
+  }
   function report(message, stack, type) {
     if (!key || !endpoint || !allowed()) return;
     const event = {
       timestamp: new Date().toISOString(), level: "ERROR", service: "browser-runtime",
-      message: String(message || "Browser error").slice(0, 3000),
-      traceback: String(stack || "").slice(-8000),
+      message: redact(message || "Browser error").slice(0, 3000),
+      traceback: redact(stack || "").slice(-8000),
       exception_type: String(type || "BrowserError").slice(0, 150)
     };
     try {
@@ -187,7 +202,8 @@ BROWSER_SOURCE = r'''/* Agent Daemon browser monitor. Its project key can only s
   window.addEventListener("error", event => {
     const target = event.target;
     if (target && target !== window) {
-      const url = target.src || target.href || "";
+      let url = target.src || target.href || "";
+      try { const parsed = new URL(url, location.href); url = parsed.origin + parsed.pathname; } catch {}
       report("Browser resource failed to load: " + String(url).slice(0,500),
         "Resource load error at " + location.href, "ResourceLoadError");
       return;
@@ -245,8 +261,11 @@ public final class AgentDaemonMonitor {{
     }} catch (Exception ignored) {{}}
     if (ingestUrl.isEmpty()) ingestUrl = System.getenv().getOrDefault("INCIDENT_AGENT_INGEST_URL", "");
     if (ingestKey.isEmpty()) ingestKey = System.getenv().getOrDefault("INCIDENT_AGENT_INGEST_KEY", "");
+    Thread.UncaughtExceptionHandler previous = Thread.getDefaultUncaughtExceptionHandler();
     Thread.setDefaultUncaughtExceptionHandler((thread, error) -> {{
       report(error.toString(), stack(error), error.getClass().getSimpleName());
+      if (previous != null) previous.uncaughtException(thread, error);
+      else error.printStackTrace(System.err);
     }});
     Logger.getLogger("").addHandler(new Handler() {{
       @Override public void publish(LogRecord record) {{
