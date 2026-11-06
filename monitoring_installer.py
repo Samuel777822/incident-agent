@@ -211,6 +211,17 @@ def _setup_guide(project_id, stacks, patched_files, private_key_embedded, public
       "", f"Project: {project_id}", ""]
     return "\n".join(lines)
 
+def build_monitoring_config(*, private_repo: bool, ingest_url: str, ingest_key: str,
+                           browser_ingest_url: str, browser_ingest_key: str):
+    """Return deploy config while never placing a private server key in a public repository."""
+    private_key_embedded = bool(private_repo and ingest_url and ingest_key)
+    public_key_embedded = bool(browser_ingest_url and browser_ingest_key)
+    config = {"browser_ingest_url": browser_ingest_url, "browser_ingest_key": browser_ingest_key}
+    if private_key_embedded:
+        config.update({"ingest_url": ingest_url, "ingest_key": ingest_key})
+    return config, private_key_embedded, public_key_embedded
+
+
 def open_monitoring_pr(*, owner: str, repo: str, base_branch: str, project_id: str, token: str,
                        ingest_url: str = "", ingest_key: str = "", browser_ingest_url: str = "",
                        browser_ingest_key: str = "", auto_merge: bool = True):
@@ -297,11 +308,11 @@ def open_monitoring_pr(*, owner: str, repo: str, base_branch: str, project_id: s
             files[asset_path] = BROWSER_SOURCE.replace("__AGENT_DAEMON_BROWSER_KEY__", browser_ingest_key).replace(
                 "__AGENT_DAEMON_BROWSER_URL__", browser_ingest_url)
 
-    private_key_embedded = bool(private_repo and ingest_key and ingest_url)
-    public_key_embedded = bool(browser_ingest_key and browser_ingest_url)
-    config = {"browser_ingest_url": browser_ingest_url, "browser_ingest_key": browser_ingest_key}
-    if private_key_embedded: config.update({"ingest_url": ingest_url, "ingest_key": ingest_key})
-    if public_key_embedded: files["incident_agent_config.json"] = json.dumps(config, indent=2) + "\n"
+    config, private_key_embedded, public_key_embedded = build_monitoring_config(
+        private_repo=private_repo, ingest_url=ingest_url, ingest_key=ingest_key,
+        browser_ingest_url=browser_ingest_url, browser_ingest_key=browser_ingest_key)
+    if public_key_embedded:
+        files["incident_agent_config.json"] = json.dumps(config, indent=2) + "\n"
 
     had_ci = _has_workflows(api, token, base_branch)
     workflow_added = not had_ci
