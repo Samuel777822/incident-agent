@@ -106,3 +106,29 @@ def test_node_adapters_pass_node_syntax_check_when_node_is_available(tmp_path, s
     file.write_text(source, encoding="utf-8")
     result = subprocess.run([node, "--check", str(file)], capture_output=True, text=True, timeout=15)
     assert result.returncode == 0, result.stderr
+
+
+
+def test_browser_adapter_passes_node_syntax_check_when_node_is_available(tmp_path):
+    node = shutil.which("node")
+    if not node:
+        pytest.skip("Node.js is not installed in this test environment")
+    file = tmp_path / "browser-monitor.js"
+    file.write_text(BROWSER_SOURCE, encoding="utf-8")
+    result = subprocess.run([node, "--check", str(file)], capture_output=True, text=True, timeout=15)
+    assert result.returncode == 0, result.stderr
+
+
+def test_generated_java_monitor_compiles_when_javac_is_available(tmp_path):
+    javac = shutil.which("javac")
+    if not javac:
+        pytest.skip("JDK is not installed in this test environment")
+    package_dir = tmp_path / "src" / "com" / "acme"
+    package_dir.mkdir(parents=True)
+    source = package_dir / "AgentDaemonMonitor.java"
+    source.write_text(_java_monitor_source("com.acme"), encoding="utf-8")
+    output = tmp_path / "classes"
+    output.mkdir()
+    result = subprocess.run([javac, "-d", str(output), str(source)],
+                            capture_output=True, text=True, timeout=30)
+    assert result.returncode == 0, result.stderr
