@@ -597,6 +597,37 @@ def _google_oauth_settings() -> tuple[str, str, str]:
     return client_id, client_secret, redirect_uri
 
 
+def _app_cookie_domain() -> str:
+    """Choose a production cookie domain shared by apex and www hosts.
+
+    Render may serve the same application at agentdaemon.xyz and
+    www.agentdaemon.xyz. Host-only cookies do not cross between those hosts;
+    that can drop the OAuth state cookie on Google's callback and can also
+    make the resulting session appear signed out. COOKIE_DOMAIN can be set
+    explicitly. Otherwise derive it from GOOGLE_REDIRECT_URI and strip a
+    leading www. Local/test environments deliberately keep host-only cookies.
+    """
+    if os.getenv("APP_ENV", "development").strip().lower() != "production":
+        return ""
+    callback_uri = os.getenv("GOOGLE_REDIRECT_URI", "").strip()
+    try:
+        callback_host = (urlsplit(callback_uri).hostname or "").lower().rstrip(".")
+    except ValueError:
+        callback_host = ""
+    configured = os.getenv("COOKIE_DOMAIN", "").strip().lower().lstrip(".")
+    domain_pattern = r"(?=.{1,253}$)(?:[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?\.)+[a-z]{2,63}"
+    if configured:
+        if (not re.fullmatch(domain_pattern, configured)
+                or not callback_host or not (callback_host == configured or callback_host.endswith("." + configured))):
+            raise RuntimeError("COOKIE_DOMAIN must be a valid parent domain of GOOGLE_REDIRECT_URI.")
+        return configured
+    if callback_host.startswith("www."):
+        callback_host = callback_host[4:]
+    if not callback_host or not re.fullmatch(domain_pattern, callback_host):
+        return ""
+    return callback_host
+
+
 def _google_login_url(state: str, client_id: str, redirect_uri: str) -> str:
     params = {"client_id": client_id, "redirect_uri": redirect_uri, "response_type": "code",
               "scope": "openid email profile", "state": state, "prompt": "select_account"}
@@ -604,8 +635,14 @@ def _google_login_url(state: str, client_id: str, redirect_uri: str) -> str:
 
 
 def _verified_google_identity(code: str, state: str, request: Request) -> dict:
-    expected_state = _verify_cookie(request.cookies.get("agent_google_state", ""))
+    state_cookie = request.cookies.get("agent_google_state", "")
+    expected_state = _verify_cookie(state_cookie)
     if not state or not expected_state or not hmac.compare_digest(state, expected_state):
+        # Log only presence/match metadata. Never log the state, code, or cookie.
+        logging.getLogger(__name__).warning(
+            "Google OAuth state validation failed (state_cookie_present=%s, callback_state_present=%s)",
+            bool(state_cookie), bool(state),
+        )
         raise ValueError("Google sign-in expired or could not be validated. Please try again.")
     client_id, client_secret, redirect_uri = _google_oauth_settings()
     try:
@@ -738,10 +775,12 @@ def _redirect(location: str, headers=None):
     return Response(b"", "303 See Other", [("Location", location), ("Cache-Control", "no-store")] + list(headers or []))
 
 
-def _cookie(name: str, value: str, *, max_age: int, http_only=True):
+def _cookie(name: str, value: str, *, max_age: int, http_only=True, domain: str | None = None):
     secure = "; Secure" if os.getenv("APP_ENV", "development").lower() == "production" else ""
     http = "; HttpOnly" if http_only else ""
-    return ("Set-Cookie", f"{name}={value}; Path=/; Max-Age={max_age}; SameSite=Lax{http}{secure}")
+    selected_domain = _app_cookie_domain() if domain is None else domain.strip().lower().lstrip(".")
+    domain_attr = f"; Domain={selected_domain}" if selected_domain else ""
+    return ("Set-Cookie", f"{name}={value}; Path=/{domain_attr}; Max-Age={max_age}; SameSite=Lax{http}{secure}")
 
 
 def _csrf_valid(request: Request) -> bool:

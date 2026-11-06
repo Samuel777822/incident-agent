@@ -49,6 +49,9 @@ Open dashboard.render.com → your portal service → **Environment**. If you us
 | `SUPPORT_EMAIL` | `contact@agentdaemon.xyz` | shown in the footer, contact page, chatbot |
 | `ADMIN_PASSWORD_PRANAVVRAO_AGENTDAEMON_XYZ` | a long password you choose | password sign-in for Pranav (skip if you sign in with Google on that address) |
 | `ADMIN_PASSWORD_ABHAYSAMUEL_AGENTDAEMON_XYZ` | a long password you choose | password sign-in for Abhay |
+| `COOKIE_DOMAIN` | `agentdaemon.xyz` | shares secure login/OAuth cookies between apex and `www` hosts |
+| `GOOGLE_CLIENT_ID` / `GOOGLE_CLIENT_SECRET` | values from Google Cloud OAuth client | Google sign-in credentials |
+| `GOOGLE_REDIRECT_URI` | `https://agentdaemon.xyz/auth/google/callback` | must exactly match an Authorized redirect URI in Google Cloud Console |
 | `PORTAL_BASE_URL` | `https://incident-agent-portal.onrender.com` (or your domain, see step 5) | **must be right**: GitHub sends push webhooks to this address |
 | `PUSH_CHECKS_ENABLED` | `1` | push guard on |
 | `PUSH_POLL_SECONDS` | `180` | how often the worker looks for pushes the webhook missed |

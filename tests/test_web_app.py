@@ -189,6 +189,41 @@ def test_google_oauth_not_configured_fails_closed(web_env, monkeypatch):
     assert "Google sign-in is not configured yet" in body
 
 
+def test_production_cookie_domain_covers_apex_and_www_hosts(web_env, monkeypatch):
+    monkeypatch.setenv("APP_ENV", "production")
+    monkeypatch.setenv("GOOGLE_REDIRECT_URI", "https://agentdaemon.xyz/auth/google/callback")
+    assert web_app._app_cookie_domain() == "agentdaemon.xyz"
+
+    monkeypatch.setenv("GOOGLE_REDIRECT_URI", "https://www.agentdaemon.xyz/auth/google/callback")
+    assert web_app._app_cookie_domain() == "agentdaemon.xyz"
+
+
+def test_google_begin_sets_secure_parent_domain_state_cookie(web_env, monkeypatch):
+    monkeypatch.setenv("APP_ENV", "production")
+    monkeypatch.setenv("GOOGLE_CLIENT_ID", "client-id.apps.googleusercontent.com")
+    monkeypatch.setenv("GOOGLE_CLIENT_SECRET", "test-secret")
+    monkeypatch.setenv("GOOGLE_REDIRECT_URI", "https://agentdaemon.xyz/auth/google/callback")
+
+    status, headers, _ = _request("/auth/google")
+    assert status == "303 See Other"
+    state_cookie = next(v for k, v in headers if k.lower() == "set-cookie" and v.startswith("agent_google_state="))
+    assert "Domain=agentdaemon.xyz" in state_cookie
+    assert "SameSite=Lax" in state_cookie
+    assert "HttpOnly" in state_cookie
+    assert "Secure" in state_cookie
+
+
+def test_google_callback_clears_state_cookie_for_same_parent_domain(web_env, monkeypatch):
+    monkeypatch.setenv("APP_ENV", "production")
+    monkeypatch.setenv("GOOGLE_REDIRECT_URI", "https://www.agentdaemon.xyz/auth/google/callback")
+
+    status, headers, _ = _request("/auth/google/callback?error=access_denied")
+    assert status == "303 See Other"
+    clear_cookie = next(v for k, v in headers if k.lower() == "set-cookie" and v.startswith("agent_google_state="))
+    assert "Domain=agentdaemon.xyz" in clear_cookie
+    assert "Max-Age=0" in clear_cookie
+
+
 def test_google_login_url_has_openid_and_state():
     url = web_app._google_login_url("random-state-123", "client-id.apps.googleusercontent.com",
                                     "https://incident-agent-portal.onrender.com/auth/google/callback")
