@@ -85,7 +85,7 @@ NODE_CJS_SOURCE = r'''/* Agent Daemon Node.js runtime monitor. No third-party de
     globalThis.fetch = async (...args) => {
       const response = await originalFetch(...args);
       if (!sending && (response.status >= 500 || response.status === 429 ||
-          (response.status >= 400 && /(^|\.)((openrouter|api\.openai|api\.anthropic|api\.groq)\.ai|openrouter\.ai)$/.test(new URL(response.url || String(args[0]), "http://localhost").hostname)))) {
+          (response.status >= 400 && /(^|\.)((openrouter\.ai)|(api\.openai\.com)|(api\.anthropic\.com)|(api\.groq\.com))$/i.test(new URL(response.url || String(args[0]), "http://localhost").hostname)))) {
         const url = response.url || String(args[0] || "upstream");
         const host = (() => { try { return new URL(url).host; } catch (_) { return "upstream"; } })();
         const error = new Error("Upstream request failed: " + response.status + " " + host);
