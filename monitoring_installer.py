@@ -240,7 +240,7 @@ def open_monitoring_pr(*, owner: str, repo: str, base_branch: str, project_id: s
         branch += f"-{int(time.time())}"
     except GitHubInstallError: pass
 
-    paths = _repo_tree(api, token, base)
+    paths = _repo_tree(api, token, base_commit["tree"]["sha"])
     stacks = detect_stacks(paths)
     files = {}
     patched_files = []
