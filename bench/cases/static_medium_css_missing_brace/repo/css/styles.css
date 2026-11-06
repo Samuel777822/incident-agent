@@ -1,0 +1,211 @@
+:root {
+  --brand: #1f6f5b;
+  --accent: #e0a526;
+  --ink: #1d2327;
+  --paper: #fbfaf7;
+}
+* { box-sizing: border-box; }
+body { margin: 0; font-family: Georgia, serif; color: var(--ink); background: var(--paper); line-height: 1.5; }
+a { color: var(--brand); }
+img { max-width: 100%; height: auto; }
+.header {
+  margin: 0 auto;
+  padding: 12px 16px;
+  border-radius: 6px;
+}
+.header:hover {
+  outline: 2px solid var(--accent);
+}
+.header h2 {
+  margin: 0 0 8px;
+  font-size: 1.25rem;
+  color: var(--brand);
+}
+.nav {
+  margin: 0 auto;
+  padding: 12px 16px;
+  border-radius: 6px;
+}
+.nav:hover {
+  outline: 2px solid var(--accent);
+}
+.nav h2 {
+  margin: 0 0 8px;
+  font-size: 1.25rem;
+  color: var(--brand);
+}
+.hero {
+  margin: 0 auto;
+  padding: 12px 16px;
+  border-radius: 6px;
+}
+.hero:hover {
+  outline: 2px solid var(--accent);
+}
+.hero h2 {
+  margin: 0 0 8px;
+  font-size: 1.25rem;
+  color: var(--brand);
+}
+.card {
+  margin: 0 auto;
+  padding: 12px 16px;
+  border-radius: 6px;
+}
+.card:hover {
+  outline: 2px solid var(--accent);
+.card h2 {
+  margin: 0 0 8px;
+  font-size: 1.25rem;
+  color: var(--brand);
+}
+.grid {
+  margin: 0 auto;
+  padding: 12px 16px;
+  border-radius: 6px;
+}
+.grid:hover {
+  outline: 2px solid var(--accent);
+}
+.grid h2 {
+  margin: 0 0 8px;
+  font-size: 1.25rem;
+  color: var(--brand);
+}
+.footer {
+  margin: 0 auto;
+  padding: 12px 16px;
+  border-radius: 6px;
+}
+.footer:hover {
+  outline: 2px solid var(--accent);
+}
+.footer h2 {
+  margin: 0 0 8px;
+  font-size: 1.25rem;
+  color: var(--brand);
+}
+.form {
+  margin: 0 auto;
+  padding: 12px 16px;
+  border-radius: 6px;
+}
+.form:hover {
+  outline: 2px solid var(--accent);
+}
+.form h2 {
+  margin: 0 0 8px;
+  font-size: 1.25rem;
+  color: var(--brand);
+}
+.button {
+  margin: 0 auto;
+  padding: 12px 16px;
+  border-radius: 6px;
+}
+.button:hover {
+  outline: 2px solid var(--accent);
+}
+.button h2 {
+  margin: 0 0 8px;
+  font-size: 1.25rem;
+  color: var(--brand);
+}
+.badge {
+  margin: 0 auto;
+  padding: 12px 16px;
+  border-radius: 6px;
+}
+.badge:hover {
+  outline: 2px solid var(--accent);
+}
+.badge h2 {
+  margin: 0 0 8px;
+  font-size: 1.25rem;
+  color: var(--brand);
+}
+.table {
+  margin: 0 auto;
+  padding: 12px 16px;
+  border-radius: 6px;
+}
+.table:hover {
+  outline: 2px solid var(--accent);
+}
+.table h2 {
+  margin: 0 0 8px;
+  font-size: 1.25rem;
+  color: var(--brand);
+}
+.faq {
+  margin: 0 auto;
+  padding: 12px 16px;
+  border-radius: 6px;
+}
+.faq:hover {
+  outline: 2px solid var(--accent);
+}
+.faq h2 {
+  margin: 0 0 8px;
+  font-size: 1.25rem;
+  color: var(--brand);
+}
+.banner {
+  margin: 0 auto;
+  padding: 12px 16px;
+  border-radius: 6px;
+}
+.banner:hover {
+  outline: 2px solid var(--accent);
+}
+.banner h2 {
+  margin: 0 0 8px;
+  font-size: 1.25rem;
+  color: var(--brand);
+}
+.gallery {
+  margin: 0 auto;
+  padding: 12px 16px;
+  border-radius: 6px;
+}
+.gallery:hover {
+  outline: 2px solid var(--accent);
+}
+.gallery h2 {
+  margin: 0 0 8px;
+  font-size: 1.25rem;
+  color: var(--brand);
+}
+.price {
+  margin: 0 auto;
+  padding: 12px 16px;
+  border-radius: 6px;
+}
+.price:hover {
+  outline: 2px solid var(--accent);
+}
+.price h2 {
+  margin: 0 0 8px;
+  font-size: 1.25rem;
+  color: var(--brand);
+}
+.tag {
+  margin: 0 auto;
+  padding: 12px 16px;
+  border-radius: 6px;
+}
+.tag:hover {
+  outline: 2px solid var(--accent);
+}
+.tag h2 {
+  margin: 0 0 8px;
+  font-size: 1.25rem;
+  color: var(--brand);
+}
+@media (max-width: 600px) {
+  .grid { display: block; }
+  .nav { text-align: center; }
+  .hero { padding: 24px 8px; }
+}
+.grid { display: grid; grid-template-columns: repeat(3, 1fr); gap: 16px; }
+.button { background: var(--brand); color: white; border: 0; cursor: pointer; }

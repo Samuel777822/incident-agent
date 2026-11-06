@@ -1,0 +1,4 @@
+{
+  "message": "TypeError: Cannot read properties of undefined (reading 'price') when someone orders a product that does not exist.",
+  "traceback": "file:///app/src/inventory.js:16\n    throw new OutOfStock(`unknown sku: ${sku}`);\n          ^\n\nOutOfStock [Error]: unknown sku: juice\n    at getStock (file:///app/src/inventory.js:16:11)\n    at Module.createOrder (file:///app/src/orders.js:10:7)\n    at file:///app/[eval1]:1:39\n\nNode.js v22.22.2\n"
+}

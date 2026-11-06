@@ -1,103 +1,96 @@
 # Agent Daemon
 
-An AI on-call engineer for Python apps. Customers connect a GitHub repository, monitoring is added to it
-automatically, errors are grouped into incidents, an LLM diagnoses them, and a fix is proposed as a pull request.
+**Push your code. Agent Daemon catches what broke, fixes it, and pushes the fix back to GitHub, before you deploy.**
 
-## What the portal does
+Built for vibe coders, students and hackathon teams. Works with Python, JavaScript, TypeScript (React, Next.js, Node, Vite),
+Java (Maven, Gradle, plain `javac`) and plain HTML/CSS/JS sites, including repositories that mix several of them.
 
-| Page | Who | Purpose |
-| --- | --- | --- |
-| `/dashboard` | customer | Projects, whether each one is live, incidents and what the agent did, plan and days left |
-| `/billing` | customer | Plan and expiry, one-time free-trial request, pay for a plan |
-| `/projects/new` | customer | Connect a repository. Monitoring is installed automatically |
-| `/admin` | the two admins | Customers, trial requests, UPI payments to confirm, apps and their health, incidents, email status |
-
-Only the emails in `ADMIN_EMAILS` are administrators. They are sent to `/admin` and never see customer pages.
-Admin accounts cannot be registered on the public sign-up form.
-
-## Access rules
-
-* **Free trial:** one per customer, ever. The customer requests it, an admin approves it, and one day of access
-  starts at that moment.
-* **Paid plans:** ₹100 for 30 days, ₹1,000 for 365 days. Renewals extend the current expiry.
-* A paid plan is never downgraded to "trial" by a later grant. Revoking pauses the customer's projects and granting
-  access again resumes them. A project the customer paused themselves stays paused.
-
-## Payments
-
-**Instant, optional (needs a Razorpay account, not in use).** Set `RAZORPAY_KEY_ID` and `RAZORPAY_KEY_SECRET` and the pay buttons open Razorpay Checkout
-(UPI apps such as Paytm, PhonePe and Google Pay, plus cards). The amount is created on the server, so a customer can only
-pay the plan price. Access starts when Razorpay reports the payment as captured, through `/billing/verify` or through
-the signed webhook `/webhooks/razorpay` (set `RAZORPAY_WEBHOOK_SECRET`). Nobody has to approve anything.
-
-**Paytm QR with admin confirmation (the mode in use).** A personal UPI QR cannot tell this site that money arrived, so:
-1. The customer pays the QR (the site shows a QR with the exact amount, plus a plain one as a fallback) and enters the UPI reference (UTR).
-2. The customer is told to wait 1 to 2 hours and gets an email saying so. Both admins get an email: *customer X says they paid ₹100*.
-3. An admin opens Paytm, finds that reference and amount, then presses **I received ₹100 · grant 30 days** on `/admin` (or **Not received**).
-4. The customer's access starts, and they get an email. Nothing unlocks without that click.
-References must look like a UTR and must be unique across all customers. `UPI_ID` and `UPI_PAYEE_NAME` set the recipient.
-On `/admin`, customers needing action are listed first, and each row shows Trial, Paid or No access with the expiry.
-
-## Email
-
-Render's free tier blocks SMTP, so the default provider is an HTTPS API:
-
-| Variable | Purpose |
+| Doc | What is in it |
 | --- | --- |
-| `BREVO_API_KEY` | Brevo API key (or `RESEND_API_KEY` for Resend) |
-| `EMAIL_FROM` | A sender address verified with the provider |
-| `ADMIN_EMAILS` | Comma-separated admin emails; each gets every admin alert |
-| `PORTAL_BASE_URL` | Public URL used in email links |
+| [ARCHITECTURE.md](ARCHITECTURE.md) | Both architectures (push guard and live error watch), components, data model, stages, algorithms |
+| [DEPLOY.md](DEPLOY.md) | Step by step, for beginners: Render, the sandbox server, GitHub, email, domain, first test |
+| [FIXENGINE.md](FIXENGINE.md) | The fix engine: router, quotas, sandbox, languages, budget |
+| [RUN_TESTS.md](RUN_TESTS.md) | Running the tests, the Docker images, the sandbox abuse check and the paid benchmark on your laptop |
+| [CHANGELOG.md](CHANGELOG.md) | What changed and why |
 
-Every attempt is stored and shown in **Admin → Email status**, including the provider's error. "Accepted" means the
-provider took the message. It does not guarantee inbox delivery. The **Send test email** button checks the setup.
-SMTP (`SMTP_HOST`, `SMTP_PORT`, `SMTP_USERNAME`, `SMTP_PASSWORD`) still works on hosts that allow it.
+## Two ways to catch bugs (a project can use one or both)
 
-## Automatic monitoring install
+1. **Push guard (new, recommended).** Connecting a repository adds a GitHub webhook. Every push to the tracked branch is
+   downloaded into a fresh sandbox; every project inside the repo is installed, built (and type-checked), tested and started.
+   The commit gets an `Agent Daemon / push check` status on GitHub. If it is red, an incident opens and the fix engine starts.
+   If the webhook cannot be added, the worker polls the branch every few minutes instead.
+2. **Live error watch (classic).** A small reporter inside the running app (installed automatically for Python apps; any language
+   can POST to `/ingest`) sends crashes; they are grouped into incidents and go to the same fix engine.
 
-Connecting a project asks the customer for nothing technical. The portal opens a pull request that adds `incident_agent_monitor.py`, one import
-line in the app's entry file (`app.py`, `main.py`, `wsgi.py`, ...) and `incident_agent_config.json` with the project's ingest URL and key, then merges it
-automatically when GitHub allows. The client reports unhandled exceptions, logged errors and a heartbeat every 5 minutes, never raises into the app, and
-uses short timeouts.
+The fix engine: free first look → cost-aware router (expected-cost dynamic program) picks Normal / High / Extra → the model returns a
+small patch as text → policy check → **the same sandbox check must pass** → branch `agent-daemon/fix-…` + pull request → in Auto mode
+it is merged once proven, so the fixed version is on GitHub. Everything is shown live on the dashboard.
 
-* The branch is optional. If it is empty or does not exist, the repository's default branch is used and saved.
-* The key is stored in the repository for private and public repositories alike, so there are no environment variables to set. The key can only send
-  events for its own project. For **public** repositories the project is forced into pull-request mode (never auto-merge), because the key is visible
-  and anyone could send fake errors. A person always reviews fixes there.
-* If the install fails, the customer sees the specific reason (branch, repository, token permission) and presses **Install monitoring** again after fixing it.
+## Pages
 
-## Environment variables
-
-| Variable | Required | Purpose |
+| Page | Who | What |
 | --- | --- | --- |
-| `APP_ENV` | yes | `production` on Render |
-| `DATABASE_URL` | production | PostgreSQL URL (SQLite is used locally) |
-| `SESSION_SECRET` | yes | 32+ random characters |
-| `TOKEN_ENCRYPTION_KEY` | yes | Fernet key; encrypts GitHub tokens and ingest keys |
-| `GROQ_API_KEY` | yes | Diagnosis |
-| `ADMIN_EMAILS` | yes | The two admin emails |
-| `ADMIN_PASSWORD_<EMAIL>` | one way to sign in | Password for an admin, `<EMAIL>` is the email upper-cased with non-letters/digits as `_` |
-| `GOOGLE_CLIENT_ID`, `GOOGLE_CLIENT_SECRET` | optional | Google sign-in |
-| `BREVO_API_KEY`, `EMAIL_FROM` | for email | see above |
-| `RAZORPAY_KEY_ID`, `RAZORPAY_KEY_SECRET`, `RAZORPAY_WEBHOOK_SECRET` | optional, gateway payments | see above |
-| `PORTAL_RUN_WORKER` | optional | `1` (default) runs the diagnosis worker inside the web service, as the free tier needs |
+| `/` `/how-it-works` `/pricing` `/features` `/faq` `/help` | everyone | Product, the interactive architecture diagram, plans |
+| `/dashboard` | customer | Tries left per mode, "Agent right now" (live stage + mode + tries left), projects |
+| `/projects/new` | customer | Connect a repo (1 included, ₹30 per extra project) |
+| `/projects/<id>` | customer | Push checks (per stack), bugs and fixes, settings |
+| `/usage` | customer | Tries per mode, Auto / Ask me / Economy, decisions, buy packs |
+| `/billing` | customer | Plans (30 Normal / 6 High / 3 Extra a month), add-ons, UPI payments |
+| `/admin` | admins | Customers, trials, UPI payments to confirm (plans, slots, packs), apps, incidents, tickets, email |
+| `/admin/fix` | admins | Spend vs budget, kill switches, held requests |
+| `/admin/architecture` | admins | System + model-adapter architecture, the cost function with live numbers, router simulator |
 
-Generate a Fernet key with `python -c "from cryptography.fernet import Fernet; print(Fernet.generate_key().decode())"`.
-Never commit secrets or runtime logs.
+## Plans
+
+* ₹200 / 30 days or ₹1,500 / 365 days. Every month: **30 Normal, 6 High, 3 Extra** tries plus Low effort on fair use. No rollover.
+* **1 project included; each extra project is a one-time ₹30** (the slot stays on the account). Tries are per account.
+* Add-ons: ₹100 = 5 High tries or 3 Extra tries for the current month.
+* Payment: UPI QR + UTR, confirmed by an admin (one button, which says exactly what it grants).
+* One place for every number: `plans.py` (prices, products) and `fixengine/config.py` (quotas, caps, model prices).
+
+## Admins and support
+
+Admins are `pranavvrao@agentdaemon.xyz` and `abhaysamuel@agentdaemon.xyz` (default; `ADMIN_EMAILS` overrides).
+Support address: `contact@agentdaemon.xyz` (default; `SUPPORT_EMAIL` overrides). Admin addresses cannot sign up on the public form.
+
+## Run it locally
+
+```
+python -m venv .venv && source .venv/bin/activate        # Windows: .venv\Scripts\activate
+python -m pip install -r requirements.txt
+export SESSION_SECRET=$(python -c "import secrets;print(secrets.token_urlsafe(40))")
+python web_app.py                                         # http://127.0.0.1:8080  (SQLite, no worker)
+python portal_worker.py                                   # second terminal: checks, fixes, polling
+```
 
 ## Tests
 
 ```
-pip install -r requirements.txt
-python -m pytest -q
+python -m pip install -r requirements-test.txt
+python -m pytest -q          # 328 tests, offline; Node / a JDK make a few extra language tests run
 ```
 
-The suite covers sign-up, navigation, the trial rules, atomic approvals, manual and gateway payments, the webhook,
-email providers (mocked), the admin page, the zero-touch installer, and an end-to-end run of the monitoring client
-against a live local portal. PostgreSQL-specific paths are not covered by automated tests.
+## Environment variables
 
-## Known limits
+See [DEPLOY.md](DEPLOY.md) for where each one goes. Most important:
 
-* Render's free PostgreSQL database expires after about 30 days. Move `DATABASE_URL` to a durable database before then.
-* Free web services sleep when idle. The built-in worker only runs while the service is awake (UptimeRobot pings `/health`).
-* Auto-fix only supports Python repositories. Auto-merge happens only when GitHub checks pass.
+| Variable | Purpose |
+| --- | --- |
+| `APP_ENV`, `DATABASE_URL`, `SESSION_SECRET`, `TOKEN_ENCRYPTION_KEY` | core (PostgreSQL in production, Fernet key for tokens) |
+| `PORTAL_BASE_URL` | public URL; used for webhook URLs, email links and commit-status links |
+| `ADMIN_EMAILS`, `SUPPORT_EMAIL`, `ADMIN_PASSWORD_<EMAIL>` | admins, support address, admin password sign-in |
+| `BREVO_API_KEY`, `EMAIL_FROM` | email over HTTPS |
+| `GROQ_API_KEY`, `ANTHROPIC_API_KEY`, `OPENROUTER_API_KEY`, `FIXENGINE_PROVIDER` | AI providers |
+| `FIXENGINE_ENABLED` | `1` turns on the multi-language fix engine |
+| `FIXENGINE_SANDBOX_MODE=remote`, `FIXENGINE_SANDBOX_URL`, `FIXENGINE_SANDBOX_SECRET` | the sandbox server (Render cannot run Docker) |
+| `PUSH_CHECKS_ENABLED` (default `1`), `PUSH_POLL_SECONDS` (180), `PUSH_MAX_CHECKS_PER_HOUR` (12) | push guard |
+| `FIXENGINE_BUDGET_INR`, `FIXENGINE_CREDITS_INR` | global budget B and prepaid credits |
+| `PLAN_PRICE_MONTHLY_INR`, `PLAN_PRICE_YEARLY_INR`, `PROJECT_SLOT_PRICE_INR` | change prices without a code change |
+| `UPI_ID`, `UPI_PAYEE_NAME` | UPI recipient |
+
+Never commit secrets. Keys go only into Render's Environment screen (or a local `.env`, which git ignores).
+
+## Legacy files
+
+`server.py`, `agent_daemon.py`, `db.py`, `sync_and_tail.py`, `workflows.py`, `autofix.py`, `pr.py`, `repos.json` and friends are the
+original single-repo daemon (coffee-shop demo, runs as its own Render service). They are kept so that service keeps working.

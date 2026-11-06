@@ -1,0 +1,4 @@
+{
+  "message": "The app crashes on start-up since yesterday's inventory refactor.",
+  "traceback": "file:///app/src/orders.js:3\nimport { getStock, OutOfStock, reserve } from './inventory.js';\n         ^^^^^^^^\nSyntaxError: The requested module './inventory.js' does not provide an export named 'getStock'\n    at ModuleJob._instantiate (node:internal/modules/esm/module_job:226:21)\n    at async ModuleJob.run (node:internal/modules/esm/module_job:335:5)\n    at async onImport.tracePromise.__proto__ (node:internal/modules/esm/loader:665:26)\n\nNode.js v22.22.2\n"
+}

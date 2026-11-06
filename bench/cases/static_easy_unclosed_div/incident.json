@@ -1,0 +1,4 @@
+{
+  "message": "The home page layout is broken: the second card swallows everything below it.",
+  "traceback": "index.html:33: unclosed <div> (still open at </section> on line 49)\nstatic_check: 1 errors in 9 files\n"
+}

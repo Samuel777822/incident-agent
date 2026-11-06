@@ -27,9 +27,20 @@ _SECRET_ENV = ("BREVO_API_KEY", "RESEND_API_KEY", "SMTP_PASSWORD")
 _SENDER_NAME = "Agent Daemon"
 
 
+# The two founders are the only administrators. ADMIN_EMAILS in Render overrides this list (comma separated);
+# leave it unset, or set it to exactly these two addresses. Admin addresses can never be registered on the public sign-up form.
+DEFAULT_ADMIN_EMAILS = ("pranavvrao@agentdaemon.xyz", "abhaysamuel@agentdaemon.xyz")
+DEFAULT_SUPPORT_EMAIL = "contact@agentdaemon.xyz"
+
+
 def admin_emails() -> list[str]:
-    raw = os.getenv("ADMIN_EMAILS", "") or os.getenv("ADMIN_EMAIL", "")
+    raw = os.getenv("ADMIN_EMAILS", "") or os.getenv("ADMIN_EMAIL", "") or ",".join(DEFAULT_ADMIN_EMAILS)
     return sorted({item.strip().lower() for item in raw.split(",") if item.strip()})
+
+
+def support_email() -> str:
+    """Public support address (Contact page, footer, ticket emails, chatbot). SUPPORT_EMAIL overrides the default."""
+    return os.getenv("SUPPORT_EMAIL", "").strip() or DEFAULT_SUPPORT_EMAIL
 
 
 def sender() -> str:
@@ -72,28 +83,36 @@ def _post_json(name: str, url: str, headers: dict, payload: dict) -> None:
         raise RuntimeError(f"{name} rejected the message (HTTP {response.status_code}): {response.text[:200]}")
 
 
-def _send_brevo(to: str, subject: str, body: str) -> None:
+def _send_brevo(to: str, subject: str, body: str, html: str | None = None) -> None:
+    payload = {"sender": {"name": _SENDER_NAME, "email": sender()}, "to": [{"email": to}],
+               "subject": subject, "textContent": body}
+    if html:
+        payload["htmlContent"] = html
     _post_json("Brevo", "https://api.brevo.com/v3/smtp/email",
                {"api-key": os.environ["BREVO_API_KEY"].strip(), "accept": "application/json",
                 "content-type": "application/json"},
-               {"sender": {"name": _SENDER_NAME, "email": sender()}, "to": [{"email": to}],
-                "subject": subject, "textContent": body})
+               payload)
 
 
-def _send_resend(to: str, subject: str, body: str) -> None:
+def _send_resend(to: str, subject: str, body: str, html: str | None = None) -> None:
+    payload = {"from": f"{_SENDER_NAME} <{sender()}>", "to": [to], "subject": subject, "text": body}
+    if html:
+        payload["html"] = html
     _post_json("Resend", "https://api.resend.com/emails",
                {"Authorization": "Bearer " + os.environ["RESEND_API_KEY"].strip(),
                 "Content-Type": "application/json"},
-               {"from": f"{_SENDER_NAME} <{sender()}>", "to": [to], "subject": subject, "text": body})
+               payload)
 
 
-def _send_smtp(to: str, subject: str, body: str) -> None:
+def _send_smtp(to: str, subject: str, body: str, html: str | None = None) -> None:
     port = int(os.getenv("SMTP_PORT", "587"))
     message = EmailMessage()
     message["From"] = sender()
     message["To"] = to
     message["Subject"] = subject
     message.set_content(body)
+    if html:
+        message.add_alternative(html, subtype="html")
     host = os.environ["SMTP_HOST"].strip()
     client = smtplib.SMTP_SSL(host, port, timeout=15) if port == 465 else smtplib.SMTP(host, port, timeout=15)
     with client as smtp:
@@ -105,8 +124,8 @@ def _send_smtp(to: str, subject: str, body: str) -> None:
         smtp.send_message(message)
 
 
-def send_now(to: str, subject: str, body: str, kind: str = "notice") -> tuple[bool, str]:
-    """Send one message and return (accepted_by_provider, detail)."""
+def send_now(to: str, subject: str, body: str, kind: str = "notice", html: str | None = None) -> tuple[bool, str]:
+    """Send one message and return (accepted_by_provider, detail). Supports optional HTML."""
     if not configured():
         detail = "Email is not configured. Set BREVO_API_KEY (or RESEND_API_KEY) and EMAIL_FROM."
         log.warning("Email not sent to %s: %s", to, detail)
@@ -114,7 +133,7 @@ def send_now(to: str, subject: str, body: str, kind: str = "notice") -> tuple[bo
         return False, detail
     name = provider()
     try:
-        {"brevo": _send_brevo, "resend": _send_resend, "smtp": _send_smtp}[name](to, subject, body)
+        {"brevo": _send_brevo, "resend": _send_resend, "smtp": _send_smtp}[name](to, subject, body, html=html)
     except Exception as exc:
         detail = _scrub(f"{type(exc).__name__}: {exc}")[:300]
         log.warning("Email to %s failed via %s: %s", to, name, detail)
@@ -155,3 +174,6 @@ def send_test_to_admins() -> list[tuple[str, bool, str]]:
                               "If you can read it, admin alerts reach this inbox.", "test")
         results.append((address, ok, detail))
     return results
+
+
+

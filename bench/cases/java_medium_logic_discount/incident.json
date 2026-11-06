@@ -1,0 +1,4 @@
+{
+  "message": "Customers who use a 10% discount code get the item for free: a 200 item shows 0 instead of 180 (reported by support).",
+  "traceback": "FAIL ten percent off 200: expected 180.0 but was 0.0\nFAIL line total with discount: expected 270.0 but was 0.0\nFAIL order total with discount: expected 216.0 but was 0.0\nFAIL order total with tax: expected 254.88 but was 0.0\n4 failed, 87 passed\n"
+}

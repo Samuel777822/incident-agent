@@ -1,0 +1,4 @@
+{
+  "message": "Customers were charged 20 instead of 180 for a 10% discount (reported by support)",
+  "traceback": "FAIL  tests/test_orders.py::test_order_total -- AssertionError:  (test_orders.py:6)\nFAIL  tests/test_pricing.py::test_discount -- AssertionError:  (test_pricing.py:5)\nFAIL  tests/test_pricing.py::test_line -- AssertionError:  (test_pricing.py:9)\nSUMMARY {'PASS': 37, 'FAIL': 3, 'SKIP': 0, 'ERROR': 0}\n3 failed, 37 passed in 0.1s\n"
+}

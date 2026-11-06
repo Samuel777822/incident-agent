@@ -9,7 +9,7 @@ def get_repo_config(service):
     cfg = repos.get(service)
     if not cfg:
         raise ValueError(
-            f"No repository configured for service '{service}'. Run add_repo.py first."
+            f"No repository configured for service '{service}'. Add it to repos.json first."
         )
     cfg.setdefault("mode", "report")
     cfg.setdefault("branch", "main")

@@ -1,0 +1,10 @@
+# Sandbox image for JavaScript / TypeScript projects and for static HTML/CSS/JS sites (python3 runs the site checker). Build:  docker build -f sandbox/Dockerfile.node -t fixengine-sandbox-node:1 sandbox
+FROM node:22-slim
+RUN apt-get update && apt-get install -y --no-install-recommends python3 && rm -rf /var/lib/apt/lists/* \
+ && useradd --uid 10001 --no-create-home --shell /usr/sbin/nologin sandbox \
+ && mkdir /work && chown 10001:10001 /work
+COPY smoke.py /opt/smoke.py
+COPY static_check.py /opt/static_check.py
+ENV HOME=/tmp NPM_CONFIG_CACHE=/tmp/.npm CI=1
+USER 10001
+WORKDIR /work

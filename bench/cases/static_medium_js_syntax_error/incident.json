@@ -1,0 +1,4 @@
+{
+  "message": "The cart does nothing any more; the browser console shows a syntax error.",
+  "traceback": "js/cart.js:15: SyntaxError: Unexpected identifier 'total'\nstatic_check: 1 errors in 9 files\n"
+}

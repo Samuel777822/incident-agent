@@ -1,8 +1,11 @@
-"""Tenant-aware diagnosis worker for portal incidents.
+"""The background worker: push checks, incidents, fixes and auto-merges.
 
-The worker reads repository files as evidence, may create a constrained fix PR,
-and merges only auto-mode PRs with passing GitHub checks. It never executes
-customer code or tests. Run with the portal service supervisor.
+Every loop it:
+  1. checks one pushed commit in the sandbox (push guard, architecture v3; free, no AI),
+  2. works on one incident (the fix engine when FIXENGINE_ENABLED=1, otherwise the classic diagnosis),
+  3. resumes decisions customers did not answer in time,
+  4. every few minutes polls GitHub for pushes the webhook may have missed, and merges proven Auto-mode fixes.
+Customer code only ever runs inside the sandbox (see fixengine/sandbox.py), never on this machine.
 """
 
 from __future__ import annotations
@@ -18,6 +21,7 @@ from cryptography.fernet import Fernet, InvalidToken
 import httpx
 
 import portal_db
+import push_watch
 from diagnose import diagnose_incident
 from run_diagnosis import build_evidence_text
 from portal_remediation import submit_fix_pr, process_auto_merges
@@ -25,6 +29,9 @@ from portal_remediation import submit_fix_pr, process_auto_merges
 LOG = logging.getLogger("portal_worker")
 _STOP = False
 _REPO_PART = re.compile(r"^[A-Za-z0-9_.-]{1,100}$")
+SOURCE_EXT = (".py", ".js", ".jsx", ".ts", ".tsx", ".mjs", ".cjs", ".java", ".html", ".htm", ".css", ".scss", ".vue", ".svelte")
+MANIFEST_NAMES = {"requirements.txt", "pyproject.toml", "setup.py", "setup.cfg", "package.json", "tsconfig.json", "pom.xml",
+                  "build.gradle", "build.gradle.kts"}
 
 
 class WorkerError(RuntimeError):
@@ -47,7 +54,7 @@ def _decrypt_token(ciphertext: str) -> str:
 
 
 def _recent_diffs(client, api, shas, max_commits=2, per_file=1200, total=3000):
-    """Diffs of the newest commits' .py files, so the model sees WHAT changed, not just the commit title."""
+    """Diffs of the newest commits' source files, so the model sees WHAT changed, not just the commit title."""
     out, used = [], 0
     for full_sha in shas[:max_commits]:
         if not full_sha:
@@ -57,7 +64,7 @@ def _recent_diffs(client, api, shas, max_commits=2, per_file=1200, total=3000):
             continue
         for item in (resp.json().get("files") or [])[:5]:
             name, patch = str(item.get("filename", "")), str(item.get("patch") or "")
-            if not patch or not name.endswith(".py"):
+            if not patch or not name.endswith(SOURCE_EXT):
                 continue
             block = f"--- commit {full_sha[:12]} changed {name} ---\n{patch[:per_file]}\n"
             if used + len(block) > total:
@@ -108,14 +115,15 @@ def _repository_evidence(project: dict, traceback: str) -> tuple[str, dict[str, 
                     continue
                 if parts[-1].startswith(".env") or parts[-1].lower() in {"secrets.py", "settings_secret.py"}:
                     continue
-                if path.endswith(".py") and int(item.get("size", 0) or 0) <= 80000:
+                if path.endswith(SOURCE_EXT) and int(item.get("size", 0) or 0) <= 80000:
                     py_paths.append(path)
-                elif parts[-1] in {"requirements.txt", "pyproject.toml", "setup.py", "setup.cfg"} and int(item.get("size", 0) or 0) <= 20000:
+                elif parts[-1] in MANIFEST_NAMES and int(item.get("size", 0) or 0) <= 20000:
                     py_paths.append(path)
             frame_basenames = re.findall(r'File ["\']([^"\']+)["\'], line \d+', traceback or "")
+            frame_basenames += re.findall(r"([\w./-]+\.(?:py|js|jsx|ts|tsx|mjs|cjs|java|html|css))[:(]\d+", traceback or "")
             frame_names = {path.replace("\\", "/").split("/")[-1] for path in frame_basenames}
             py_paths.sort(key=lambda p: (0 if p.split("/")[-1] in frame_names else 1,
-                                         0 if p.endswith(".py") else 1, len(p), p))
+                                         0 if p.endswith(SOURCE_EXT) else 1, len(p), p))
             selected = py_paths[:20]
             total = 0
             for path in selected:
@@ -164,6 +172,20 @@ def _repository_evidence(project: dict, traceback: str) -> tuple[str, dict[str, 
     return evidence, source_files
 
 
+_ENGINE = None
+
+
+def _engine():
+    """The cost-controlled fix engine (fixengine/). Off unless FIXENGINE_ENABLED=1; the older flow is untouched."""
+    global _ENGINE
+    if _ENGINE is None:
+        from fixengine import orchestrator
+        if not orchestrator.enabled():
+            return None
+        _ENGINE = orchestrator.Engine()
+    return _ENGINE
+
+
 def process_one() -> bool:
     incident = portal_db.claim_next_incident(
         min_occurrences=int(os.getenv("WORKER_MIN_OCCURRENCES", "1")),
@@ -181,11 +203,28 @@ def process_one() -> bool:
         return True
 
     try:
+        portal_db.set_incident_stage(incident_id, "diagnosing" if _engine() is None or incident.get("mode") not in ("pr", "auto") else "downloading")
+    except Exception:
+        pass
+    if incident.get("mode") in ("pr", "auto") and _engine() is not None:
+        try:
+            outcome = _engine().handle_incident(incident)
+            LOG.info("Fix engine finished incident %s: %s", incident_id, outcome)
+        except Exception as exc:
+            portal_db.fail_diagnosis(incident_id, project_id, exc.__class__.__name__)
+            LOG.exception("Fix engine crashed on incident %s", incident_id)
+        return True
+
+    try:
         evidence, source_files = _repository_evidence(incident, event.get("traceback", ""))
         result = diagnose_incident(event.get("message", ""), event.get("traceback", ""), evidence)
         if not portal_db.complete_diagnosis(incident_id, project_id, result):
             raise WorkerError("Incident was no longer owned by this worker")
         LOG.info("Diagnosis completed for incident %s", incident_id)
+        if incident.get("mode") in ("pr", "auto") and incident.get("source") == "push":
+            portal_db.mark_remediation_needs_human(
+                incident_id, project_id, "The automatic fixer is switched off (FIXENGINE_ENABLED=0), so only a diagnosis was made.")
+            return True
         if incident.get("mode") in ("pr", "auto"):
             if not (result.get("category") == "code_bug"
                     and result.get("confidence") == "high"
@@ -230,16 +269,26 @@ def main() -> None:
     poll_seconds = max(1, int(os.getenv("WORKER_POLL_SECONDS", "5")))
     LOG.info("Portal incident worker started")
     next_merge_poll = 0.0
+    next_push_poll = 0.0
     while not _STOP:
         try:
             portal_db.touch_worker()
         except Exception:
             LOG.exception("Could not record worker heartbeat")
+        worked = False
         try:
-            worked = process_one()
+            worked = push_watch.process_one() or worked
+        except Exception:
+            LOG.exception("Push check failed")
+        try:
+            worked = process_one() or worked
         except Exception:
             LOG.exception("Worker loop failed")
-            worked = False
+        try:
+            if _engine() is not None:
+                _engine().resume_expired_choices()
+        except Exception:
+            LOG.exception("Could not resume expired fix choices")
         now = time.monotonic()
         if now >= next_merge_poll and not _STOP:
             try:
@@ -247,6 +296,14 @@ def main() -> None:
             except Exception:
                 LOG.exception("Auto-merge check failed")
             next_merge_poll = now + max(15, int(os.getenv("AUTO_MERGE_POLL_SECONDS", "30")))
+        if now >= next_push_poll and not _STOP:
+            try:
+                queued = push_watch.poll_once()
+                if queued:
+                    LOG.info("Push poll queued %s new commit(s)", queued)
+            except Exception:
+                LOG.exception("Push poll failed")
+            next_push_poll = now + max(60, int(os.getenv("PUSH_POLL_SECONDS", "180")))
         if not worked and not _STOP:
             time.sleep(min(poll_seconds, 5))
     LOG.info("Portal diagnosis worker stopped")

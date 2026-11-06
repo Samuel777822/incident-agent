@@ -1,0 +1,4 @@
+{
+  "message": "NameError: name 'totl' is not defined",
+  "traceback": "Traceback (most recent call last):\n  File \"<string>\", line 2, in <module>\n  File \"/app/reports.py\", line 8, in sales_total\n    return round(totl, 2)\n                 ^^^^\nNameError: name 'totl' is not defined. Did you mean: 'total'?\n"
+}

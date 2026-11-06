@@ -1,0 +1,4 @@
+{
+  "message": "The Products page has no styling at all, the other pages look fine.",
+  "traceback": "products.html:7: missing file css/style.css\nstatic_check: 1 errors in 9 files\n"
+}

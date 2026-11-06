@@ -1,0 +1,4 @@
+{
+  "message": "The product list will not load (the browser says the data is invalid).",
+  "traceback": "data/products.json:15: invalid JSON: Expecting value: line 15 column 3 (char 179)\nstatic_check: 1 errors in 9 files\n"
+}

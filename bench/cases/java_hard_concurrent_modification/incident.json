@@ -1,0 +1,4 @@
+{
+  "message": "Checkout sometimes crashes when the cart contains sold-out items; it works when only one item is sold out.",
+  "traceback": "ERROR in CartTest\njava.util.ConcurrentModificationException\n\tat java.base/java.util.ArrayList$Itr.checkForComodification(ArrayList.java:1095)\n\tat java.base/java.util.ArrayList$Itr.next(ArrayList.java:1049)\n\tat com.shop.Cart.removeUnavailable(Cart.java:23)\n\tat com.shop.CartTest.run(CartTest.java:10)\n\tat com.shop.AllTests.runOne(AllTests.java:7)\n\tat com.shop.AllTests.main(AllTests.java:17)\n1 failed, 89 passed\n"
+}

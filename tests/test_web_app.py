@@ -74,9 +74,24 @@ def test_login_page_offers_google_only(web_env):
 
 
 def test_home_page_explains_the_product_and_the_github_token(web_env):
-    _, _, body = _request("/")
+    status, headers, body = _request("/")
+    assert status == "200 OK"
     for text in ("How it works", "Make your repository private", "Tokens (classic)", "<code>repo</code>", "<code>workflow</code>"):
         assert text in body
+    assert 'id="hstage-0"' in body
+    assert 'id="hstage-1"' in body
+    assert 'id="hstage-2"' in body
+    assert 'id="hstage-3"' in body
+    assert "/assets/home.js" in body
+    assert "setHeroStage" in body
+    # Verify CSP permits inline and self scripts
+    csp = dict(headers)["Content-Security-Policy"]
+    assert "script-src 'self' 'unsafe-inline'" in csp
+    # Verify /assets/home.js is served
+    h_status, h_headers, h_body = _request("/assets/home.js")
+    assert h_status == "200 OK"
+    assert "setHeroStage" in h_body
+    assert "switchShowcase" in h_body
 
 
 def test_email_signup_and_login_are_gone(web_env):
@@ -216,3 +231,373 @@ def test_google_sign_in_links_to_an_existing_account_with_the_same_email(web_env
     assert user["id"] == old_id and user["email"] == "admin2@example.com"
     again = web_app.portal_db.get_or_create_google_user("admin2@example.com", "google-sub-777", True)
     assert again["id"] == old_id
+
+
+def test_about_page_and_founder_assets(web_env):
+    status, _, body = _request("/about")
+    assert status == "200 OK"
+    for expected in (
+        "About Us &amp; Co-Founders",
+        "Abhay Samuel H",
+        "Co-Founder &amp; CTO",
+        "Pranav V Rao",
+        "Co-Founder &amp; Systems Architect",
+        "/assets/daemon-founder-abhay.webp",
+        "/assets/daemon-founder-pranav.webp",
+        "https://github.com/Samuel777822",
+        "https://github.com/pranavvrao1-ai",
+        "https://www.linkedin.com/in/pranav-v-rao-061040393/",
+    ):
+        assert expected in body
+
+    # Raw WSGI request for binary assets
+    from wsgiref.util import setup_testing_defaults
+    values = {}
+    setup_testing_defaults(values)
+    values.update({"QUERY_STRING": "", "PATH_INFO": "/assets/daemon-founder-abhay.webp", "REQUEST_METHOD": "GET", "REMOTE_ADDR": "127.0.0.1", "wsgi.input": io.BytesIO()})
+    captured = {}
+    def start_response(status, headers):
+        captured["status"] = status
+        captured["headers"] = headers
+    raw_abhay = b"".join(web_app.application(values, start_response))
+    assert captured["status"] == "200 OK"
+    assert any(h == ("Content-Type", "image/webp") for h in captured["headers"])
+    assert len(raw_abhay) > 1000
+
+    values["PATH_INFO"] = "/assets/daemon-founder-pranav.webp"
+    raw_pranav = b"".join(web_app.application(values, start_response))
+    assert captured["status"] == "200 OK"
+    assert any(h == ("Content-Type", "image/webp") for h in captured["headers"])
+    assert len(raw_pranav) > 1000
+
+
+def test_onboarding_name_prompt_flow(web_env):
+    from datetime import timedelta
+    user_id = web_app.portal_db.create_user("newuser@example.com", "")
+    session_id = web_app.portal_db.create_session(user_id, "csrf-token-123", (web_app._now() + timedelta(days=1)).isoformat(timespec="seconds"))
+    cookie = f"{web_app.SESSION_COOKIE}={web_app._signed_cookie(session_id)}"
+    csrf = "csrf-token-123"
+
+    # GET /onboarding/name
+    status, _, body = _request("/onboarding/name", cookie=cookie)
+    assert status == "200 OK"
+    assert "What is your name?" in body
+    assert "Continue" in body
+
+    # POST /onboarding/name to set the name
+    status, headers, _ = _request("/onboarding/name", method="POST", form={"csrf": csrf, "name": "Jane Developer"}, cookie=cookie)
+    assert status == "303 See Other"
+    assert dict(headers)["Location"] == "/dashboard"
+
+    # Dashboard reflects the name
+    status, _, body = _request("/dashboard", cookie=cookie)
+    assert status == "200 OK"
+    assert "Jane Developer" in body
+
+
+def test_chat_and_visitor_endpoints(web_env):
+    # 1. Visitor tracking notifies admin once per window
+    status, headers, body = _request("/api/visitor/track", method="POST", json_body={"path": "/about", "referrer": "google.com"})
+    assert status == "200 OK"
+    data = json.loads(body)
+    assert data["ok"] is True
+
+    # 2. Chat messages endpoint
+    status, _, body = _request("/api/chat/messages")
+    assert status == "200 OK"
+    data = json.loads(body)
+    assert "messages" in data and "conversation_id" in data
+    conv_id = data["conversation_id"]
+
+    # 3. Sending visitor inquiry triggers reply and notifies admins
+    status, _, body = _request("/api/chat/send", method="POST", json_body={"text": "What are your pricing plans?", "contact": "visitor@example.com"})
+    assert status == "200 OK"
+    res = json.loads(body)
+    assert "reply" in res and len(res["reply"]) > 10
+
+    # 4. Chat JS asset
+    status, headers, body = _request("/assets/chat.js")
+    assert status == "200 OK"
+    assert "daemon-chat-btn" in body
+
+    # 5. Admin chat reply requires session and admin privileges
+    status, headers, _ = _request("/api/admin/chat/reply", method="POST", json_body={"conversation_id": conv_id, "text": "Hello!"})
+    assert status == "303 See Other" and dict(headers)["Location"] == "/login"
+
+    # With non-admin session, returns 403 Forbidden
+    from datetime import timedelta
+    u_id = web_app.portal_db.create_user("user_not_admin@example.com", "")
+    s_id = web_app.portal_db.create_session(u_id, "csrf-test", (web_app._now() + timedelta(days=1)).isoformat(timespec="seconds"))
+    cookie_user = f"{web_app.SESSION_COOKIE}={web_app._signed_cookie(s_id)}"
+    status, _, _ = _request("/api/admin/chat/reply", method="POST", json_body={"conversation_id": conv_id, "text": "Hello!"}, cookie=cookie_user)
+    assert status == "403 Forbidden"
+
+
+def test_contact_us_page_and_admin_notifications(web_env):
+    # 1. GET /contact renders form and sets CSRF cookie
+    status, headers, body = _request("/contact")
+    assert status == "200 OK"
+    assert "Contact Our Team" in body
+    assert "Your Work Email" in body
+    assert "Send Message to Support" in body
+
+    # Extract CSRF token and cookie (support both single and double quotes)
+    match = re.search(r"name=['\"]csrf['\"]\s+value=['\"]([^'\"]+)['\"]", body)
+    csrf = match.group(1) if match else "test-csrf"
+    csrf_cookie = _cookie_value(headers, web_app.CSRF_COOKIE)
+    contact_cookie = f"{web_app.CSRF_COOKIE}={csrf_cookie}"
+
+    # 2. POST /contact without required fields fails gracefully
+    status, _, body_fail = _request(
+        "/contact",
+        method="POST",
+        form={"csrf": csrf, "name": "Tester", "email": "bad-email", "message": ""},
+        cookie=contact_cookie,
+    )
+    assert status == "200 OK"
+    assert "Please provide your name, email, and message" in body_fail or "valid email" in body_fail
+
+    # 3. POST /contact with valid fields succeeds and creates support record
+    status, _, body_ok = _request(
+        "/contact",
+        method="POST",
+        form={
+            "csrf": csrf,
+            "name": "Alex Founder",
+            "email": "alex@startup.com",
+            "subject": "Enterprise monitoring question",
+            "message": "We have 15 microservices and want to use Agent Daemon.",
+        },
+        cookie=contact_cookie,
+    )
+    assert status == "200 OK"
+    assert "Thanks for reaching out!" in body_ok
+    assert "alex@startup.com" in body_ok
+
+    # Verify admin support messages list
+    support_items = web_app.portal_db.admin_list_support_messages(5)
+    assert any(s["email"] == "alex@startup.com" and "Enterprise" in s["subject"] for s in support_items)
+
+
+
+def test_help_center_page_and_navigation(web_env):
+    # 1. GET /help renders full help centre
+    status, _, body = _request("/help")
+    assert status == "200 OK"
+    assert "Agent Daemon Help Centre" in body
+    assert "Y3neE_B2d-M" in body  # YouTube video ID embed
+    assert 'referrerpolicy="strict-origin-when-cross-origin"' in body
+    assert "https://www.youtube.com/embed/Y3neE_B2d-M" in body
+    assert "Remediation Modes" in body
+    assert "Automatic Mode" in body
+    assert "Pull Request Only" in body
+    assert "Report Only" in body
+    assert "Troubleshooting Playbooks" in body
+    assert "Offline" in body
+    assert "GitHub Installation PR Fails" in body
+    assert "Auto-Fix Skipped or Marked" in body
+    assert "Fix PR Opened on GitHub but Not Auto-Merging" in body
+    assert "FastAPI" in body and "Flask" in body and "Django" in body
+    assert "help-search" in body
+
+    # 2. Aliases /docs, /help-center, /troubleshooting also work
+    for alias in ("/docs", "/help-center", "/troubleshooting"):
+        alias_status, _, alias_body = _request(alias)
+        assert alias_status == "200 OK"
+        assert "Agent Daemon Help Centre" in alias_body
+
+    # 3. Header and footer navigation contain Help Center link
+    _, _, home_body = _request("/")
+    assert '<a href="/help">Help Center</a>' in home_body
+
+    # 4. Chatbot recognizes help queries
+    import chatbot
+    reply = chatbot.answer_visitor_query("How do I troubleshoot when my app shows offline?")
+    assert "/help" in reply
+
+
+
+def test_structured_footer_and_all_links(web_env):
+    # 1. Verify structured 4-column footer on home page
+    status, _, body = _request("/")
+    assert status == "200 OK"
+    assert "footer-grid" in body
+    assert "Product" in body
+    assert "Company" in body
+    assert "Resources" in body
+    assert "Legal" in body
+
+    # 2. Verify all active Product links
+    for path, expected_text in [
+        ("/features", "What Agent Daemon does"),
+        ("/pricing", "Simple, honest plans"),
+        ("/how-it-works", "Play the flow"),
+        ("/docs", "Agent Daemon Help Centre"),
+        ("/changelog", "Product Releases"),
+    ]:
+        st, _, b = _request(path)
+        assert st == "200 OK", f"Failed for {path}: {st}"
+        assert expected_text in b, f"Missing text for {path}"
+
+    # 3. Verify active Company links (About Us, Contact Us)
+    for path, expected_text in [
+        ("/about", "About Us &amp; Co-Founders"),
+        ("/contact", "Contact Our Team"),
+    ]:
+        st, _, b = _request(path)
+        assert st == "200 OK", f"Failed for {path}: {st}"
+        assert expected_text in b, f"Missing text for {path}"
+
+    # 4. Verify active Resources links (FAQ, Help Center)
+    for path, expected_text in [
+        ("/faq", "Frequently Asked Questions"),
+        ("/help", "Agent Daemon Help Centre"),
+    ]:
+        st, _, b = _request(path)
+        assert st == "200 OK", f"Failed for {path}: {st}"
+        assert expected_text in b, f"Missing text for {path}"
+
+    # 5. Verify active Legal links (Privacy Policy, Terms of Service)
+    for path, expected_text in [
+        ("/privacy", "Privacy Policy"),
+        ("/terms", "Terms of Service"),
+    ]:
+        st, _, b = _request(path)
+        assert st == "200 OK", f"Failed for {path}: {st}"
+        assert expected_text in b, f"Missing text for {path}"
+
+    # 6. Verify removed links are not in footer HTML
+    for removed in ("Partnerships", "Careers", "System Status", "Cookie Policy"):
+        assert removed not in body, f"{removed} should not be in footer"
+
+
+def test_indian_standard_time_formatting(web_env):
+    from web_app import _fmt_time
+    import incident_board
+    # Given a UTC timestamp: 2026-11-03T14:15:00Z (+5:30 -> 19:45 IST)
+    formatted = _fmt_time("2026-11-03T14:15:00Z")
+    assert "03 Nov 2026, 19:45 IST" in formatted
+    assert "UTC" not in formatted
+
+    # incident_board helper
+    ib_formatted = incident_board._fmt_ist("2026-11-03T14:15:00Z")
+    assert "03 Nov 2026, 19:45 IST" in ib_formatted
+    assert "UTC" not in ib_formatted
+
+
+
+
+def test_support_ticketing_lifecycle(web_env, monkeypatch):
+    import notifications
+    from datetime import timedelta
+
+    customer_emails_sent = []
+    admin_emails_sent = []
+    monkeypatch.setattr(notifications, "notify_customer", lambda to, subj, body, kind="": customer_emails_sent.append((to, subj, body, kind)))
+    monkeypatch.setattr(notifications, "notify_admins", lambda subj, body, kind="": admin_emails_sent.append((subj, body, kind)))
+
+    # 1. Contact form submission creates a support ticket
+    st_get, headers, body = _request("/contact")
+    assert st_get == "200 OK"
+    match = re.search(r"name=['\"]csrf['\"]\s+value=['\"]([^'\"]+)['\"]", body)
+    csrf = match.group(1) if match else "test-csrf"
+    csrf_cookie = _cookie_value(headers, web_app.CSRF_COOKIE)
+    contact_cookie = f"{web_app.CSRF_COOKIE}={csrf_cookie}"
+
+    status, _, body_ok = _request(
+        "/contact",
+        method="POST",
+        form={
+            "csrf": csrf,
+            "name": "Jane Developer",
+            "email": "jane@company.com",
+            "subject": "Issue with auto-fix branch",
+            "message": "The PR opened has failing tests.",
+        },
+        cookie=contact_cookie,
+    )
+    assert status == "200 OK"
+    assert "Thanks for reaching out!" in body_ok
+    assert "TICK-" in body_ok
+
+    # Customer gets ticket confirmation email with ticket ID
+    assert len(customer_emails_sent) == 1
+    to_cust, cust_subj, cust_body, kind = customer_emails_sent[0]
+    assert to_cust == "jane@company.com"
+    assert "TICK-" in cust_subj
+    assert "support ticket" in cust_body.lower() or "ticket reference" in cust_body.lower()
+
+    # Check database status
+    tickets = web_app.portal_db.admin_list_support_messages(10)
+    assert len(tickets) >= 1
+    ticket = [t for t in tickets if t["email"] == "jane@company.com"][0]
+    assert ticket["status"] == "open"
+    assert ticket["ticket_ref"].startswith("TICK-")
+
+    stats = web_app.portal_db.admin_ticket_stats()
+    assert stats["open"] >= 1
+
+    # 2. Admin logs in and views tickets
+    user_id = web_app.portal_db.create_user("admin1@example.com", "hash")
+    admin_csrf = "csrf-adm-" + user_id[:6]
+    session_id = web_app.portal_db.create_session(user_id, admin_csrf, (web_app._now() + timedelta(days=1)).isoformat())
+    admin_cookie = f"{web_app.SESSION_COOKIE}={web_app._signed_cookie(session_id)}"
+
+    st, _, admin_html = _request("/admin", cookie=admin_cookie)
+    assert st == "200 OK"
+    assert "Support Tickets" in admin_html
+    assert ticket["ticket_ref"] in admin_html
+
+    # 3. Admin transitions status to 'for_review' and assigns to admin1
+    st, hdrs, _ = _request(
+        "/admin",
+        method="POST",
+        cookie=admin_cookie,
+        form={
+            "csrf": admin_csrf,
+            "action": "update_support_ticket",
+            "ticket_id": ticket["id"],
+            "status": "for_review",
+            "assigned_to": "admin1@example.com",
+            "resolution_note": "",
+        },
+    )
+    assert st == "303 See Other"
+    loc = dict(hdrs).get("Location", "")
+    assert "ticket_updated" in loc
+
+    updated_t = web_app.portal_db.admin_get_support_ticket(ticket["id"])
+    assert updated_t["status"] == "for_review"
+    assert updated_t["assigned_to"] == "admin1@example.com"
+
+    # 4. Admin closes ticket with resolution note
+    st, hdrs, _ = _request(
+        "/admin",
+        method="POST",
+        cookie=admin_cookie,
+        form={
+            "csrf": admin_csrf,
+            "action": "update_support_ticket",
+            "ticket_id": ticket["id"],
+            "status": "closed",
+            "assigned_to": "admin1@example.com",
+            "resolution_note": "Fixed branch permission configuration in repo settings.",
+        },
+    )
+    assert st == "303 See Other"
+    assert "ticket_closed" in dict(hdrs).get("Location", "")
+
+    closed_t = web_app.portal_db.admin_get_support_ticket(ticket["id"])
+    assert closed_t["status"] == "closed"
+    assert closed_t["closed_at"] != ""
+    assert closed_t["closed_by"] == "admin1@example.com"
+    assert closed_t["resolution_note"] == "Fixed branch permission configuration in repo settings."
+
+    # Customer automatically receives closing resolution email
+    closing_emails = [e for e in customer_emails_sent if e[3] == "ticket_closed"]
+    assert len(closing_emails) == 1
+    to_c, sub_c, body_c, _ = closing_emails[0]
+    assert to_c == "jane@company.com"
+    assert f"[Ticket #{closed_t['ticket_ref']}] Resolved:" in sub_c
+    assert "Fixed branch permission configuration in repo settings." in body_c
+    assert "Agent Daemon team of engineers" in body_c

@@ -1,0 +1,4 @@
+{
+  "message": "The type-check fails in the orders file, but nobody touched it.",
+  "traceback": "src/catalog.ts(8,17): error TS2353: Object literal may only specify known properties, and 'price' does not exist in type 'Product'.\nsrc/catalog.ts(9,20): error TS2353: Object literal may only specify known properties, and 'price' does not exist in type 'Product'.\nsrc/catalog.ts(10,17): error TS2353: Object literal may only specify known properties, and 'price' does not exist in type 'Product'.\nsrc/orders.ts(23,33): error TS2339: Property 'price' does not exist on type 'Product'.\n"
+}

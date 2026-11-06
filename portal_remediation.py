@@ -191,9 +191,14 @@ def process_auto_merges() -> int:
                     portal_db.update_portal_pr_status(incident["incident_id"], "pending")
                     continue
                 merged = _api(client, "PUT", f"{api}/pulls/{number}/merge",
-                              {"merge_method": "squash", "commit_title": f"Merge incident fix #{number}"})
+                              {"merge_method": "squash", "commit_title": f"Merge Agent Daemon fix #{number} [agent-daemon]"})
                 if merged.get("merged") is True:
                     portal_db.update_portal_pr_status(incident["incident_id"], "merged", merged=True)
+                    try:
+                        portal_db.set_incident_stage(incident["incident_id"], "merged",
+                                                     f"fix merged into {incident.get('branch', 'your branch')}: the fixed version is on GitHub")
+                    except Exception:
+                        pass
                     LOG.info("Auto-merge: PR #%s merged", number)
                 else:
                     LOG.warning("Auto-merge: PR #%s merge call returned merged=%r", number, merged.get("merged"))

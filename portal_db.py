@@ -13,11 +13,18 @@ import sqlite3
 import uuid
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
+import re
+
+import plans
 
 SCHEMA = """
 CREATE TABLE IF NOT EXISTS users (
   id TEXT PRIMARY KEY,
   email TEXT NOT NULL UNIQUE,
+  name TEXT NOT NULL DEFAULT '',
+  phone TEXT NOT NULL DEFAULT '',
+  referral_source TEXT NOT NULL DEFAULT '',
+  organization TEXT NOT NULL DEFAULT '',
   password_hash TEXT NOT NULL DEFAULT '',
   created_at TEXT NOT NULL
 );
@@ -150,6 +157,10 @@ CREATE TABLE IF NOT EXISTS manual_payments (
   plan TEXT NOT NULL,
   transaction_ref TEXT NOT NULL,
   ref_norm TEXT NOT NULL DEFAULT '',
+  name TEXT NOT NULL DEFAULT '',
+  phone TEXT NOT NULL DEFAULT '',
+  referral_source TEXT NOT NULL DEFAULT '',
+  organization TEXT NOT NULL DEFAULT '',
   status TEXT NOT NULL DEFAULT 'pending',
   created_at TEXT NOT NULL,
   reviewed_at TEXT NOT NULL DEFAULT '',
@@ -160,6 +171,10 @@ CREATE INDEX IF NOT EXISTS idx_manual_payments_status ON manual_payments(status,
 CREATE TABLE IF NOT EXISTS trial_requests (
   id TEXT PRIMARY KEY,
   user_id TEXT NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+  name TEXT NOT NULL DEFAULT '',
+  phone TEXT NOT NULL DEFAULT '',
+  referral_source TEXT NOT NULL DEFAULT '',
+  organization TEXT NOT NULL DEFAULT '',
   status TEXT NOT NULL DEFAULT 'pending',
   requested_at TEXT NOT NULL,
   reviewed_at TEXT NOT NULL DEFAULT '',
@@ -183,6 +198,80 @@ CREATE TABLE IF NOT EXISTS worker_status (
   name TEXT PRIMARY KEY,
   last_seen TEXT NOT NULL
 );
+
+CREATE TABLE IF NOT EXISTS chat_conversations (
+  id TEXT PRIMARY KEY,
+  visitor_id TEXT NOT NULL,
+  visitor_name TEXT NOT NULL DEFAULT '',
+  visitor_email TEXT NOT NULL DEFAULT '',
+  status TEXT NOT NULL DEFAULT 'open',
+  created_at TEXT NOT NULL,
+  updated_at TEXT NOT NULL
+);
+CREATE INDEX IF NOT EXISTS idx_chat_conv_visitor ON chat_conversations(visitor_id);
+CREATE INDEX IF NOT EXISTS idx_chat_conv_updated ON chat_conversations(updated_at DESC);
+
+CREATE TABLE IF NOT EXISTS chat_messages (
+  id TEXT PRIMARY KEY,
+  conversation_id TEXT NOT NULL REFERENCES chat_conversations(id) ON DELETE CASCADE,
+  sender TEXT NOT NULL,
+  sender_name TEXT NOT NULL DEFAULT '',
+  text TEXT NOT NULL,
+  created_at TEXT NOT NULL
+);
+CREATE INDEX IF NOT EXISTS idx_chat_msg_conv_time ON chat_messages(conversation_id, created_at ASC);
+
+CREATE TABLE IF NOT EXISTS visitor_tracking (
+  visitor_id TEXT PRIMARY KEY,
+  first_seen TEXT NOT NULL,
+  last_notified TEXT NOT NULL,
+  visit_count INTEGER NOT NULL DEFAULT 1
+);
+
+CREATE TABLE IF NOT EXISTS support_messages (
+  id TEXT PRIMARY KEY,
+  ticket_ref TEXT NOT NULL DEFAULT '',
+  name TEXT NOT NULL,
+  email TEXT NOT NULL,
+  subject TEXT NOT NULL,
+  message TEXT NOT NULL,
+  status TEXT NOT NULL DEFAULT 'open',
+  assigned_to TEXT NOT NULL DEFAULT '',
+  resolution_note TEXT NOT NULL DEFAULT '',
+  closed_at TEXT NOT NULL DEFAULT '',
+  closed_by TEXT NOT NULL DEFAULT '',
+  updated_at TEXT NOT NULL DEFAULT '',
+  created_at TEXT NOT NULL
+);
+CREATE INDEX IF NOT EXISTS idx_support_messages_time ON support_messages(created_at DESC);
+CREATE INDEX IF NOT EXISTS idx_support_messages_status ON support_messages(status, created_at DESC);
+
+CREATE TABLE IF NOT EXISTS push_checks (
+  id TEXT PRIMARY KEY,
+  project_id TEXT NOT NULL REFERENCES projects(id) ON DELETE CASCADE,
+  user_id TEXT NOT NULL,
+  sha TEXT NOT NULL,
+  branch TEXT NOT NULL DEFAULT '',
+  source TEXT NOT NULL DEFAULT 'webhook',
+  pusher TEXT NOT NULL DEFAULT '',
+  commit_message TEXT NOT NULL DEFAULT '',
+  status TEXT NOT NULL DEFAULT 'queued',
+  stage TEXT NOT NULL DEFAULT 'queued',
+  stage_detail TEXT NOT NULL DEFAULT '',
+  stacks_json TEXT NOT NULL DEFAULT '[]',
+  output TEXT NOT NULL DEFAULT '',
+  incident_id TEXT NOT NULL DEFAULT '',
+  attempts INTEGER NOT NULL DEFAULT 0,
+  available_at TEXT NOT NULL,
+  locked_until TEXT,
+  created_at TEXT NOT NULL,
+  started_at TEXT NOT NULL DEFAULT '',
+  finished_at TEXT NOT NULL DEFAULT '',
+  UNIQUE(project_id, sha)
+);
+CREATE INDEX IF NOT EXISTS idx_push_checks_ready ON push_checks(status, available_at);
+CREATE INDEX IF NOT EXISTS idx_push_checks_project ON push_checks(project_id, created_at);
+
 """
 
 
@@ -232,6 +321,7 @@ def init_db() -> None:
                 _execute(conn, statement)
         # Safe, repeatable migrations for databases created by older versions.
         additions = [
+            ("users", "name", "TEXT NOT NULL DEFAULT ''"),
             ("projects", "install_pr_url", "TEXT NOT NULL DEFAULT ''"),
             ("projects", "ci_workflow", "TEXT NOT NULL DEFAULT ''"),
             ("projects", "ai_consent_at", "TEXT NOT NULL DEFAULT ''"),
@@ -241,6 +331,38 @@ def init_db() -> None:
             ("subscriptions", "granted_by", "TEXT NOT NULL DEFAULT ''"),
             ("payment_orders", "plan", "TEXT NOT NULL DEFAULT 'yearly'"),
             ("manual_payments", "ref_norm", "TEXT NOT NULL DEFAULT ''"),
+            ("incidents", "no_automerge", "INTEGER NOT NULL DEFAULT 0"),
+            ("users", "phone", "TEXT NOT NULL DEFAULT ''"),
+            ("users", "referral_source", "TEXT NOT NULL DEFAULT ''"),
+            ("users", "organization", "TEXT NOT NULL DEFAULT ''"),
+            ("trial_requests", "name", "TEXT NOT NULL DEFAULT ''"),
+            ("trial_requests", "phone", "TEXT NOT NULL DEFAULT ''"),
+            ("trial_requests", "referral_source", "TEXT NOT NULL DEFAULT ''"),
+            ("trial_requests", "organization", "TEXT NOT NULL DEFAULT ''"),
+            ("support_messages", "ticket_ref", "TEXT NOT NULL DEFAULT ''"),
+            ("support_messages", "assigned_to", "TEXT NOT NULL DEFAULT ''"),
+            ("support_messages", "resolution_note", "TEXT NOT NULL DEFAULT ''"),
+            ("support_messages", "closed_at", "TEXT NOT NULL DEFAULT ''"),
+            ("support_messages", "closed_by", "TEXT NOT NULL DEFAULT ''"),
+            ("support_messages", "updated_at", "TEXT NOT NULL DEFAULT ''"),
+            ("manual_payments", "name", "TEXT NOT NULL DEFAULT ''"),
+            ("manual_payments", "phone", "TEXT NOT NULL DEFAULT ''"),
+            ("manual_payments", "referral_source", "TEXT NOT NULL DEFAULT ''"),
+            ("manual_payments", "organization", "TEXT NOT NULL DEFAULT ''"),
+            # Architecture v3: push-time checks, paid project slots, live stages on the dashboard.
+            ("users", "project_slots", "INTEGER NOT NULL DEFAULT 0"),
+            ("projects", "watch_mode", "TEXT NOT NULL DEFAULT 'both'"),
+            ("projects", "webhook_id", "TEXT NOT NULL DEFAULT ''"),
+            ("projects", "webhook_secret_ciphertext", "TEXT NOT NULL DEFAULT ''"),
+            ("projects", "last_checked_sha", "TEXT NOT NULL DEFAULT ''"),
+            ("projects", "last_check_status", "TEXT NOT NULL DEFAULT ''"),
+            ("projects", "last_check_at", "TEXT NOT NULL DEFAULT ''"),
+            ("incidents", "source", "TEXT NOT NULL DEFAULT 'runtime'"),
+            ("incidents", "commit_sha", "TEXT NOT NULL DEFAULT ''"),
+            ("incidents", "stage", "TEXT NOT NULL DEFAULT ''"),
+            ("incidents", "stage_detail", "TEXT NOT NULL DEFAULT ''"),
+            ("incidents", "stage_tier", "TEXT NOT NULL DEFAULT ''"),
+            ("incidents", "stage_at", "TEXT NOT NULL DEFAULT ''"),
         ]
         for table, column, ddl in additions:
             if isinstance(conn, sqlite3.Connection):
@@ -251,6 +373,12 @@ def init_db() -> None:
                 _execute(conn, f"ALTER TABLE {table} ADD COLUMN IF NOT EXISTS {column} {ddl}")
         conn.commit()
         try:
+            from fixengine import store as _fx_store  # auto-fix engine tables (ledger, quotas, router log)
+            _fx_store.ensure_schema(conn)
+        except Exception:
+            conn.rollback()
+            raise
+        try:
             _execute(conn, "CREATE UNIQUE INDEX IF NOT EXISTS idx_manual_payments_ref "
                            "ON manual_payments(ref_norm) WHERE ref_norm <> ''")
             conn.commit()
@@ -260,22 +388,59 @@ def init_db() -> None:
         conn.close()
 
 
-def create_user(email: str, password_hash: str) -> str:
+def create_user(email: str, password_hash: str, name: str = "") -> str:
     user_id = _id()
     conn = get_connection()
     try:
-        _execute(conn, "INSERT INTO users(id,email,password_hash,created_at) VALUES(?,?,?,?)",
-                 (user_id, email.lower().strip(), password_hash, _now()))
+        _execute(conn, "INSERT INTO users(id,email,name,password_hash,created_at) VALUES(?,?,?,?,?)",
+                 (user_id, email.lower().strip(), name.strip(), password_hash, _now()))
         conn.commit()
         return user_id
     finally:
         conn.close()
 
 
-def get_or_create_google_user(email: str, google_sub: str, email_verified: bool) -> dict:
+def update_user_name(user_id: str, name: str) -> None:
+    conn = get_connection()
+    try:
+        _execute(conn, "UPDATE users SET name=? WHERE id=?", (name.strip(), user_id))
+        conn.commit()
+    finally:
+        conn.close()
+
+
+def get_user_by_id(user_id: str) -> dict | None:
+    conn = get_connection()
+    try:
+        row = _execute(conn, "SELECT * FROM users WHERE id = ?", (user_id,)).fetchone()
+        return dict(row) if row else None
+    finally:
+        conn.close()
+
+
+def update_user_details(user_id: str, name: str = "", phone: str = "", referral_source: str = "", organization: str = "") -> None:
+    conn = get_connection()
+    try:
+        current = _execute(conn, "SELECT * FROM users WHERE id = ?", (user_id,)).fetchone()
+        if not current:
+            return
+        c_keys = current.keys() if hasattr(current, "keys") else []
+        new_name = name.strip() or (current["name"] if "name" in c_keys and current["name"] else "")
+        new_phone = phone.strip() or (current["phone"] if "phone" in c_keys and current["phone"] else "")
+        new_ref = referral_source.strip() or (current["referral_source"] if "referral_source" in c_keys and current["referral_source"] else "")
+        new_org = organization.strip() or (current["organization"] if "organization" in c_keys and current["organization"] else "")
+        _execute(conn, "UPDATE users SET name=?, phone=?, referral_source=?, organization=? WHERE id=?",
+                 (new_name, new_phone, new_ref, new_org, user_id))
+        conn.commit()
+    finally:
+        conn.close()
+
+
+def get_or_create_google_user(email: str, google_sub: str, email_verified: bool, name: str = "") -> dict:
     email = email.lower().strip()
     if not email or not google_sub or not email_verified:
         raise ValueError('A verified Google identity is required')
+    name = (name or "").strip()
     # Use the verified Google subject as the internal ID to avoid altering existing production schema.
     conn = get_connection()
     try:
@@ -283,13 +448,21 @@ def get_or_create_google_user(email: str, google_sub: str, email_verified: bool)
         if row:
             if row['email'].lower() != email:
                 raise ValueError('This Google account email changed. Contact support to update it safely.')
+            if name and not row['name']:
+                _execute(conn, 'UPDATE users SET name=? WHERE id=?', (name, google_sub))
+                conn.commit()
+                row = _execute(conn, 'SELECT * FROM users WHERE id=?', (google_sub,)).fetchone()
             return dict(row)
         by_email = _execute(conn, 'SELECT * FROM users WHERE email=?', (email,)).fetchone()
         if by_email:
             # Google has verified this address, so the person owns it. Sign in to the existing account
             # (keeping its id, projects and billing) instead of refusing, which used to lock people out.
+            if name and not by_email['name']:
+                _execute(conn, 'UPDATE users SET name=? WHERE id=?', (name, by_email['id']))
+                conn.commit()
+                by_email = _execute(conn, 'SELECT * FROM users WHERE id=?', (by_email['id'],)).fetchone()
             return dict(by_email)
-        _execute(conn, 'INSERT INTO users(id,email,password_hash,created_at) VALUES(?,?,?,?)', (google_sub, email, '', _now()))
+        _execute(conn, 'INSERT INTO users(id,email,name,password_hash,created_at) VALUES(?,?,?,?,?)', (google_sub, email, name, '', _now()))
         conn.commit()
         return dict(_execute(conn, 'SELECT * FROM users WHERE id=?', (google_sub,)).fetchone())
     finally:
@@ -330,7 +503,7 @@ def get_session(session_id: str):
     conn = get_connection()
     try:
         row = _execute(conn,
-            "SELECT s.*,u.email FROM sessions s JOIN users u ON u.id=s.user_id WHERE s.id=? AND s.expires_at>?",
+            "SELECT s.*,u.email,u.name FROM sessions s JOIN users u ON u.id=s.user_id WHERE s.id=? AND s.expires_at>?",
             (session_id, _now())).fetchone()
         return dict(row) if row else None
     finally:
@@ -371,22 +544,36 @@ def check_login_rate_limit(key: str, maximum: int = 8, window_seconds: int = 900
 
 def create_project(user_id: str, *, name: str, repo_owner: str, repo_name: str,
                    branch: str, mode: str, token_ciphertext: str, ingest_key_hash: str,
-                   app_url: str = "", ai_consent_at: str = "", ingest_key_ciphertext: str = "") -> str:
+                   app_url: str = "", ai_consent_at: str = "", ingest_key_ciphertext: str = "",
+                   watch_mode: str = "both", enforce_slots: bool = False) -> str:
+    """enforce_slots: refuse (ValueError) when the account already uses every project slot it has (1 + paid extra slots).
+    Checked inside the same connection as the insert so two quick submissions cannot both slip through."""
+    if watch_mode not in WATCH_MODES:
+        raise ValueError("Unknown watch mode")
     project_id = _id()
     conn = get_connection()
     try:
+        if enforce_slots:
+            used = _execute(conn, "SELECT COUNT(*) AS n FROM projects WHERE user_id=?", (user_id,)).fetchone()["n"]
+            row = _execute(conn, "SELECT project_slots FROM users WHERE id=?", (user_id,)).fetchone()
+            limit = plans.INCLUDED_PROJECTS + int((row["project_slots"] if row else 0) or 0)
+            if used >= limit:
+                raise ValueError("project_limit")
         subscription = _execute(conn, "SELECT active_until FROM subscriptions WHERE user_id=?", (user_id,)).fetchone()
         active_until = subscription["active_until"] if subscription else None
         _execute(conn, """INSERT INTO projects
           (id,user_id,name,repo_owner,repo_name,branch,mode,github_token_ciphertext,
-           ingest_key_hash,app_url,active_until,created_at,ai_consent_at,ingest_key_ciphertext)
-          VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?)""",
+           ingest_key_hash,app_url,active_until,created_at,ai_consent_at,ingest_key_ciphertext,watch_mode)
+          VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)""",
           (project_id,user_id,name,repo_owner,repo_name,branch,mode,token_ciphertext,
-           ingest_key_hash,app_url,active_until,_now(),ai_consent_at,ingest_key_ciphertext))
+           ingest_key_hash,app_url,active_until,_now(),ai_consent_at,ingest_key_ciphertext,watch_mode))
         conn.commit()
         return project_id
     finally:
         conn.close()
+
+
+WATCH_MODES = ("push", "runtime", "both")
 
 
 def get_project(project_id: str, user_id: str):
@@ -615,7 +802,7 @@ def claim_next_incident(*, min_occurrences: int = 5, min_age_seconds: int = 30,
             _execute(conn, "INSERT INTO audit_log(id,project_id,action,detail,created_at) VALUES(?,?,?,?,?)",
                      (_id(),stale["project_id"],"diagnosis_failed",detail,now_s))
         row = _execute(conn, """SELECT j.incident_id,j.attempts,i.project_id,i.signature,i.occurrences,
-                    i.first_seen,i.last_seen,p.repo_owner,p.repo_name,p.branch,p.mode,
+                    i.first_seen,i.last_seen,i.source,i.commit_sha,p.repo_owner,p.repo_name,p.branch,p.mode,
                     p.github_token_ciphertext,p.active_until,p.paused,p.ai_consent_at
           FROM incident_jobs j
           JOIN incidents i ON i.id=j.incident_id
@@ -748,7 +935,7 @@ def list_auto_prs(limit: int = 20):
         rows = _execute(conn, """SELECT i.id AS incident_id,i.project_id,i.pr_number,i.ci_status,
                     p.repo_owner,p.repo_name,p.github_token_ciphertext
           FROM incidents i JOIN projects p ON p.id=i.project_id
-          WHERE p.mode='auto' AND p.paused=0 AND i.status='pr_opened'
+          WHERE p.mode='auto' AND p.paused=0 AND i.status='pr_opened' AND i.no_automerge=0
             AND i.pr_number IS NOT NULL AND i.ci_status IN ('pending','unknown','unavailable','success','no_checks')
           ORDER BY i.created_at ASC LIMIT ?""", (max(1,min(int(limit),100)),)).fetchall()
         return [dict(row) for row in rows]
@@ -857,7 +1044,7 @@ def user_has_active_access(user_id: str) -> bool:
 def admin_list_users():
     conn = get_connection()
     try:
-        rows = _execute(conn, """SELECT u.id,u.email,u.created_at,s.active_until,
+        rows = _execute(conn, """SELECT u.id,u.email,u.name,u.phone,u.referral_source,u.organization,u.created_at,s.active_until,
             COALESCE(s.grant_type,'') AS grant_type
             FROM users u LEFT JOIN subscriptions s ON s.user_id=u.id
             ORDER BY u.created_at DESC""").fetchall()
@@ -929,20 +1116,34 @@ def normalize_payment_ref(value: str) -> str:
     return "".join(str(value).split()).upper()
 
 
-def create_manual_payment_request(user_id: str, amount: int, plan: str, transaction_ref: str) -> dict:
+def create_manual_payment_request(user_id: str, amount: int, plan: str, transaction_ref: str,
+                                  name: str = "", phone: str = "", referral_source: str = "", organization: str = "") -> dict:
     """Record a customer's claimed UPI payment for manual verification.
 
     The reference must look like a UPI reference and be unique across ALL
     customers. This does not prove that money moved; an admin must check.
     """
-    if (plan, amount) not in (("monthly", 100), ("yearly", 1000)):
+    if not plans.valid_amount(plan, amount):
         raise ValueError("The amount does not match the selected plan.")
+    if plan in plans.ADDON_PRODUCTS and not user_has_active_access(user_id):
+        raise ValueError("Add-ons need an active plan. Pick a plan first.")
     transaction_ref = " ".join(str(transaction_ref).split())
     norm = normalize_payment_ref(transaction_ref)
     if not norm.isalnum() or not 8 <= len(norm) <= 35:
         raise ValueError("Enter the 12-digit UPI reference (UTR) from your payment receipt.")
     conn = get_connection()
     try:
+        user_row = _execute(conn, "SELECT * FROM users WHERE id=?", (user_id,)).fetchone()
+        u_keys = user_row.keys() if user_row and hasattr(user_row, "keys") else []
+        u_name = name.strip() or (user_row["name"] if "name" in u_keys and user_row["name"] else "")
+        u_phone = phone.strip() or (user_row["phone"] if "phone" in u_keys and user_row["phone"] else "")
+        u_ref = referral_source.strip() or (user_row["referral_source"] if "referral_source" in u_keys and user_row["referral_source"] else "")
+        u_org = organization.strip() or (user_row["organization"] if "organization" in u_keys and user_row["organization"] else "")
+
+        if any([name.strip(), phone.strip(), referral_source.strip(), organization.strip()]):
+            _execute(conn, "UPDATE users SET name=?, phone=?, referral_source=?, organization=? WHERE id=?",
+                     (u_name, u_phone, u_ref, u_org, user_id))
+
         existing = _execute(conn, "SELECT * FROM manual_payments WHERE ref_norm=?", (norm,)).fetchone()
         if existing:
             if existing["user_id"] == user_id:
@@ -955,9 +1156,9 @@ def create_manual_payment_request(user_id: str, amount: int, plan: str, transact
         payment_id = _id()
         try:
             _execute(conn, """INSERT INTO manual_payments
-                (id,user_id,amount,plan,transaction_ref,ref_norm,status,created_at)
-                VALUES(?,?,?,?,?,?,'pending',?)""",
-                (payment_id, user_id, amount, plan, transaction_ref, norm, _now()))
+                (id,user_id,amount,plan,transaction_ref,ref_norm,name,phone,referral_source,organization,status,created_at)
+                VALUES(?,?,?,?,?,?,?,?,?,?,?,?)""",
+                (payment_id, user_id, amount, plan, transaction_ref, norm, u_name, u_phone, u_ref, u_org, 'pending', _now()))
             conn.commit()
         except Exception as exc:
             conn.rollback()
@@ -972,7 +1173,12 @@ def create_manual_payment_request(user_id: str, amount: int, plan: str, transact
 def admin_list_manual_payments():
     conn = get_connection()
     try:
-        rows = _execute(conn, """SELECT p.*,u.email FROM manual_payments p
+        rows = _execute(conn, """SELECT p.*, u.email,
+            COALESCE(NULLIF(p.name, ''), u.name, '') AS user_name,
+            COALESCE(NULLIF(p.phone, ''), u.phone, '') AS user_phone,
+            COALESCE(NULLIF(p.referral_source, ''), u.referral_source, '') AS user_referral,
+            COALESCE(NULLIF(p.organization, ''), u.organization, '') AS user_organization
+            FROM manual_payments p
             JOIN users u ON u.id=p.user_id ORDER BY
             CASE WHEN p.status='pending' THEN 0 ELSE 1 END, p.created_at DESC""").fetchall()
         return [dict(row) for row in rows]
@@ -1007,18 +1213,31 @@ def approve_manual_payment(payment_id: str, reviewed_by: str):
                        (payment_id,)).fetchone()
         if not row or row["status"] != "pending":
             return None
-        if (row["plan"], row["amount"]) not in (("monthly", 100), ("yearly", 1000)):
+        # Current prices, or the pre-v2 prices for a payment the customer submitted before the change.
+        if not plans.valid_amount_or_legacy(row["plan"], row["amount"]):
             raise ValueError("This payment record has an invalid plan or amount.")
         cur = _execute(conn, """UPDATE manual_payments SET status='approved',reviewed_at=?,reviewed_by=?
             WHERE id=? AND status='pending'""", (_now(), reviewed_by, payment_id))
         if cur.rowcount != 1:
             conn.rollback()
             return None
+        result = dict(row)
+        if row["plan"] == "project_slot":
+            _execute(conn, "UPDATE users SET project_slots=COALESCE(project_slots,0)+1 WHERE id=?", (row["user_id"],))
+            conn.commit()
+            result.update(status="approved", product="project_slot", days=0, active_until="")
+            return result
+        if row["plan"] in ("pack_high", "pack_extra"):
+            conn.commit()
+            # The tries ledger lives in the fix engine's tables (same database).
+            from fixengine import admin_tools
+            credited = admin_tools.sell_pack(row["user_id"], "high" if row["plan"] == "pack_high" else "extra", reviewed_by)
+            result.update(status="approved", product=row["plan"], days=0, active_until="", credited=credited)
+            return result
         days = 30 if row["plan"] == "monthly" else 365
         until = _grant_in_conn(conn, row["user_id"], days, "paid", reviewed_by)
         conn.commit()
-        result = dict(row)
-        result.update(status="approved", days=days, active_until=until)
+        result.update(status="approved", product=row["plan"], days=days, active_until=until)
         return result
     except Exception:
         conn.rollback()
@@ -1041,21 +1260,42 @@ def user_trial_status(user_id: str) -> str:
     return "none"
 
 
-def create_trial_request(user_id: str) -> dict:
+def create_trial_request(user_id: str, name: str = "", phone: str = "", referral_source: str = "", organization: str = "") -> dict:
     """One trial per customer, ever. Re-requesting while pending returns the same request."""
     conn = get_connection()
     try:
         rows = _execute(conn, "SELECT * FROM trial_requests WHERE user_id=? ORDER BY requested_at DESC", (user_id,)).fetchall()
         if any(row["status"] == "approved" for row in rows):
             raise ValueError("Your free trial has already been used. Choose a plan to continue.")
+        user_row = _execute(conn, "SELECT * FROM users WHERE id=?", (user_id,)).fetchone()
+        u_keys = user_row.keys() if user_row and hasattr(user_row, "keys") else []
+        u_name = name.strip() or (user_row["name"] if "name" in u_keys and user_row["name"] else "")
+        u_phone = phone.strip() or (user_row["phone"] if "phone" in u_keys and user_row["phone"] else "")
+        u_ref = referral_source.strip() or (user_row["referral_source"] if "referral_source" in u_keys and user_row["referral_source"] else "")
+        u_org = organization.strip() or (user_row["organization"] if "organization" in u_keys and user_row["organization"] else "")
+
+        if any([name.strip(), phone.strip(), referral_source.strip(), organization.strip()]):
+            _execute(conn, "UPDATE users SET name=?, phone=?, referral_source=?, organization=? WHERE id=?",
+                     (u_name, u_phone, u_ref, u_org, user_id))
+
         pending = next((row for row in rows if row["status"] == "pending"), None)
         if pending:
             existing = dict(pending)
             existing["created"] = False
+            if any([name.strip(), phone.strip(), referral_source.strip(), organization.strip()]):
+                _execute(conn, "UPDATE trial_requests SET name=?, phone=?, referral_source=?, organization=? WHERE id=?",
+                         (u_name, u_phone, u_ref, u_org, existing["id"]))
+                conn.commit()
+                existing["name"] = u_name
+                existing["phone"] = u_phone
+                existing["referral_source"] = u_ref
+                existing["organization"] = u_org
             return existing
         request_id = _id()
-        _execute(conn, "INSERT INTO trial_requests(id,user_id,status,requested_at) VALUES(?,?,?,?)",
-                 (request_id, user_id, "pending", _now()))
+        _execute(conn, """INSERT INTO trial_requests
+            (id,user_id,name,phone,referral_source,organization,status,requested_at)
+            VALUES(?,?,?,?,?,?,?,?)""",
+            (request_id, user_id, u_name, u_phone, u_ref, u_org, "pending", _now()))
         conn.commit()
         created = dict(_execute(conn, "SELECT * FROM trial_requests WHERE id=?", (request_id,)).fetchone())
         created["created"] = True
@@ -1067,7 +1307,12 @@ def create_trial_request(user_id: str) -> dict:
 def admin_list_trial_requests():
     conn = get_connection()
     try:
-        rows = _execute(conn, """SELECT tr.*,u.email FROM trial_requests tr
+        rows = _execute(conn, """SELECT tr.*, u.email,
+            COALESCE(NULLIF(tr.name, ''), u.name, '') AS user_name,
+            COALESCE(NULLIF(tr.phone, ''), u.phone, '') AS user_phone,
+            COALESCE(NULLIF(tr.referral_source, ''), u.referral_source, '') AS user_referral,
+            COALESCE(NULLIF(tr.organization, ''), u.organization, '') AS user_organization
+            FROM trial_requests tr
             JOIN users u ON u.id=tr.user_id
             ORDER BY CASE WHEN tr.status='pending' THEN 0 ELSE 1 END, tr.requested_at DESC""").fetchall()
         return [dict(row) for row in rows]
@@ -1283,5 +1528,568 @@ def update_project_branch(project_id: str, user_id: str, branch: str) -> bool:
         cur = _execute(conn, "UPDATE projects SET branch=? WHERE id=? AND user_id=?", (branch[:100], project_id, user_id))
         conn.commit()
         return cur.rowcount == 1
+    finally:
+        conn.close()
+
+
+# --- Chat & Visitor Tracking Persistence -------------------------------------
+
+def track_visitor_visit(visitor_id: str, cooldown_seconds: int = 1800) -> bool:
+    """Records a visitor visit. Returns True if admins should be notified (first visit or after cooldown)."""
+    conn = get_connection()
+    try:
+        now = _now()
+        row = _execute(conn, "SELECT visitor_id, last_notified, visit_count FROM visitor_tracking WHERE visitor_id = ?",
+                       (visitor_id,)).fetchone()
+        if not row:
+            _execute(conn, "INSERT INTO visitor_tracking(visitor_id, first_seen, last_notified, visit_count) VALUES(?,?,?,?)",
+                     (visitor_id, now, now, 1))
+            conn.commit()
+            return True
+        last_dt = _parse_ts(row["last_notified"]) if isinstance(row["last_notified"], str) else row["last_notified"]
+        now_dt = datetime.now(timezone.utc)
+        should_notify = (now_dt - last_dt) > timedelta(seconds=cooldown_seconds)
+        new_last = now if should_notify else row["last_notified"]
+        _execute(conn, "UPDATE visitor_tracking SET last_notified=?, visit_count=visit_count+1 WHERE visitor_id=?",
+                 (new_last, visitor_id))
+        conn.commit()
+        return should_notify
+    finally:
+        conn.close()
+
+
+def get_or_create_conversation(visitor_id: str, name: str = "", email: str = "") -> dict:
+    conn = get_connection()
+    try:
+        row = _execute(conn, "SELECT * FROM chat_conversations WHERE visitor_id = ? ORDER BY updated_at DESC LIMIT 1",
+                       (visitor_id,)).fetchone()
+        now = _now()
+        if row:
+            conv = dict(row)
+            updates = []
+            params = []
+            if name and not conv.get("visitor_name"):
+                updates.append("visitor_name = ?")
+                params.append(name.strip())
+            if email and not conv.get("visitor_email"):
+                updates.append("visitor_email = ?")
+                params.append(email.strip().lower())
+            if updates:
+                params.append(conv["id"])
+                _execute(conn, f"UPDATE chat_conversations SET {', '.join(updates)} WHERE id = ?", params)
+                conn.commit()
+                row = _execute(conn, "SELECT * FROM chat_conversations WHERE id = ?", (conv["id"],)).fetchone()
+                return dict(row)
+            return conv
+        conv_id = _id()
+        _execute(conn, "INSERT INTO chat_conversations(id, visitor_id, visitor_name, visitor_email, status, created_at, updated_at) "
+                       "VALUES(?,?,?,?,?,?,?)",
+                 (conv_id, visitor_id, name.strip(), email.strip().lower(), "open", now, now))
+        conn.commit()
+        return dict(_execute(conn, "SELECT * FROM chat_conversations WHERE id = ?", (conv_id,)).fetchone())
+    finally:
+        conn.close()
+
+
+def add_chat_message(conversation_id: str, sender: str, text: str, sender_name: str = "") -> dict:
+    conn = get_connection()
+    try:
+        msg_id = _id()
+        now = _now()
+        _execute(conn, "INSERT INTO chat_messages(id, conversation_id, sender, sender_name, text, created_at) VALUES(?,?,?,?,?,?)",
+                 (msg_id, conversation_id, sender, sender_name.strip(), text.strip(), now))
+        _execute(conn, "UPDATE chat_conversations SET updated_at = ? WHERE id = ?", (now, conversation_id))
+        conn.commit()
+        row = _execute(conn, "SELECT * FROM chat_messages WHERE id = ?", (msg_id,)).fetchone()
+        return dict(row)
+    finally:
+        conn.close()
+
+
+def list_chat_messages(conversation_id: str, after_time: str = "") -> list[dict]:
+    conn = get_connection()
+    try:
+        if after_time:
+            rows = _execute(conn, "SELECT * FROM chat_messages WHERE conversation_id = ? AND created_at > ? ORDER BY created_at ASC",
+                            (conversation_id, after_time)).fetchall()
+        else:
+            rows = _execute(conn, "SELECT * FROM chat_messages WHERE conversation_id = ? ORDER BY created_at ASC",
+                            (conversation_id,)).fetchall()
+        return [dict(r) for r in rows]
+    finally:
+        conn.close()
+
+
+def admin_list_chat_conversations(limit: int = 30) -> list[dict]:
+    conn = get_connection()
+    try:
+        rows = _execute(conn, """
+            SELECT c.*,
+                   (SELECT COUNT(*) FROM chat_messages m WHERE m.conversation_id = c.id) AS message_count,
+                   (SELECT text FROM chat_messages m WHERE m.conversation_id = c.id ORDER BY m.created_at DESC LIMIT 1) AS last_message,
+                   (SELECT sender FROM chat_messages m WHERE m.conversation_id = c.id ORDER BY m.created_at DESC LIMIT 1) AS last_sender
+            FROM chat_conversations c
+            ORDER BY c.updated_at DESC
+            LIMIT ?
+        """, (limit,)).fetchall()
+        return [dict(r) for r in rows]
+    finally:
+        conn.close()
+
+
+def update_conversation_visitor_details(conversation_id: str, name: str, email: str) -> None:
+    conn = get_connection()
+    try:
+        _execute(conn, "UPDATE chat_conversations SET visitor_name = ?, visitor_email = ?, updated_at = ? WHERE id = ?",
+                 (name.strip(), email.strip().lower(), _now(), conversation_id))
+        conn.commit()
+    finally:
+        conn.close()
+
+
+def create_support_ticket(name: str, email: str, subject: str, message: str, assigned_to: str = "") -> dict:
+    conn = get_connection()
+    try:
+        msg_id = _id()
+        ticket_ref = f"TICK-{msg_id[:8].upper()}"
+        now = _now()
+        _execute(conn, """INSERT INTO support_messages(id, ticket_ref, name, email, subject, message, status, assigned_to, resolution_note, closed_at, closed_by, updated_at, created_at)
+                       VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?)""",
+                 (msg_id, ticket_ref, name.strip(), email.strip().lower(), subject.strip() or "General Support Inquiry", message.strip(), "open", assigned_to.strip(), "", "", "", now, now))
+        conn.commit()
+        row = _execute(conn, "SELECT * FROM support_messages WHERE id = ?", (msg_id,)).fetchone()
+        d = dict(row)
+        if not d.get("ticket_ref"):
+            d["ticket_ref"] = ticket_ref
+        return d
+    finally:
+        conn.close()
+
+
+def create_support_message(name: str, email: str, subject: str, message: str) -> dict:
+    return create_support_ticket(name, email, subject, message)
+
+
+def admin_list_support_messages(limit: int = 50, status: str | None = None) -> list[dict]:
+    conn = get_connection()
+    try:
+        if status and status != "all":
+            rows = _execute(conn, "SELECT * FROM support_messages WHERE status = ? ORDER BY created_at DESC LIMIT ?", (status, limit)).fetchall()
+        else:
+            rows = _execute(conn, "SELECT * FROM support_messages ORDER BY created_at DESC LIMIT ?", (limit,)).fetchall()
+        tickets = []
+        for r in rows:
+            d = dict(r)
+            if not d.get("ticket_ref"):
+                d["ticket_ref"] = f"TICK-{d['id'][:8].upper()}"
+            tickets.append(d)
+        return tickets
+    finally:
+        conn.close()
+
+
+def admin_get_support_ticket(ticket_id: str) -> dict | None:
+    conn = get_connection()
+    try:
+        row = _execute(conn, "SELECT * FROM support_messages WHERE id = ? OR ticket_ref = ?", (ticket_id, ticket_id)).fetchone()
+        if not row:
+            return None
+        d = dict(row)
+        if not d.get("ticket_ref"):
+            d["ticket_ref"] = f"TICK-{d['id'][:8].upper()}"
+        return d
+    finally:
+        conn.close()
+
+
+def admin_update_support_ticket(ticket_id: str, status: str, assigned_to: str = "", resolution_note: str = "", actor: str = "") -> dict | None:
+    conn = get_connection()
+    try:
+        row = _execute(conn, "SELECT * FROM support_messages WHERE id = ? OR ticket_ref = ?", (ticket_id, ticket_id)).fetchone()
+        if not row:
+            return None
+        cur = dict(row)
+        now = _now()
+        closed_at = now if status == "closed" and cur.get("status") != "closed" else cur.get("closed_at", "")
+        closed_by = actor if status == "closed" and cur.get("status") != "closed" else cur.get("closed_by", "")
+        res_note = resolution_note.strip() if resolution_note.strip() else cur.get("resolution_note", "")
+        assignee = assigned_to.strip() if assigned_to.strip() else cur.get("assigned_to", "")
+
+        _execute(conn, """UPDATE support_messages 
+                       SET status = ?, assigned_to = ?, resolution_note = ?, closed_at = ?, closed_by = ?, updated_at = ?
+                       WHERE id = ?""",
+                 (status, assignee, res_note, closed_at, closed_by, now, cur["id"]))
+        conn.commit()
+        updated_row = _execute(conn, "SELECT * FROM support_messages WHERE id = ?", (cur["id"],)).fetchone()
+        res = dict(updated_row)
+        if not res.get("ticket_ref"):
+            res["ticket_ref"] = f"TICK-{res['id'][:8].upper()}"
+        return res
+    finally:
+        conn.close()
+
+
+def admin_ticket_stats() -> dict:
+    conn = get_connection()
+    try:
+        rows = _execute(conn, "SELECT status, COUNT(*) as cnt FROM support_messages GROUP BY status").fetchall()
+        counts = {"open": 0, "for_review": 0, "closed": 0, "total": 0}
+        for r in rows:
+            st = str(r["status"]).lower()
+            cnt = int(r["cnt"])
+            if st in counts:
+                counts[st] += cnt
+            else:
+                counts["open"] += cnt
+            counts["total"] += cnt
+        return counts
+    finally:
+        conn.close()
+
+
+
+# --- Java Integration Waitlist & Launch Notification Functions ---
+
+_BOT_REGEX = re.compile(
+    r"(googlebot|bingbot|yandexbot|duckduckbot|baiduspider|slurp|twitterbot|facebookexternalhit|"
+    r"linkedinbot|embedly|quora link preview|showyoubot|outbrain|pinterest|slackbot|vkshare|"
+    r"w3c_validator|headlesschrome|curl|wget|python-requests|urllib|postman|uptimerobot|"
+    r"pingdom|render|crawler|spider|bot\b)",
+    re.IGNORECASE
+)
+
+
+def record_unique_visitor(visitor_id: str, user_agent: str = "") -> bool:
+    """Record a unique website visitor in visitor_tracking.
+    Filters bots and automated requests.
+    Returns True if this is a newly recorded unique visitor.
+    """
+    clean_id = str(visitor_id or "").strip()
+    if not clean_id or not re.fullmatch(r"[0-9a-f-]{36}", clean_id):
+        return False
+    if user_agent and _BOT_REGEX.search(user_agent):
+        return False
+    conn = get_connection()
+    try:
+        now = _now()
+        row = _execute(conn, "SELECT visitor_id, visit_count FROM visitor_tracking WHERE visitor_id = ?",
+                       (clean_id,)).fetchone()
+        if not row:
+            _execute(conn, "INSERT INTO visitor_tracking(visitor_id, first_seen, last_notified, visit_count) VALUES(?,?,?,1)",
+                     (clean_id, now, now))
+            conn.commit()
+            return True
+        else:
+            _execute(conn, "UPDATE visitor_tracking SET visit_count = visit_count + 1 WHERE visitor_id = ?",
+                     (clean_id,))
+            conn.commit()
+            return False
+    finally:
+        conn.close()
+
+
+def get_total_unique_visitors() -> int:
+    """Return the cumulative number of unique human website visitors recorded to date."""
+    conn = get_connection()
+    try:
+        row = _execute(conn, "SELECT COUNT(*) as cnt FROM visitor_tracking").fetchone()
+        return int(row["cnt"]) if row else 0
+    finally:
+        conn.close()
+
+
+# ============================================================================================================
+# Architecture v3: push-time checks ("catch it before you deploy"), project slots and live stages.
+# ============================================================================================================
+
+PUSH_FINAL = ("passed", "failed", "error", "superseded", "skipped")
+
+
+def project_slot_info(user_id: str) -> dict:
+    """{used, limit, free, extra}: every plan includes plans.INCLUDED_PROJECTS project(s); each paid slot adds one."""
+    conn = get_connection()
+    try:
+        used = _execute(conn, "SELECT COUNT(*) AS n FROM projects WHERE user_id=?", (user_id,)).fetchone()["n"]
+        row = _execute(conn, "SELECT project_slots FROM users WHERE id=?", (user_id,)).fetchone()
+    finally:
+        conn.close()
+    extra = int((row["project_slots"] if row else 0) or 0)
+    limit = plans.INCLUDED_PROJECTS + extra
+    return {"used": int(used), "limit": limit, "free": max(0, limit - int(used)), "extra": extra}
+
+
+def admin_add_project_slots(user_id: str, count: int = 1) -> int:
+    conn = get_connection()
+    try:
+        _execute(conn, "UPDATE users SET project_slots=COALESCE(project_slots,0)+? WHERE id=?", (int(count), user_id))
+        conn.commit()
+        row = _execute(conn, "SELECT project_slots FROM users WHERE id=?", (user_id,)).fetchone()
+        return int(row["project_slots"]) if row else 0
+    finally:
+        conn.close()
+
+
+def set_project_watch(project_id: str, user_id: str, watch_mode: str) -> bool:
+    if watch_mode not in WATCH_MODES:
+        return False
+    conn = get_connection()
+    try:
+        cur = _execute(conn, "UPDATE projects SET watch_mode=? WHERE id=? AND user_id=?", (watch_mode, project_id, user_id))
+        conn.commit()
+        return cur.rowcount == 1
+    finally:
+        conn.close()
+
+
+def set_project_webhook(project_id: str, webhook_id: str, secret_ciphertext: str) -> None:
+    conn = get_connection()
+    try:
+        _execute(conn, "UPDATE projects SET webhook_id=?,webhook_secret_ciphertext=? WHERE id=?",
+                 (str(webhook_id or ""), secret_ciphertext, project_id))
+        conn.commit()
+    finally:
+        conn.close()
+
+
+def get_project_any(project_id: str):
+    """Owner-less read for trusted server code only (webhooks, worker). Never use it to answer a browser request."""
+    conn = get_connection()
+    try:
+        row = _execute(conn, "SELECT * FROM projects WHERE id=?", (project_id,)).fetchone()
+        return dict(row) if row else None
+    finally:
+        conn.close()
+
+
+def enqueue_push_check(project_id: str, user_id: str, sha: str, branch: str, *, source: str = "webhook",
+                       pusher: str = "", commit_message: str = "") -> tuple[str, bool]:
+    """Queue a sandbox check of one pushed commit. The same commit is never queued twice (webhook + poll + manual).
+    Older checks of the same project that have not started yet are marked superseded: only the newest commit matters."""
+    sha = str(sha or "").strip().lower()
+    if not re.fullmatch(r"[0-9a-f]{7,64}", sha):
+        raise ValueError("Invalid commit id")
+    conn = get_connection()
+    try:
+        existing = _execute(conn, "SELECT id FROM push_checks WHERE project_id=? AND sha=?", (project_id, sha)).fetchone()
+        if existing:
+            return existing["id"], False
+        check_id = _id()
+        now = _now()
+        _execute(conn, """UPDATE push_checks SET status='superseded',stage='superseded',finished_at=?
+                          WHERE project_id=? AND status='queued'""", (now, project_id))
+        _execute(conn, """INSERT INTO push_checks(id,project_id,user_id,sha,branch,source,pusher,commit_message,status,stage,
+                          available_at,created_at) VALUES(?,?,?,?,?,?,?,?,'queued','queued',?,?)""",
+                 (check_id, project_id, user_id, sha, branch[:250], source, pusher[:100], commit_message[:300], now, now))
+        conn.commit()
+        return check_id, True
+    except Exception:
+        conn.rollback()
+        raise
+    finally:
+        conn.close()
+
+
+def claim_next_push_check(lease_seconds: int = 900, max_attempts: int = 6):
+    """Lease one queued check whose project is active (paid or trial, not paused). Returns the check joined with its project."""
+    now = datetime.now(timezone.utc)
+    now_s = now.isoformat(timespec="seconds")
+    lease = (now + timedelta(seconds=lease_seconds)).isoformat(timespec="seconds")
+    conn = get_connection()
+    try:
+        if isinstance(conn, sqlite3.Connection):
+            conn.execute("BEGIN IMMEDIATE")
+        lock = "" if isinstance(conn, sqlite3.Connection) else " FOR UPDATE OF c SKIP LOCKED"
+        row = _execute(conn, f"""SELECT c.id FROM push_checks c
+            JOIN projects p ON p.id=c.project_id
+            JOIN subscriptions s ON s.user_id=p.user_id
+            WHERE ((c.status='queued' AND c.available_at<=?) OR (c.status='running' AND c.locked_until<?))
+              AND c.attempts<? AND p.paused=0 AND s.active_until>?
+            ORDER BY c.available_at ASC LIMIT 1{lock}""", (now_s, now_s, max_attempts, now_s)).fetchone()
+        if not row:
+            conn.rollback()
+            return None
+        _execute(conn, """UPDATE push_checks SET status='running',stage='downloading',stage_detail='',attempts=attempts+1,
+                          locked_until=?,started_at=CASE WHEN started_at='' THEN ? ELSE started_at END WHERE id=?""",
+                 (lease, now_s, row["id"]))
+        conn.commit()
+        claimed = _execute(conn, """SELECT c.*, p.name AS project_name, p.repo_owner, p.repo_name, p.branch AS project_branch,
+                p.mode, p.github_token_ciphertext, p.watch_mode FROM push_checks c JOIN projects p ON p.id=c.project_id
+                WHERE c.id=?""", (row["id"],)).fetchone()
+        return dict(claimed) if claimed else None
+    except Exception:
+        conn.rollback()
+        raise
+    finally:
+        conn.close()
+
+
+def set_push_check_stage(check_id: str, stage: str, detail: str = "") -> None:
+    conn = get_connection()
+    try:
+        _execute(conn, "UPDATE push_checks SET stage=?,stage_detail=? WHERE id=?", (stage, detail[:300], check_id))
+        conn.commit()
+    finally:
+        conn.close()
+
+
+def finish_push_check(check_id: str, status: str, *, output: str = "", stacks: list | None = None, incident_id: str = "",
+                      stage: str | None = None, detail: str = "") -> None:
+    conn = get_connection()
+    try:
+        row = _execute(conn, "SELECT project_id,sha FROM push_checks WHERE id=?", (check_id,)).fetchone()
+        _execute(conn, """UPDATE push_checks SET status=?,stage=?,stage_detail=?,output=?,stacks_json=?,incident_id=?,
+                          locked_until=NULL,finished_at=? WHERE id=?""",
+                 (status, stage or status, detail[:300], output[-6000:], json.dumps(stacks or []), incident_id, _now(), check_id))
+        if row and status in ("passed", "failed"):
+            _execute(conn, "UPDATE projects SET last_checked_sha=?,last_check_status=?,last_check_at=?,status=CASE WHEN status IN ('pending_install','') THEN 'connected' ELSE status END WHERE id=?",
+                     (row["sha"], status, _now(), row["project_id"]))
+        conn.commit()
+    finally:
+        conn.close()
+
+
+def retry_push_check(check_id: str, delay_seconds: int, reason: str) -> None:
+    """A fault on our side (sandbox offline, GitHub timeout): put the check back in the queue, never count it as a result."""
+    when = (datetime.now(timezone.utc) + timedelta(seconds=delay_seconds)).isoformat(timespec="seconds")
+    conn = get_connection()
+    try:
+        _execute(conn, """UPDATE push_checks SET status=CASE WHEN attempts>=6 THEN 'error' ELSE 'queued' END,
+                          stage=CASE WHEN attempts>=6 THEN 'error' ELSE 'waiting_retry' END,
+                          stage_detail=?,available_at=?,locked_until=NULL WHERE id=?""", (reason[:300], when, check_id))
+        conn.commit()
+    finally:
+        conn.close()
+
+
+def list_push_checks(project_id: str, limit: int = 15) -> list[dict]:
+    conn = get_connection()
+    try:
+        rows = _execute(conn, "SELECT * FROM push_checks WHERE project_id=? AND status<>'superseded' ORDER BY created_at DESC LIMIT ?",
+                        (project_id, limit)).fetchall()
+        return [dict(r) for r in rows]
+    finally:
+        conn.close()
+
+
+def user_push_checks(user_id: str, limit: int = 10) -> list[dict]:
+    conn = get_connection()
+    try:
+        rows = _execute(conn, """SELECT c.*, p.name AS project_name FROM push_checks c JOIN projects p ON p.id=c.project_id
+                                 WHERE p.user_id=? AND c.status<>'superseded' ORDER BY c.created_at DESC LIMIT ?""",
+                        (user_id, limit)).fetchall()
+        return [dict(r) for r in rows]
+    finally:
+        conn.close()
+
+
+def projects_to_poll() -> list[dict]:
+    """Active projects that want push checks. The worker compares each branch head with the last commit it saw."""
+    now_s = _now()
+    conn = get_connection()
+    try:
+        rows = _execute(conn, """SELECT p.* FROM projects p JOIN subscriptions s ON s.user_id=p.user_id
+                                 WHERE p.paused=0 AND s.active_until>? AND p.watch_mode IN ('push','both')""", (now_s,)).fetchall()
+        return [dict(r) for r in rows]
+    finally:
+        conn.close()
+
+
+def latest_push_sha(project_id: str) -> str:
+    conn = get_connection()
+    try:
+        row = _execute(conn, "SELECT sha FROM push_checks WHERE project_id=? ORDER BY created_at DESC LIMIT 1", (project_id,)).fetchone()
+        return row["sha"] if row else ""
+    finally:
+        conn.close()
+
+
+def push_checks_last_hour(project_id: str) -> int:
+    since = (datetime.now(timezone.utc) - timedelta(hours=1)).isoformat(timespec="seconds")
+    conn = get_connection()
+    try:
+        return int(_execute(conn, "SELECT COUNT(*) AS n FROM push_checks WHERE project_id=? AND created_at>? AND status<>'superseded'",
+                            (project_id, since)).fetchone()["n"])
+    finally:
+        conn.close()
+
+
+def mark_incident_source(incident_id: str, source: str, commit_sha: str = "") -> None:
+    conn = get_connection()
+    try:
+        _execute(conn, "UPDATE incidents SET source=?,commit_sha=? WHERE id=?", (source, commit_sha[:64], incident_id))
+        conn.commit()
+    finally:
+        conn.close()
+
+
+def set_incident_stage(incident_id: str, stage: str, detail: str = "", tier: str = "") -> None:
+    """What the agent is doing for this incident right now (shown live on the dashboard)."""
+    conn = get_connection()
+    try:
+        _execute(conn, "UPDATE incidents SET stage=?,stage_detail=?,stage_tier=?,stage_at=? WHERE id=?",
+                 (stage, detail[:300], tier, _now(), incident_id))
+        conn.commit()
+    finally:
+        conn.close()
+
+
+def get_incident_row(incident_id: str):
+    conn = get_connection()
+    try:
+        row = _execute(conn, "SELECT * FROM incidents WHERE id=?", (incident_id,)).fetchone()
+        return dict(row) if row else None
+    finally:
+        conn.close()
+
+
+def resolve_incident(incident_id: str, project_id: str, note: str = "") -> None:
+    conn = get_connection()
+    try:
+        _execute(conn, """UPDATE incidents SET status='resolved',resolved_at=?,stage='resolved',stage_detail=?,stage_at=?
+                          WHERE id=? AND project_id=?""", (_now(), note[:300], _now(), incident_id, project_id))
+        _execute(conn, "UPDATE incident_jobs SET status='done',locked_until=NULL,updated_at=? WHERE incident_id=?", (_now(), incident_id))
+        conn.commit()
+    finally:
+        conn.close()
+
+
+def user_live_work(user_id: str, limit: int = 12) -> dict:
+    """Everything the agent is doing (or just did) for this customer: open incidents and recent push checks."""
+    conn = get_connection()
+    try:
+        incidents = _execute(conn, """SELECT i.*, p.name AS project_name, p.mode AS project_mode, p.branch AS project_branch
+            FROM incidents i JOIN projects p ON p.id=i.project_id WHERE p.user_id=?
+            ORDER BY CASE WHEN i.status IN ('resolved','reverted') THEN 1 ELSE 0 END, i.last_seen DESC LIMIT ?""",
+            (user_id, limit)).fetchall()
+        checks = _execute(conn, """SELECT c.*, p.name AS project_name FROM push_checks c JOIN projects p ON p.id=c.project_id
+            WHERE p.user_id=? AND c.status<>'superseded' ORDER BY c.created_at DESC LIMIT ?""", (user_id, limit)).fetchall()
+        return {"incidents": [dict(r) for r in incidents], "checks": [dict(r) for r in checks]}
+    finally:
+        conn.close()
+
+
+def admin_push_check_stats() -> dict:
+    since = (datetime.now(timezone.utc) - timedelta(days=7)).isoformat(timespec="seconds")
+    conn = get_connection()
+    try:
+        rows = _execute(conn, "SELECT status, COUNT(*) AS n FROM push_checks WHERE created_at>? GROUP BY status", (since,)).fetchall()
+        return {r["status"]: int(r["n"]) for r in rows}
+    finally:
+        conn.close()
+
+
+def resolve_push_incidents(project_id: str, note: str) -> int:
+    """A later push passed every check: close the push-detected incidents that are not being worked on right now."""
+    now = _now()
+    conn = get_connection()
+    try:
+        rows = _execute(conn, """SELECT id FROM incidents WHERE project_id=? AND source='push'
+            AND status NOT IN ('resolved','reverted') AND stage NOT IN ('thinking','testing_fix','pushing')""", (project_id,)).fetchall()
+        for r in rows:
+            _execute(conn, """UPDATE incidents SET status='resolved',resolved_at=?,stage='resolved',stage_detail=?,stage_at=? WHERE id=?""",
+                     (now, note[:300], now, r["id"]))
+            _execute(conn, "UPDATE incident_jobs SET status='done',locked_until=NULL,updated_at=? WHERE incident_id=?", (now, r["id"]))
+        conn.commit()
+        return len(rows)
     finally:
         conn.close()

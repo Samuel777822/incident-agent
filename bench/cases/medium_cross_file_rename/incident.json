@@ -1,0 +1,4 @@
+{
+  "message": "AttributeError: module 'inventory' has no attribute 'get_stock'",
+  "traceback": "Traceback (most recent call last):\n  File \"<string>\", line 2, in <module>\n  File \"/app/orders.py\", line 11, in create_order\n    if inventory.get_stock(sku) < qty:\n       ^^^^^^^^^^^^^^^^^^^\nAttributeError: module 'inventory' has no attribute 'get_stock'. Did you mean: 'fetch_stock'?\n"
+}

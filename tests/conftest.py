@@ -31,3 +31,14 @@ def _isolated_environment(monkeypatch):
                  "ADMIN_EMAIL", "UPI_ID", "UPI_PAYEE_NAME"):
         monkeypatch.delenv(name, raising=False)
     monkeypatch.setenv("ADMIN_EMAILS", "admin1@example.com,admin2@example.com")
+
+
+@pytest.fixture(autouse=True)
+def _no_github_push_calls(monkeypatch):
+    """Push guard (architecture v3) talks to GitHub when a project is connected. Tests never reach the network:
+    the webhook install, branch-head lookup and commit statuses are replaced by offline stand-ins. Tests of push_watch itself
+    put the real functions back with monkeypatch."""
+    import push_watch
+    monkeypatch.setattr(push_watch, "install_webhook", lambda project, token: {"ok": False, "error": "offline test"})
+    monkeypatch.setattr(push_watch, "branch_head", lambda project: None)
+    monkeypatch.setattr(push_watch, "set_commit_status", lambda *a, **k: False)

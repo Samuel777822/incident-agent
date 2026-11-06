@@ -1,0 +1,4 @@
+{
+  "message": "Ordering a product we do not stock crashes the checkout with a NullPointerException.",
+  "traceback": "Exception in thread \"main\" java.lang.NullPointerException: Cannot invoke \"java.lang.Integer.intValue()\" because the return value of \"java.util.Map.get(Object)\" is null\n\tat com.shop.Inventory.getStock(Inventory.java:31)\n\tat com.shop.Orders.createOrder(Orders.java:12)\n\tat com.shop.Main.main(Main.java:11)\n"
+}

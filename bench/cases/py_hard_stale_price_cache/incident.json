@@ -1,0 +1,4 @@
+{
+  "message": "After an admin changes a price, customers still see the OLD price until the server restarts (stale cache).",
+  "traceback": "FAIL  tests/test_price_cache.py::test_new_price_is_used_by_the_storefront -- AssertionError:  (test_price_cache.py:17)\nSUMMARY {'PASS': 41, 'FAIL': 1, 'SKIP': 0, 'ERROR': 0}\n1 failed, 41 passed in 0.1s\n"
+}

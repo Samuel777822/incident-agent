@@ -1,0 +1,4 @@
+{
+  "message": "The nightly build is red: the sales report class no longer compiles.",
+  "traceback": "src/main/java/com/shop/Reports.java:15: error: cannot find symbol\n        return Math.round(totl * 100.0) / 100.0;\n                          ^\n  symbol:   variable totl\n  location: class Reports\n1 error\n"
+}

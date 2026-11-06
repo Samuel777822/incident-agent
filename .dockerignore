@@ -1,0 +1,9 @@
+.env
+.env.*
+!.env.example
+.git
+__pycache__
+*.pyc
+bench/cases
+.venv
+node_modules

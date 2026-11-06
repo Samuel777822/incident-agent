@@ -1,0 +1,4 @@
+{
+  "message": "After the admin changes a price, new orders keep using the OLD price until the server is restarted (stale cache).",
+  "traceback": "FAIL a changed price is used by the next order: expected 300.0 but was 250.0\n1 failed, 90 passed\n"
+}

@@ -1,0 +1,9 @@
+# Sandbox image for Python projects. Build:  docker build -f sandbox/Dockerfile.python -t fixengine-sandbox-python:1 sandbox
+FROM python:3.12-slim
+RUN pip install --no-cache-dir pytest==8.3.4 \
+ && useradd --uid 10001 --no-create-home --shell /usr/sbin/nologin sandbox \
+ && mkdir /work && chown 10001:10001 /work
+COPY smoke.py /opt/smoke.py
+ENV PYTHONDONTWRITEBYTECODE=1 PYTHONUNBUFFERED=1 HOME=/tmp
+USER 10001
+WORKDIR /work

@@ -179,10 +179,10 @@ def test_manual_upi_page_has_inline_qr_and_fixed_amounts(web_env):
     status, headers, body = _request("/billing/pay?plan=monthly", cookie=cookie)
     assert status == "200 OK"
     assert "src='data:image/svg+xml" in body and "quickchart" not in body
-    assert "am=100.00" in body and "am=1000.00" not in body and "cu=INR" in body and "pa=7975291636@ptsbi" in body
+    assert "am=200.00" in body and "am=1500.00" not in body and "cu=INR" in body and "pa=7975291636@ptsbi" in body
     assert "img-src 'self' data:" in dict(headers)["Content-Security-Policy"]
     _, _, yearly = _request("/billing/pay?plan=yearly", cookie=cookie)
-    assert "am=1000.00" in yearly and "am=100.00&" not in yearly
+    assert "am=1500.00" in yearly and "am=200.00&" not in yearly
 
 
 def test_manual_payment_references_are_validated_and_unique(web_env):
@@ -267,20 +267,20 @@ def test_checkout_amount_is_decided_by_the_server(web_env, gateway, monkeypatch)
 
     monkeypatch.setattr(web_app, "urlopen", fake_urlopen)
     status, headers, body = post("/billing/order", cookie, csrf, plan="monthly", amount="1")
-    assert status == "200 OK" and sent["amount"] == 10000 and "Pay ₹100" in body
+    assert status == "200 OK" and sent["amount"] == 20000 and "Pay ₹200" in body
     assert "nonce-" in dict(headers)["Content-Security-Policy"]
     conn = portal_db.get_connection()
     row = portal_db._execute(conn, "SELECT amount,plan FROM payment_orders WHERE razorpay_order_id='order_srv123'").fetchone()
     conn.close()
-    assert (row["amount"], row["plan"]) == (10000, "monthly")
+    assert (row["amount"], row["plan"]) == (20000, "monthly")
     assert post("/billing/order", cookie, csrf, plan="bogus")[0] == "400 Bad Request"
 
 
 def test_webhook_activates_access_even_if_browser_closed(web_env, gateway):
     user_id, *_ = make_session("c@example.com")
-    portal_db.create_payment_order(user_id, "order_w1", 100000, "yearly")
+    portal_db.create_payment_order(user_id, "order_w1", 150000, "yearly")
     event = {"event": "payment.captured", "payload": {"payment": {"entity": {
-        "id": "pay_w1", "order_id": "order_w1", "status": "captured", "amount": 100000, "currency": "INR"}}}}
+        "id": "pay_w1", "order_id": "order_w1", "status": "captured", "amount": 150000, "currency": "INR"}}}}
     raw = json.dumps(event).encode()
     sign = lambda body: hmac.new(b"hook-secret", body, hashlib.sha256).hexdigest()
     assert _request("/webhooks/razorpay", method="POST", raw_body=raw, headers={"HTTP_X_RAZORPAY_SIGNATURE": "bad"})[0] == "401 Unauthorized"
@@ -295,7 +295,7 @@ def test_webhook_activates_access_even_if_browser_closed(web_env, gateway):
 
 def test_webhook_ignores_wrong_amount(web_env, gateway):
     user_id, *_ = make_session("c@example.com")
-    portal_db.create_payment_order(user_id, "order_w2", 100000, "yearly")
+    portal_db.create_payment_order(user_id, "order_w2", 150000, "yearly")
     event = {"event": "payment.captured", "payload": {"payment": {"entity": {
         "id": "pay_w2", "order_id": "order_w2", "status": "captured", "amount": 100, "currency": "INR"}}}}
     raw = json.dumps(event).encode()
@@ -569,7 +569,7 @@ def test_admin_sees_customers_needing_action_first_with_their_plan_state(web_env
     _, _, body = _request("/admin", cookie=admin_cookie)
     assert body.index("z-payer@example.com") < body.index("a-active@example.com") < body.index("b-idle@example.com")
     assert "Payment to confirm" in body and "Paid · " in body and "No access" in body
-    assert "I received ₹1000 · grant 365 days" in body
+    assert "I received ₹1500 · grant 365 days" in body
 
 
 # --- the install bug from the field: form said "main", the repository uses "master" ----------------------
@@ -713,3 +713,117 @@ def test_retry_with_nothing_to_change_reports_unchanged_instead_of_failing(monke
     result = mi.open_monitoring_pr(owner="demo", repo="shop", base_branch="main", project_id="11111111-2222-3333-4444-555555555555", token="t")
     assert result["unchanged"] is True and result["workflow_added"] is False and result["had_ci"] is False
     assert not calls.get("merged")  # no pull request was opened or merged
+
+
+def test_billing_page_shows_plan_v2_prices_quotas_and_the_fine_print(web_env):
+    _, _, cookie = make_session("c@example.com")
+    _, _, body = _request("/billing", cookie=cookie)
+    assert "₹200" in body and "₹1,500" in body and "about ₹125 a month" in body
+    assert "30 Normal, 6 High and 3 Extra" in body
+    assert "do not roll over" in body and "not a guaranteed fix" in body and "href='/usage'" in body
+    assert "₹1,000" not in body
+
+
+# --- customer intake on free trial and paid plans --------------------------------
+
+def test_trial_intake_details_saved_and_emailed_to_admins(web_env):
+    user_id, csrf, cookie = make_session("lead@company.com")
+    
+    # 1. Check intake form on billing page
+    status, _, bill = _request("/billing", cookie=cookie)
+    assert status == "200 OK"
+    assert "Request free trial" in bill
+    assert "name='phone'" in bill
+    assert "name='referral_source'" in bill
+
+    # 2. Submit trial request with intake details
+    status, _, body = post("/billing/trial-request", cookie, csrf,
+                           name="Alice Smith",
+                           phone="+91 9988776655",
+                           referral_source="YouTube",
+                           organization="Acme Systems")
+    assert status == "200 OK"
+    assert "Request received" in body
+
+    # 3. Verify saved in database (users and trial_requests tables)
+    user = portal_db.get_user_by_id(user_id)
+    assert user["name"] == "Alice Smith"
+    assert user["phone"] == "+91 9988776655"
+    assert user["referral_source"] == "YouTube"
+    assert user["organization"] == "Acme Systems"
+
+    trials = portal_db.admin_list_trial_requests()
+    t = next(tr for tr in trials if tr["user_id"] == user_id)
+    assert t["user_name"] == "Alice Smith"
+    assert t["user_phone"] == "+91 9988776655"
+    assert t["user_referral"] == "YouTube"
+    assert t["user_organization"] == "Acme Systems"
+
+    # 4. Verify admin email alerts received the details
+    notifs = portal_db.recent_notifications(10)
+    trial_notifs = [n for n in notifs if n["kind"] == "trial_request"]
+    assert len(trial_notifs) == 2  # sent to both admins
+    for n in trial_notifs:
+        assert "lead@company.com" in n["subject"]
+
+    # 5. Verify details show on admin dashboard
+    _, _, admin_cookie = make_session("admin1@example.com")
+    st, _, admin_page = _request("/admin", cookie=admin_cookie)
+    assert st == "200 OK"
+    assert "Alice Smith" in admin_page
+    assert "+91 9988776655" in admin_page
+    assert "YouTube" in admin_page
+    assert "Acme Systems" in admin_page
+
+
+def test_payment_intake_details_saved_and_emailed_to_admins(web_env):
+    user_id, csrf, cookie = make_session("paying_user@company.com")
+
+    # 1. Check intake form on UPI payment page
+    st, _, page = _request("/billing/pay?plan=yearly", cookie=cookie)
+    assert st == "200 OK"
+    assert "name='phone'" in page
+    assert "name='referral_source'" in page
+    assert "name='transaction_ref'" in page
+
+    # 2. Submit payment with intake details
+    st, _, body = post("/billing/pay", cookie, csrf,
+                       plan="yearly",
+                       transaction_ref="888877776666",
+                       name="Bob Jones",
+                       phone="+91 9123456789",
+                       referral_source="GitHub",
+                       organization="Bob Labs")
+    assert st == "200 OK"
+    assert "Payment submitted" in body
+
+    # 3. Verify details saved in database
+    user = portal_db.get_user_by_id(user_id)
+    assert user["name"] == "Bob Jones"
+    assert user["phone"] == "+91 9123456789"
+    assert user["referral_source"] == "GitHub"
+    assert user["organization"] == "Bob Labs"
+
+    payments = portal_db.admin_list_manual_payments()
+    p = next(pm for pm in payments if pm["user_id"] == user_id)
+    assert p["user_name"] == "Bob Jones"
+    assert p["user_phone"] == "+91 9123456789"
+    assert p["user_referral"] == "GitHub"
+    assert p["user_organization"] == "Bob Labs"
+
+    # 4. Verify admin email alerts received details
+    notifs = portal_db.recent_notifications(10)
+    sub_notifs = [n for n in notifs if n["kind"] == "payment_submitted"]
+    assert len(sub_notifs) == 2  # sent to both admins
+    for n in sub_notifs:
+        assert "paying_user@company.com" in n["subject"]
+
+    # 5. Verify details show on admin dashboard
+    _, _, admin_cookie = make_session("admin1@example.com")
+    st, _, admin_page = _request("/admin", cookie=admin_cookie)
+    assert st == "200 OK"
+    assert "Bob Jones" in admin_page
+    assert "+91 9123456789" in admin_page
+    assert "GitHub" in admin_page
+    assert "Bob Labs" in admin_page
+    assert "888877776666" in admin_page

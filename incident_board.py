@@ -13,9 +13,9 @@ from __future__ import annotations
 
 import html
 import re
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 
-LIVE_JS_VERSION = "1"
+LIVE_JS_VERSION = "2"
 
 _TONES = {"green", "amber", "red", "blue", "muted"}
 _DIAGNOSING = {"diagnosing", "queued", "processing"}
@@ -23,6 +23,22 @@ _DIAGNOSING = {"diagnosing", "queued", "processing"}
 
 def _e(value) -> str:
     return html.escape(str(value if value is not None else ""), quote=True)
+
+
+IST = timezone(timedelta(hours=5, minutes=30), name="IST")
+
+
+def _fmt_ist(value) -> str:
+    text = str(value or "").strip()
+    if not text:
+        return ""
+    try:
+        moment = datetime.fromisoformat(text.replace("Z", "+00:00"))
+    except ValueError:
+        return ""
+    if moment.tzinfo is None:
+        moment = moment.replace(tzinfo=timezone.utc)
+    return moment.astimezone(IST).strftime("%d %b %Y, %H:%M IST")
 
 
 def _ago(value) -> str:
@@ -53,7 +69,18 @@ def _safe_pr_url(url) -> str:
 
 
 def stage_for(incident: dict, mode: str) -> dict:
-    """Work out the headline, colour and step list from what is really stored for the incident."""
+    """Work out the headline, colour and step list from what is really stored for the incident.
+
+    Incidents worked on by architecture v3 carry a live `stage` (downloading, reproducing, thinking, testing_fix, pushing,
+    merging, ...). Those use live_status, which also names the mode that is working. Older incidents fall back to the status."""
+    if incident.get("stage"):
+        import live_status
+        v = live_status.incident_view(incident, mode)
+        headline = v["headline"]
+        if v["mode_name"] and v["stage"] in ("thinking", "testing_fix", "pushing", "waiting_user"):
+            headline = f"{headline} · {v['mode_name']} mode" if v["mode_name"] not in headline else headline
+        return {"headline": headline, "tone": v["tone"] if v["tone"] in _TONES else "muted", "steps": v["steps"],
+                "active": v["active"], "detail": v["detail"]}
     status = str(incident.get("status") or "")
     ci = str(incident.get("ci_status") or "unknown")
     pr_url = _safe_pr_url(incident.get("pr_url"))
@@ -96,6 +123,9 @@ def stage_for(incident: dict, mode: str) -> dict:
             steps += [("Diagnosed", "done"), ("Resolved", "done")]
             headline = "Resolved"
         tone = "green"
+    elif status == "awaiting_choice":
+        steps += [("Diagnosing", "active"), ("Your decision", "active"), ("Fix PR", "todo")]
+        headline, tone, active = "Waiting for your decision · open Fix usage", "amber", True
     elif status == "needs_human":
         steps += [("Diagnosed", "done" if (incident.get("report") or incident.get("root_cause")) else "fail"),
                   ("No fix PR created", "fail")]
@@ -172,9 +202,18 @@ def render_board(project_id: str, incidents: list, mode: str) -> str:
         cause = (cause[:160] + "…") if len(cause) > 160 else cause
         category = str(inc.get("category") or "").replace("_", " ")
         confidence = str(inc.get("confidence") or "")
-        meta = [f"{_e(inc.get('occurrences'))} events", f"last seen {_e(_ago(inc.get('last_seen')))}"]
+        ist_ts = _fmt_ist(inc.get('last_seen'))
+        ago_label = f"last seen {_e(_ago(inc.get('last_seen')))}"
+        if ist_ts:
+            ago_label = f"<span title='{_e(ist_ts)}'>{ago_label} ({_e(ist_ts)})</span>"
+        meta = [("caught on push " + _e(str(inc.get("commit_sha") or "")[:7])) if inc.get("source") == "push"
+                else f"{_e(inc.get('occurrences'))} events", ago_label]
+        if stage.get("detail"):
+            meta.insert(0, "<b>" + _e(stage["detail"][:140]) + "</b>")
         if category:
             meta.append(_e(category + (f" · {confidence} confidence" if confidence else "")))
+        if inc.get("fx_path"):
+            meta.append("tries: " + _e(inc["fx_path"]))
         buttons = []
         if pr_url:
             buttons.append(f"<a class='button primary' href='{_e(pr_url)}' target='_blank' rel='noopener'>Open fix pull request</a>")
@@ -195,16 +234,16 @@ def render_board(project_id: str, incidents: list, mode: str) -> str:
 _STYLE = """<style>
 .board-head{display:flex;justify-content:flex-end;margin:-6px 0 10px}
 .live{font-size:12px;color:#8ce4c0}.live[data-state='off']{color:#ffdc91}
-.inc{background:linear-gradient(145deg,#141e33,#101729);border:1px solid var(--line);border-radius:16px;margin:0 0 14px;overflow:hidden}
+.inc{background:linear-gradient(145deg,#170d22,#0f0817);border:1px solid var(--line);border-radius:16px;margin:0 0 14px;overflow:hidden}
 .inc>details>summary{list-style:none;cursor:pointer;padding:18px 20px;display:block}
 .inc>details>summary::-webkit-details-marker{display:none}
 .inc-top{display:flex;justify-content:space-between;align-items:center;gap:12px;flex-wrap:wrap}
 .inc-sub{margin:6px 0 12px;font-size:13px}
 .pill.tone-green{color:#8ce4c0;background:#14392f}.pill.tone-amber{color:#ffdc91;background:#3a301b}
-.pill.tone-red{color:#ffb3b3;background:#3d1c24}.pill.tone-blue{color:#a9c8ff;background:#1b2f55}.pill.tone-muted{color:#b8c9df;background:#1b2d43}
+.pill.tone-red{color:#ffb3b3;background:#3d1c24}.pill.tone-blue{color:#d6c8ff;background:#2a1d4a}.pill.tone-muted{color:#b8c9df;background:#1b2d43}
 .steps{list-style:none;display:flex;flex-wrap:wrap;gap:6px 18px;margin:0;padding:0;font-size:13px}
 .steps li{display:flex;align-items:center;gap:7px;color:#7d8ba3}
-.steps .dot{width:10px;height:10px;border-radius:50%;border:2px solid #3b4b68;background:transparent;flex:none}
+.steps .dot{width:10px;height:10px;border-radius:50%;border:2px solid #4a3556;background:transparent;flex:none}
 .steps .done{color:#cfe9de}.steps .done .dot{background:#55d6a1;border-color:#55d6a1}
 .steps .active{color:#ffe6a8}.steps .active .dot{border-color:#f0c36b;background:#f0c36b;animation:pulse 1.2s ease-in-out infinite}
 .steps .fail{color:#ffb3b3}.steps .fail .dot{background:#ff7a8a;border-color:#ff7a8a}
@@ -229,57 +268,59 @@ def render_board_section(project_id: str, incidents: list, mode: str) -> str:
 
 
 LIVE_JS = """(function () {
-  var box = document.getElementById('incident-board');
-  if (!box) { return; }
-  var url = box.getAttribute('data-live');
+  // Any element with data-live="<url>" re-fetches its HTML: every 3 s while something in it is working, every 15 s otherwise.
+  var boxes = document.querySelectorAll('[data-live]');
   var dot = document.getElementById('live-dot');
-  var last = null, failures = 0, timer = null;
-
-  function openIds() {
-    var ids = {}, nodes = box.querySelectorAll('details[data-id][open]');
-    for (var i = 0; i < nodes.length; i++) { ids[nodes[i].getAttribute('data-id')] = true; }
-    return ids;
-  }
-  function reopen(ids) {
-    var nodes = box.querySelectorAll('details[data-id]');
-    for (var i = 0; i < nodes.length; i++) {
-      if (ids[nodes[i].getAttribute('data-id')]) { nodes[i].setAttribute('open', ''); }
-    }
-  }
-  function isActive() { return !!box.querySelector('[data-active="1"]'); }
   function setDot(ok) {
     if (!dot) { return; }
     dot.setAttribute('data-state', ok ? 'on' : 'off');
     dot.textContent = ok ? '\\u25CF Live' : '\\u25CF Reconnecting\\u2026';
   }
-  function schedule() {
-    clearTimeout(timer);
-    timer = setTimeout(tick, failures ? 15000 : (isActive() ? 3000 : 15000));
+  function watch(box) {
+    var url = box.getAttribute('data-live');
+    var last = null, failures = 0, timer = null;
+    function openIds() {
+      var ids = {}, nodes = box.querySelectorAll('details[data-id][open]');
+      for (var i = 0; i < nodes.length; i++) { ids[nodes[i].getAttribute('data-id')] = true; }
+      return ids;
+    }
+    function reopen(ids) {
+      var nodes = box.querySelectorAll('details[data-id]');
+      for (var i = 0; i < nodes.length; i++) {
+        if (ids[nodes[i].getAttribute('data-id')]) { nodes[i].setAttribute('open', ''); }
+      }
+    }
+    function isActive() { return !!box.querySelector('[data-active="1"]'); }
+    function schedule() {
+      clearTimeout(timer);
+      timer = setTimeout(tick, failures ? 15000 : (isActive() ? 3000 : 15000));
+    }
+    function tick() {
+      if (document.hidden) { schedule(); return; }
+      fetch(url, { credentials: 'same-origin', cache: 'no-store' })
+        .then(function (r) {
+          if (r.status === 401) { window.location.href = '/login'; return null; }
+          if (!r.ok) { throw new Error('bad status'); }
+          return r.text();
+        })
+        .then(function (text) {
+          if (text === null) { return; }
+          failures = 0; setDot(true);
+          if (text !== last) {
+            var ids = openIds();
+            box.innerHTML = text;
+            reopen(ids);
+            last = text;
+          }
+        })
+        .catch(function () { failures++; setDot(false); })
+        .then(schedule);
+    }
+    document.addEventListener('visibilitychange', function () {
+      if (!document.hidden) { clearTimeout(timer); tick(); }
+    });
+    schedule();
   }
-  function tick() {
-    if (document.hidden) { schedule(); return; }
-    fetch(url, { credentials: 'same-origin', cache: 'no-store' })
-      .then(function (r) {
-        if (r.status === 401) { window.location.href = '/login'; return null; }
-        if (!r.ok) { throw new Error('bad status'); }
-        return r.text();
-      })
-      .then(function (text) {
-        if (text === null) { return; }
-        failures = 0; setDot(true);
-        if (text !== last) {
-          var ids = openIds();
-          box.innerHTML = text;
-          reopen(ids);
-          last = text;
-        }
-      })
-      .catch(function () { failures++; setDot(false); })
-      .then(schedule);
-  }
-  document.addEventListener('visibilitychange', function () {
-    if (!document.hidden) { clearTimeout(timer); tick(); }
-  });
-  schedule();
+  for (var i = 0; i < boxes.length; i++) { watch(boxes[i]); }
 })();
 """

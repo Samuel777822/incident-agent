@@ -1,0 +1,4 @@
+{
+  "message": "ReferenceError: totl is not defined (the sales dashboard shows a blank page).",
+  "traceback": "file:///app/src/reports.js:7\n  return Math.round(totl * 100) / 100;\n                    ^\n\nReferenceError: totl is not defined\n    at Module.salesTotal (file:///app/src/reports.js:7:21)\n    at file:///app/[eval1]:1:40\n\nNode.js v22.22.2\n"
+}

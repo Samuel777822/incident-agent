@@ -1,0 +1,4 @@
+{
+  "message": "After the last style change half of the CSS stopped applying on every page.",
+  "traceback": "css/styles.css:55: missing } (block opened here is never closed)\nstatic_check: 1 errors in 9 files\n"
+}

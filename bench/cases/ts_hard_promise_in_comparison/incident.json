@@ -1,0 +1,4 @@
+{
+  "message": "The type-check fails in several files after someone made the stock lookup async.",
+  "traceback": "src/inventory.ts(23,7): error TS2365: Operator '<' cannot be applied to types 'Promise<number>' and 'number'.\nsrc/inventory.ts(26,18): error TS2362: The left-hand side of an arithmetic operation must be of type 'any', 'number', 'bigint' or an enum type.\nsrc/orders.ts(20,7): error TS2365: Operator '<' cannot be applied to types 'Promise<number>' and 'number'.\n"
+}
