@@ -30,15 +30,15 @@ it is merged once proven, so the fixed version is on GitHub. Everything is shown
 
 | Page | Who | What |
 | --- | --- | --- |
-| `/` `/how-it-works` `/pricing` `/features` `/faq` `/help` | everyone | Product, the interactive architecture diagram, plans |
+| `/` `/how-it-works` `/pricing` `/features` `/faq` `/help` | everyone | Product, the interactive diagram, how the agent chooses an AI (with a calculator), plans |
 | `/dashboard` | customer | Tries left per mode, "Agent right now" (live stage + mode + tries left), projects |
 | `/projects/new` | customer | Connect a repo (1 included, ₹30 per extra project) |
 | `/projects/<id>` | customer | Push checks (per stack), bugs and fixes, settings |
 | `/usage` | customer | Tries per mode, Auto / Ask me / Economy, decisions, buy packs |
 | `/billing` | customer | Plans (30 Normal / 6 High / 3 Extra a month), add-ons, UPI payments |
 | `/admin` | admins | Customers, trials, UPI payments to confirm (plans, slots, packs), apps, incidents, tickets, email |
-| `/admin/fix` | admins | Spend vs budget, kill switches, held requests |
-| `/admin/architecture` | admins | System + model-adapter architecture, the cost function with live numbers, router simulator |
+| `/admin/fix` | admins | Spending at a glance, protections explained, approvals, mode switches, per-mode and per-customer spend, history |
+| `/admin/architecture` | admins | System + model-adapter architecture, a 10-lesson course on the router with live numbers, router simulator |
 
 ## Plans
 

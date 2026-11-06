@@ -173,8 +173,8 @@ def features_page_html() -> str:
   </article>
   <article class="card">
     <div class="feat-ico" aria-hidden="true">&#8721;</div>
-    <h3>Cost-aware model router</h3>
-    <p class="muted">An expected-cost optimizer (a dynamic program, the same idea as Dijkstra's cheapest path but for uncertain steps) picks the cheapest mode likely to fix each bug, starting free and moving up only when needed.</p>
+    <h3>Smart, economical AI choice</h3>
+    <p class="muted">The agent compares the available AI models and chooses an economical option to fix your bug. When a weaker AI cannot solve it, it moves to a stronger one, passing on what it learned. <a href="/how-it-works#router">See how it decides</a>.</p>
   </article>
   <article class="card">
     <div class="feat-ico" aria-hidden="true">&#128274;</div>
@@ -251,7 +251,9 @@ def pricing_page_html(signed_in: bool = False) -> str:
 
 <section class="card" style="margin-top:28px">
   <h3>What a "try" is</h3>
-  <p class="muted">A try is one attempt by the agent to write a fix that passes the sandbox check. The agent starts with Low effort (free), then Normal, and moves up to High or Extra only when the cheaper modes cannot fix the bug. You can also pick a mode yourself or send a bug to human review. You are buying attempts, not a guaranteed fix: no automated system fixes every bug. Quotas reset on the 1st and do not roll over. A technical fault on our side never counts as a try.</p>
+  <p class="muted">{plans.TRY_DEFINITION} {plans.MODE_SUMMARY}</p>
+  <p class="muted">{plans.WHY_STRONGER} You can also pick a mode yourself or send a bug to human review.</p>
+  <p class="muted">You are buying attempts, not a guaranteed fix: no automated system fixes every bug. {plans.HUMAN_NEEDED} Quotas reset on the 1st and do not roll over.</p>
 </section>
 
 <section class="card" style="margin-top:28px">
@@ -378,6 +380,34 @@ def faq_page_html() -> str:
     <summary class="accordion-summary">How many projects can I connect?</summary>
     <div class="accordion-body">
       <p>Every plan includes one project. Each extra project is a one-time &#8377;{plans.PROJECT_SLOT_PRICE}. Your monthly tries are shared by all your projects.</p>
+    </div>
+  </details>
+
+  <details class="accordion-item">
+    <summary class="accordion-summary">What is a "try", and how many do I have?</summary>
+    <div class="accordion-body">
+      <p>{plans.TRY_DEFINITION} Every plan includes {plans.quota_sentence()}. Your dashboard and the Usage page show how many are left.</p>
+    </div>
+  </details>
+
+  <details class="accordion-item">
+    <summary class="accordion-summary">Why does the agent sometimes use a stronger AI?</summary>
+    <div class="accordion-body">
+      <p>{plans.MODE_SUMMARY} {plans.WHY_STRONGER} If you prefer, choose <b>Economy</b> on the Usage page and the agent never uses High or Extra.</p>
+    </div>
+  </details>
+
+  <details class="accordion-item">
+    <summary class="accordion-summary">What happens when a fix fails?</summary>
+    <div class="accordion-body">
+      <p>{plans.FAILED_FIX} Each failed attempt still counts as a try, because the AI did the work; a technical fault on our side never does.</p>
+    </div>
+  </details>
+
+  <details class="accordion-item">
+    <summary class="accordion-summary">When does a person need to step in?</summary>
+    <div class="accordion-body">
+      <p>{plans.HUMAN_NEEDED}</p>
     </div>
   </details>
 

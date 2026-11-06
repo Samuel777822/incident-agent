@@ -1051,7 +1051,7 @@ def render_homepage_html() -> str:
       </div>
       <h3 style="font-size:18px;margin:0 0 10px;color:var(--text);font-family:var(--serif)">The agent fixes it</h3>
       <p style="color:var(--muted);font-size:14px;line-height:1.6;margin:0">
-        A cost-aware router picks the cheapest AI mode likely to work. The patch must pass the exact check that failed. Watch every step live on your dashboard.
+        The agent picks an economical AI that is likely to fix it, and moves to a stronger one only if needed. The fix must pass the exact check that failed. Watch every step live on your dashboard.
       </p>
     </div>
 
@@ -1098,8 +1098,8 @@ def render_homepage_html() -> str:
     <div class="feature-v2-card">
       <span class="feature-num">03</span>
       <div class="feature-icon-box">{ICON_CPU}</div>
-      <h3>Cost-aware AI router</h3>
-      <p>An expected-cost optimizer starts free and moves up to stronger models only when the cheaper ones cannot fix the bug.</p>
+      <h3>Economical AI choice</h3>
+      <p>Starts with free and low-cost AI and moves to a stronger model only when the cheaper ones cannot fix the bug.</p>
     </div>
 
     <!-- 04 -->
@@ -1262,7 +1262,7 @@ def render_homepage_html() -> str:
           </div>
           <span class="pill green" style="font-size:11px"><span class="pulse-dot-green"></span> Confidence: 98%</span>
         </div>
-        <p style="color:#cfc5dc;font-size:14.5px;line-height:1.6">The diagnosis worker fetches relevant repository files as evidence and lets the cost-aware router pick the cheapest AI mode likely to fix it; the patch must pass the same sandbox check.</p>
+        <p style="color:#cfc5dc;font-size:14.5px;line-height:1.6">The diagnosis worker fetches relevant repository files as evidence and lets the agent pick an economical AI mode likely to fix it; the patch must pass the same sandbox check.</p>
         <div style="background:#060309;padding:14px;border-radius:8px;border:1px solid #2b1731;font-size:13px;color:#d5cadf">
           <b>Diagnosis:</b> Promotional items in catalog omit raw 'price' attribute. Subscripting <code>PRODUCTS[item["product_id"]]["price"]</code> throws unhandled KeyError.
         </div>

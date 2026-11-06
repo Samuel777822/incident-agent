@@ -80,7 +80,7 @@ def test_admin_budget_page_is_admin_only(web_env):
     assert status == "404 Not Found"
     admin_id, admin_cookie = _login("admin1@example.com")
     status, _, body = _request("/admin/fix", cookie=admin_cookie)
-    assert status == "200 OK" and "Spend and controls" in body and "Kill switches" in body and "Low effort" in body
+    assert status == "200 OK" and "AI spending and controls" in body and "Spending protection" in body and "Mode switches" in body and "Low effort" in body
 
 
 def test_admin_can_pause_and_resume_a_mode_with_csrf(web_env):

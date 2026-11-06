@@ -1,5 +1,27 @@
 # Changelog
 
+## v3.1 (6 November 2026): explanations for customers, a course for admins
+
+No prices, model ids, quotas, budgets, protections, routing maths or database tables changed. Only how things are explained and shown.
+
+* **One wording everywhere** (`plans.py`: `TRY_DEFINITION`, `WHY_STRONGER`, `FAILED_FIX`, `HUMAN_NEEDED`, `MODE_SUMMARY`, `TRY_SHORT`), used by
+  How it works, Usage, dashboard, billing, pricing, FAQ, Help and the chatbot.
+* **/how-it-works**: plain-language "How the agent decides which AI to use" (modes, tries, stronger AI, failed fixes, when a person is needed).
+  The calculator now shows *Cost of this AI attempt* and *Estimated total cost to resolve the bug* side by side, the usage adjustment
+  separately (marked internal), a "Why are these two costs different?" explainer computed live, a clearly labelled demonstration slider,
+  and a note that success chances are starting estimates. Technical names are in a collapsed "Show the formula" box.
+* **Dashboard**: the line under "<mode> mode is writing a fix" is now a plain sentence ("Starting with a free attempt", "Moving to a stronger
+  AI: the cheaper modes are unlikely to fix this bug") instead of the router's internal reason. "Ask for more tries" now confirms what happened.
+* **/admin/fix** redesigned: month at a glance (tracked spend, limit B, forecast, estimated credits, clearly not a live balance), a
+  spending-protection table (trigger, action, modes, reason, whether you must act; current level highlighted; spike breaker live numbers;
+  per-customer and per-bug limits), provider spending with a tokens explainer, per-customer spending with quota use, readable approval
+  cards (usage, spend, forecast, why it was held, consequences of approve/deny) with the raw JSON under "Technical details",
+  6-month spending history, the current quota/budget settings and the env var that changes each, confirmations before every action.
+* **/admin/architecture**: "How the router decides (learn)" — ten lessons (attempt cost, expected cost, probability, repeat decay, quota
+  pressure λ, give-up penalty G, dynamic programming, search depth, memoization, hard rules vs optimizer), each with definition, reason,
+  exact formula, symbol table, worked example using live settings, and effect on the product. Parameter glossary. The simulator explains
+  whether a business rule or the optimizer decided, and why.
+
 ## v3.0 (6 November 2026): push guard
 
 **New architecture (the old one is kept).**

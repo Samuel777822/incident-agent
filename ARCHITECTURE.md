@@ -77,6 +77,13 @@ A small memoised dynamic program (depth 6): the "cheapest route" idea of Dijkstr
 per-bug caps, the user's pick, free first, Normal floor of 2, drop back to Normal after a strong model, no repeat with the same
 information, never past quota. Every decision is logged in `fx_router_decisions`.
 
+## Who sees what
+
+* Customers see modes (Low effort / Normal / High / Extra), tries and plain sentences. Shared wording lives in `plans.py`.
+  Router reasons shown on the dashboard are translated by `live_status.customer_reason()`; model names never appear.
+* Admins see model ids, rupees, formulas and raw decision data on `/admin/fix` and `/admin/architecture`.
+* The ₹30 give-up penalty G is an internal optimisation value only. It is never billed.
+
 ## Data model additions in v3
 
 * `push_checks` (one row per checked commit; unique per project + sha; superseded when a newer push arrives before it starts).

@@ -1334,6 +1334,19 @@ def _page_help(request: Request) -> Response:
   <p class="muted">No webhook (for example the token is not an admin of the repository)? The worker looks for new commits every few minutes instead. Use <b>Check latest commit now</b> on the project page any time.</p>
 </section>
 
+<!-- 1c. Tries and AI modes -->
+<section class="help-section" id="tries" data-category="setup">
+  <h2 class="help-section-title">Tries and AI modes</h2>
+  <p class="muted">@@TRY_DEFINITION@@</p>
+  <p class="muted">@@MODE_SUMMARY@@</p>
+  <p class="muted"><b>Why a stronger AI?</b> @@WHY_STRONGER@@</p>
+  <p class="muted"><b>When a fix fails:</b> @@FAILED_FIX@@</p>
+  <p class="muted"><b>When a person is needed:</b> @@HUMAN_NEEDED@@</p>
+  <p class="muted">Your dashboard shows which mode is working on each bug and how many tries you have left. On the Usage page choose
+  <b>Auto</b> (the agent decides), <b>Ask me</b> (you are asked at warning points) or <b>Economy</b> (never High or Extra).
+  The full picture, with a small calculator, is on <a href="/how-it-works#router">How it works</a>.</p>
+</section>
+
 <!-- 2. Remediation Modes Section -->
 <section class="help-section" id="modes" data-category="modes">
   <h2 class="help-section-title">Remediation Modes: How Much Autonomy Do You Want?</h2>
@@ -1697,6 +1710,8 @@ function filterCategory(cat, btn) {
 }
 </script>
 """
+    for _key in ("TRY_DEFINITION", "MODE_SUMMARY", "WHY_STRONGER", "FAILED_FIX", "HUMAN_NEEDED"):
+        body = body.replace(f"@@{_key}@@", _escape(getattr(plans, _key)))
     return _response(body, request)
 
 
@@ -2385,13 +2400,18 @@ def _page_usage(request):
         elif request.path == "/usage/more":
             tier = {"high": "sonnet", "extra": "opus"}.get(form.get("kind", ""), "")
             if tier:
-                fx_api.request_more(user_id, tier)
+                result = fx_api.request_more(user_id, tier)
+                return _redirect("/usage?asked=" + ("granted" if result.get("decision") == "granted" else "held"))
         elif request.path == "/usage/retry":
             fx_api.reopen_bug(form.get("bug_id", ""), user_id)
         return _redirect("/usage")
     if request.method != "GET" or request.path != "/usage":
         return _response("Method not allowed", request, "405 Method Not Allowed")
-    return _response(fx_ui.usage_page(fx_api.usage_view(user_id), _csrf(request)), request)
+    asked = (request.query.get("asked") or [""])[0]
+    msg = {"granted": "Good news: extra tries were added to your account for this month.",
+           "held": "Thanks, your request was sent to our team. We usually answer within a few hours; you will get an email. "
+                   "If you need tries right away, a pack can be bought below."}.get(asked, "")
+    return _response(fx_ui.usage_page(fx_api.usage_view(user_id), _csrf(request), msg), request)
 
 
 def _page_how_it_works(request):
@@ -2432,20 +2452,26 @@ def _page_admin_fix(request):
             return _response("<div class='alert'>This form expired. Refresh and try again.</div>", request, "403 Forbidden")
         form, actor, action = request.form, request.session["email"], request.form.get("action", "")
         try:
+            from fixengine import config as fx_cfg
             if action in ("pause", "resume"):
-                admin_tools.pause_tier(form.get("tier", ""), action == "pause", actor)
-                msg = f"{form.get('tier', '')} {action}d"
+                tier = form.get("tier", "")
+                admin_tools.pause_tier(tier, action == "pause", actor)
+                name = fx_cfg.USER_MODE_NAMES.get(tier, tier)
+                msg = (f"{name} mode paused for every customer. New {name} attempts are refused until you resume it."
+                       if action == "pause" else f"{name} mode resumed. The spending protections still apply.")
             elif action == "approve_hold":
-                msg = "Approved." if admin_tools.approve_hold(form.get("hold_id", ""), actor) else "That request was already handled."
+                msg = ("Approved: the extra tries are available to the customer for this month."
+                       if admin_tools.approve_hold(form.get("hold_id", ""), actor) else "That request was already handled.")
             elif action == "sell_pack":
                 target = portal_db.get_user_by_email(form.get("email", "").strip().lower())
                 if target and form.get("kind") in ("high", "extra"):
-                    admin_tools.sell_pack(target["id"], form["kind"], actor)
-                    msg = "Pack credited."
+                    done = admin_tools.sell_pack(target["id"], form["kind"], actor)
+                    msg = f"Pack credited: {done['tries']} {fx_cfg.USER_MODE_NAMES.get(done['tier'])} tries added to {target['email']} for this month."
                 else:
                     msg = "No customer with that email."
             elif action == "deny_hold":
-                msg = "Denied." if admin_tools.deny_hold(form.get("hold_id", ""), actor) else "That request was already handled."
+                msg = ("Denied: nothing was granted or charged. The customer can still buy a pack."
+                       if admin_tools.deny_hold(form.get("hold_id", ""), actor) else "That request was already handled.")
             else:
                 msg = "Unknown action."
         except ValueError:
@@ -2457,6 +2483,8 @@ def _page_admin_fix(request):
         row["email"] = emails[row["user_id"]]
     for hold in data["holds"]:
         hold["email"] = portal_db.get_user_email(hold["user_id"])
+    for row in data.get("users", []):
+        row["email"] = emails.get(row["user_id"]) or portal_db.get_user_email(row["user_id"])
     return _response(fx_ui.admin_page(data, _csrf(request), msg), request)
 
 
@@ -2531,6 +2559,8 @@ def _page_dashboard(request):
         quota = _quota_by_tier(user_id)
         if quota:
             meters = ("<section class='section-tight'><div class='row'><h2>Tries left</h2><a href='/usage'>Usage &amp; settings →</a></div>"
+                      f"<p class='muted'>{_escape(plans.TRY_SHORT)} The agent starts with the free and economical modes and uses High or Extra "
+                      "only when they are needed. <a href='/how-it-works#router'>How it chooses</a></p>"
                       + live_status.quota_strip(list(quota.values())) + "</section>")
     cards = []
     for project in projects:
@@ -3233,7 +3263,7 @@ def _page_billing(request):
                   + "</div>")
     body = (f"<section class='section'><div class='eyebrow'>Account</div><h1>Plan &amp; billing</h1>{banner}"
             f"<div class='grid'>{current}{trial_card}</div><h2>Plans</h2><div class='grid'>{''.join(plan_cards)}</div>"
-            f"<p class='muted'>Every plan includes {_escape(plans.quota_sentence())}. {_escape(plans.quota_fine_print())} "
+            f"<p class='muted'>Every plan includes {_escape(plans.quota_sentence())}. {_escape(plans.TRY_DEFINITION)} {_escape(plans.quota_fine_print())} "
             f"See your usage on the <a href='/usage'>Usage</a> page.</p>{addons}{history}</section>")
     return _response(body, request)
 

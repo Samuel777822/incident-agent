@@ -31,7 +31,7 @@ A. Push guard (new, recommended): when you connect a repository we add a GitHub 
    Green: the commit gets a green "Agent Daemon / push check" status on GitHub. Red: an incident opens and the agent starts fixing it.
    If the webhook cannot be added, the worker checks the branch every few minutes instead.
 B. Live error watch (classic): a tiny client in the running app reports crashes; the same fix pipeline takes over.
-The fix pipeline: a free first look, then the cost-aware router picks a mode (Normal, High or Extra). The model only returns text;
+The fix pipeline: a free first look, then the agent picks an economical mode (Normal, High or Extra). The model only returns text;
 our code applies the patch and the SAME sandbox check must pass. The fix goes to a new agent-daemon/fix-... branch with a pull request.
 Agent modes per project:
    - Report only: explains the problem, no code changes.
@@ -40,11 +40,21 @@ Agent modes per project:
 The dashboard shows live what the agent is doing (downloading, testing in the sandbox, writing a fix in a given mode, pushing, merging),
 which mode is working and how many tries are left.
 
-ALGORITHM:
-The router is an expected-cost optimizer: a small dynamic program, the same "cheapest route" idea as Dijkstra's algorithm, adapted to
-steps that can succeed or fail. For each bug it compares effective_cost(mode) + (1 - p_success) * cost_of_what_comes_next and picks the
-lowest, with hard rules on top (free first, Normal at least twice before High, drop back to Normal with the stronger model's diagnosis,
-per-bug caps, never past your quota).
+HOW THE AGENT CHOOSES AN AI (explain it in plain words first):
+Agent Daemon compares the available AI models and chooses an economical option to fix the bug. When a weaker AI cannot solve it,
+the agent moves to a stronger one and passes on what it learned. It always starts with free attempts and gives Normal at least two
+attempts before High or Extra, and it never goes past the customer's tries or the per-bug limits.
+Two different numbers appear on /how-it-works: "Cost of this AI attempt" (what one attempt costs) and "Estimated total cost to resolve
+the bug" (that attempt plus what may follow if it fails). The ₹30 "person steps in" value there is internal only and is NEVER charged.
+The calculator's success chances are starting estimates, not proven rates, and its usage slider is a demonstration, not the user's account.
+Only if someone asks for the technical name: an expected-cost dynamic program, like Dijkstra's cheapest-route idea for uncertain steps.
+
+DEFINITIONS (use exactly these meanings):
+- Try: @@TRY@@
+- Modes: @@MODES@@
+- Why a stronger AI: @@WHY@@
+- When a fix fails: @@FAIL@@
+- When a person is needed: @@HUMAN@@
 
 PRICING & PLANS:
 - Free Trial: 1 day of full access upon admin approval.
@@ -75,6 +85,8 @@ DAEMON_KNOWLEDGE = (DAEMON_KNOWLEDGE
     .replace("@@PACK_HIGH@@", str(plans.PACK_HIGH_TRIES))
     .replace("@@PACK_EXTRA@@", str(plans.PACK_EXTRA_TRIES))
     .replace("@@PROJECTS@@", plans.projects_sentence())
+    .replace("@@TRY@@", plans.TRY_DEFINITION).replace("@@MODES@@", plans.MODE_SUMMARY).replace("@@WHY@@", plans.WHY_STRONGER)
+    .replace("@@FAIL@@", plans.FAILED_FIX).replace("@@HUMAN@@", plans.HUMAN_NEEDED)
     .replace("@@SLOT@@", f"₹{plans.PROJECT_SLOT_PRICE}")
     .replace("@@SUPPORT@@", "Support email: " + (os.getenv("SUPPORT_EMAIL", "").strip() or "contact@agentdaemon.xyz")))
 
@@ -193,6 +205,15 @@ def answer_visitor_query(user_text: str, history: list[dict] | None = None) -> s
             "Would you like help getting started?"
         )
 
+    if any(k in text_lower for k in ("try", "tries", "attempt", "quota", "left")):
+        return f"{plans.TRY_DEFINITION} Every plan includes {plans.quota_sentence()}. Your dashboard shows how many are left."
+
+    if any(k in text_lower for k in ("stronger", "high mode", "extra mode", "why high", "why extra", "escalat", "which ai", "which model")):
+        return f"{plans.MODE_SUMMARY} {plans.WHY_STRONGER}"
+
+    if any(k in text_lower for k in ("fail", "human", "person", "review")):
+        return f"{plans.FAILED_FIX} {plans.HUMAN_NEEDED}"
+
     if any(k in text_lower for k in ("language", "python", "java", "javascript", "typescript", "react", "html", "node")):
         return (
             "Agent Daemon checks and fixes Python, JavaScript, TypeScript, Java and plain HTML/CSS/JS projects, and repos that mix them: "
@@ -203,7 +224,7 @@ def answer_visitor_query(user_text: str, history: list[dict] | None = None) -> s
         return (
             "Every time you push to GitHub, Agent Daemon installs, builds, tests and starts your code in a sandbox. If something breaks, "
             "the agent writes a fix, proves it with the same check, and pushes it back as a pull request (merged automatically in Auto mode). "
-            "A cost-aware router (an expected-cost dynamic program, like Dijkstra for uncertain steps) picks the cheapest mode likely to work. "
+            "The agent picks an economical AI that is likely to fix the bug and moves to a stronger one only when needed. "
             "The interactive diagram is at /how-it-works."
         )
 

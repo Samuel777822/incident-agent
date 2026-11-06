@@ -132,7 +132,8 @@ class Engine:
             pause = self._maybe_warn(claimed, project, bug, tier)
             if pause:
                 return pause
-            _stage(incident_id, "thinking", decision.reason[:200], tier)
+            import live_status
+            _stage(incident_id, "thinking", live_status.customer_reason(decision.reason, decision.action), tier)
             result = self._attempt(claimed, project, bug, tier, gate.pack_try, files, root, profile, message,
                                    traceback_text, commits, attempts)
             self.guard.check_alerts()

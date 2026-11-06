@@ -44,6 +44,24 @@ PUSH_STAGES = {
 }
 
 
+def customer_reason(reason: str, action: str = "") -> str:
+    """Translate a router decision (written for admins) into one plain sentence for the customer's dashboard."""
+    r = (reason or "").lower()
+    if r.startswith("free first"):
+        return "Starting with a free attempt"
+    if "floor" in r or "third haiku" in r:
+        return "Normal gets at least two attempts before a stronger AI is considered"
+    if "drop back" in r or "after the drop-back" in r:
+        return "Using the stronger AI's findings so the Normal mode can finish the fix"
+    if "you chose" in r:
+        return "You chose this mode"
+    if "lowest expected cost" in r:
+        if action in ("sonnet", "opus"):
+            return "Moving to a stronger AI: the cheaper modes are unlikely to fix this bug"
+        return "The most economical option likely to fix this bug"
+    return "Chosen by the agent"
+
+
 def e(value) -> str:
     return html.escape(str(value if value is not None else ""), quote=True)
 

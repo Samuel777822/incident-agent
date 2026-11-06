@@ -100,3 +100,19 @@ def projects_sentence() -> str:
 def quota_fine_print() -> str:
     return ("Quotas reset every month and do not roll over. You are buying attempts to fix a bug, not a guaranteed fix. "
             f"Need more High or Extra attempts? A ₹{PACK_PRICE} pack adds {PACK_HIGH_TRIES} High or {PACK_EXTRA_TRIES} Extra attempts.")
+
+
+# ---- One wording for every page (architecture page, usage, FAQ, help, chatbot, emails). Change it here, not per page. ----
+TRY_DEFINITION = ("A try is one attempt by the AI to write a fix that then has to pass the same check in the sandbox. "
+                  "Checking your pushes is free and never uses a try, and a technical fault on our side never counts as one.")
+WHY_STRONGER = ("The agent starts with the free and the economical AI modes. If they cannot fix the bug, it moves to a stronger "
+                "(more expensive) AI and passes on what the earlier attempts learned. A stronger AI is used only when it is likely "
+                "to be worth it, and never beyond the tries you have.")
+FAILED_FIX = ("If a fix does not pass the check, nothing is pushed to your repository. The agent tries again with the new error, "
+              "or with a stronger AI, until the bug is fixed or a limit is reached.")
+HUMAN_NEEDED = ("The agent stops and asks for a person when it reaches the limit for one bug, when you have no suitable tries left, "
+                "or when more attempts are unlikely to help. You get a report of everything it tried. You can also send any bug "
+                "to human review yourself.")
+MODE_SUMMARY = ("Low effort is a free first look; Normal handles most bugs; High is a stronger AI for bugs Normal could not fix; "
+                "Extra is the strongest, for the hardest bugs.")
+TRY_SHORT = "One try = one AI attempt to fix a bug. Push checks are free."
