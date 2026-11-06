@@ -83,12 +83,22 @@ NODE_CJS_SOURCE = r'''/* Agent Daemon Node.js runtime monitor. No third-party de
   process.on("uncaughtExceptionMonitor", (error, origin) => {
     report(error && error.message, error && error.stack, (error && error.name) || origin || "Error");
   });
+  const originalConsoleError = console.error.bind(console);
+  console.error = (...args) => {
+    try {
+      const error = args.find(value => value && value.stack);
+      if (error) report(error.message || String(error), error.stack, error.name || "LoggedError");
+    } catch (_) {}
+    originalConsoleError(...args);
+  };
 
-  // Observe server-side upstream failures without changing the response.
+  // Observe upstream HTTP failures without changing the response or thrown error.
   if (typeof globalThis.fetch === "function") {
     const originalFetch = globalThis.fetch.bind(globalThis);
     globalThis.fetch = async (...args) => {
-      const response = await originalFetch(...args);
+      let response;
+      try { response = await originalFetch(...args); }
+      catch (error) { report(error && error.message, error && error.stack, "UpstreamNetworkError"); throw error; }
       if (!sending && (response.status >= 500 || response.status === 429 ||
           (response.status >= 400 && /(^|\.)((openrouter\.ai)|(api\.openai\.com)|(api\.anthropic\.com)|(api\.groq\.com))$/i.test(new URL(response.url || String(args[0]), "http://localhost").hostname)))) {
         const url = response.url || String(args[0] || "upstream");
@@ -150,10 +160,17 @@ if (!globalThis.__agentDaemonMonitorInstalled) {
     } finally { sending = false; }
   }
   process.on("uncaughtExceptionMonitor", (error, origin) => report(error?.message,error?.stack,error?.name || origin));
+  const originalConsoleError = console.error.bind(console);
+  console.error = (...args) => {
+    try { const error = args.find(value => value && value.stack); if (error) report(error.message || String(error),error.stack,error.name || "LoggedError"); } catch {}
+    originalConsoleError(...args);
+  };
   if (typeof globalThis.fetch === "function") {
     const originalFetch = globalThis.fetch.bind(globalThis);
     globalThis.fetch = async (...args) => {
-      const response = await originalFetch(...args);
+      let response;
+      try { response = await originalFetch(...args); }
+      catch (error) { report(error?.message,error?.stack,"UpstreamNetworkError"); throw error; }
       let host = "";
       try { host = new URL(response.url || String(args[0]), "http://localhost").hostname; } catch {}
       const provider = /(^|\.)((openrouter\.ai)|(api\.openai\.com)|(api\.anthropic\.com)|(api\.groq\.com))$/i.test(host);
@@ -217,10 +234,17 @@ BROWSER_SOURCE = r'''/* Agent Daemon browser monitor. Its project key can only s
     report(reason && reason.message ? reason.message : String(reason),
       reason && reason.stack ? reason.stack : String(reason), "UnhandledRejection");
   });
+  const originalConsoleError = console.error.bind(console);
+  console.error = (...args) => {
+    try { const error = args.find(value => value && value.stack); if (error) report(error.message || String(error),error.stack,error.name || "LoggedError"); } catch (_) {}
+    originalConsoleError(...args);
+  };
   if (typeof window.fetch === "function") {
     const originalFetch = window.fetch.bind(window);
     window.fetch = async (...args) => {
-      const response = await originalFetch(...args);
+      let response;
+      try { response = await originalFetch(...args); }
+      catch (error) { report(error && error.message,error && error.stack,"NetworkError"); throw error; }
       if (response.status >= 500 || response.status === 429) {
         let url = ""; try { url = new URL(response.url || String(args[0]), location.href).pathname; } catch {}
         const error = new Error("Browser API request failed: " + response.status + " " + url);
