@@ -11,6 +11,7 @@ Java (Maven, Gradle, plain `javac`) and plain HTML/CSS/JS sites, including repos
 | [DEPLOY.md](DEPLOY.md) | Step by step, for beginners: Render, the sandbox server, GitHub, email, domain, first test |
 | [FIXENGINE.md](FIXENGINE.md) | The fix engine: router, quotas, sandbox, languages, budget |
 | [RUN_TESTS.md](RUN_TESTS.md) | Running the tests, the Docker images, the sandbox abuse check and the paid benchmark on your laptop |
+| [MONITORING.md](MONITORING.md) | Runtime adapters, install behavior, credential handling, and coverage boundaries |
 | [CHANGELOG.md](CHANGELOG.md) | What changed and why |
 
 ## Two ways to catch bugs (a project can use one or both)
@@ -19,8 +20,10 @@ Java (Maven, Gradle, plain `javac`) and plain HTML/CSS/JS sites, including repos
    downloaded into a fresh sandbox; every project inside the repo is installed, built (and type-checked), tested and started.
    The commit gets an `Agent Daemon / push check` status on GitHub. If it is red, an incident opens and the fix engine starts.
    If the webhook cannot be added, the worker polls the branch every few minutes instead.
-2. **Live error watch (classic).** A small reporter inside the running app (installed automatically for Python apps; any language
-   can POST to `/ingest`) sends crashes; they are grouped into incidents and go to the same fix engine.
+2. **Live error watch.** The monitoring installer inspects the repository and opens an install PR for Python, Node.js (CommonJS/ESM),
+   Java, browser JavaScript/TypeScript, and static HTML. Mixed-language repositories can receive multiple adapters. Server errors
+   and browser failures are grouped into incidents and go to the same fix engine. See [MONITORING.md](MONITORING.md) for coverage
+   boundaries and the project-scoped credential design.
 
 The fix engine: free first look → cost-aware router (expected-cost dynamic program) picks Normal / High / Extra → the model returns a
 small patch as text → policy check → **the same sandbox check must pass** → branch `agent-daemon/fix-…` + pull request → in Auto mode

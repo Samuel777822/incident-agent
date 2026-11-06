@@ -138,6 +138,44 @@ def test_ingest_authenticates_and_deduplicates_per_project(web_env):
     assert web_app.portal_db.list_incidents(project_id)[0]["occurrences"] == 1
 
 
+def test_browser_ingest_uses_project_scoped_write_only_key_and_checks_origin(web_env):
+    user_id = web_app.portal_db.create_user("browser-monitor@example.com", "hash")
+    web_app.portal_db.admin_grant_access(user_id, 1, "trial", "test-admin")
+    browser_key = "a" * 64
+    project_id = web_app.portal_db.create_project(
+        user_id, name="Browser app", repo_owner="demo", repo_name="browser-app", branch="main",
+        mode="pr", token_ciphertext="cipher", ingest_key_hash="private-server-key-hash",
+        browser_ingest_key_hash=hashlib.sha256(browser_key.encode()).hexdigest(),
+        app_url="https://app.example.com",
+    )
+    event = {
+        "timestamp": "2026-11-06T10:00:00Z",
+        "level": "ERROR",
+        "message": "Uncaught TypeError: cannot read property",
+        "traceback": "TypeError: cannot read property\\n    at render (https://app.example.com/assets/app.js:12:4)",
+        "exception_type": "TypeError",
+        "service": "browser-runtime",
+    }
+    payload = {"project_key": browser_key, "event": event}
+
+    denied, _, _ = _request("/ingest/browser", method="POST", json_body=payload,
+                            headers={"HTTP_ORIGIN": "https://attacker.example.net"})
+    assert denied == "403 Forbidden"
+
+    invalid, _, _ = _request("/ingest/browser", method="POST",
+                             json_body={"project_key": "b" * 64, "event": event},
+                             headers={"HTTP_ORIGIN": "https://app.example.com"})
+    assert invalid == "401 Unauthorized"
+
+    accepted, _, body = _request("/ingest/browser", method="POST", json_body=payload,
+                                 headers={"HTTP_ORIGIN": "https://app.example.com"})
+    assert accepted == "202 Accepted"
+    assert json.loads(body)["accepted"] is True
+    incidents = web_app.portal_db.list_incidents(project_id)
+    assert len(incidents) == 1
+    assert incidents[0]["occurrences"] == 1
+
+
 def test_payment_only_activates_after_captured_status(web_env, monkeypatch):
     user_id = web_app.portal_db.create_user("payer@example.com", "hash")
     project_id = web_app.portal_db.create_project(user_id, name="API", repo_owner="demo",

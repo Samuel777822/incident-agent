@@ -45,6 +45,7 @@ CREATE TABLE IF NOT EXISTS projects (
   mode TEXT NOT NULL DEFAULT 'pr',
   github_token_ciphertext TEXT NOT NULL,
   ingest_key_hash TEXT NOT NULL UNIQUE,
+  browser_ingest_key_hash TEXT NOT NULL DEFAULT '',
   app_url TEXT NOT NULL DEFAULT '',
   status TEXT NOT NULL DEFAULT 'pending_install',
   install_pr_url TEXT NOT NULL DEFAULT '',
@@ -327,6 +328,7 @@ def init_db() -> None:
             ("projects", "ai_consent_at", "TEXT NOT NULL DEFAULT ''"),
             ("projects", "last_heartbeat_at", "TEXT NOT NULL DEFAULT ''"),
             ("projects", "ingest_key_ciphertext", "TEXT NOT NULL DEFAULT ''"),
+            ("projects", "browser_ingest_key_hash", "TEXT NOT NULL DEFAULT ''"),
             ("subscriptions", "grant_type", "TEXT NOT NULL DEFAULT 'paid'"),
             ("subscriptions", "granted_by", "TEXT NOT NULL DEFAULT ''"),
             ("payment_orders", "plan", "TEXT NOT NULL DEFAULT 'yearly'"),
@@ -545,7 +547,7 @@ def check_login_rate_limit(key: str, maximum: int = 8, window_seconds: int = 900
 def create_project(user_id: str, *, name: str, repo_owner: str, repo_name: str,
                    branch: str, mode: str, token_ciphertext: str, ingest_key_hash: str,
                    app_url: str = "", ai_consent_at: str = "", ingest_key_ciphertext: str = "",
-                   watch_mode: str = "both", enforce_slots: bool = False) -> str:
+                   browser_ingest_key_hash: str = "", watch_mode: str = "both", enforce_slots: bool = False) -> str:
     """enforce_slots: refuse (ValueError) when the account already uses every project slot it has (1 + paid extra slots).
     Checked inside the same connection as the insert so two quick submissions cannot both slip through."""
     if watch_mode not in WATCH_MODES:
@@ -563,10 +565,10 @@ def create_project(user_id: str, *, name: str, repo_owner: str, repo_name: str,
         active_until = subscription["active_until"] if subscription else None
         _execute(conn, """INSERT INTO projects
           (id,user_id,name,repo_owner,repo_name,branch,mode,github_token_ciphertext,
-           ingest_key_hash,app_url,active_until,created_at,ai_consent_at,ingest_key_ciphertext,watch_mode)
-          VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)""",
+           ingest_key_hash,browser_ingest_key_hash,app_url,active_until,created_at,ai_consent_at,ingest_key_ciphertext,watch_mode)
+          VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)""",
           (project_id,user_id,name,repo_owner,repo_name,branch,mode,token_ciphertext,
-           ingest_key_hash,app_url,active_until,_now(),ai_consent_at,ingest_key_ciphertext,watch_mode))
+           ingest_key_hash,browser_ingest_key_hash,app_url,active_until,_now(),ai_consent_at,ingest_key_ciphertext,watch_mode))
         conn.commit()
         return project_id
     finally:
@@ -598,8 +600,29 @@ def list_projects(user_id: str):
 def get_project_by_ingest_hash(key_hash: str):
     conn = get_connection()
     try:
-        row = _execute(conn, "SELECT id,user_id,name,repo_owner,repo_name,branch,mode,status,paused FROM projects WHERE ingest_key_hash=?", (key_hash,)).fetchone()
+        row = _execute(conn, "SELECT id,user_id,name,repo_owner,repo_name,branch,mode,status,paused,app_url FROM projects WHERE ingest_key_hash=?", (key_hash,)).fetchone()
         return dict(row) if row else None
+    finally:
+        conn.close()
+
+
+def get_project_by_browser_ingest_hash(key_hash: str):
+    """Find a project using its write-only, rate-limited browser reporting token."""
+    conn = get_connection()
+    try:
+        row = _execute(conn, "SELECT id,user_id,name,repo_owner,repo_name,branch,mode,status,paused,app_url FROM projects WHERE browser_ingest_key_hash=? AND browser_ingest_key_hash<>''", (key_hash,)).fetchone()
+        return dict(row) if row else None
+    finally:
+        conn.close()
+
+
+def set_project_browser_ingest_key_hash(project_id: str, user_id: str, key_hash: str) -> bool:
+    conn = get_connection()
+    try:
+        cur = _execute(conn, "UPDATE projects SET browser_ingest_key_hash=? WHERE id=? AND user_id=?",
+                       (key_hash, project_id, user_id))
+        conn.commit()
+        return cur.rowcount == 1
     finally:
         conn.close()
 
@@ -616,11 +639,11 @@ def update_project_github_token(project_id: str, user_id: str, token_ciphertext:
         conn.close()
 
 
-def rotate_project_ingest_key(project_id: str, user_id: str, key_hash: str, key_ciphertext: str = "") -> bool:
+def rotate_project_ingest_key(project_id: str, user_id: str, key_hash: str, key_ciphertext: str = "", browser_key_hash: str = "") -> bool:
     conn = get_connection()
     try:
-        cur = _execute(conn, "UPDATE projects SET ingest_key_hash=?,ingest_key_ciphertext=? WHERE id=? AND user_id=?",
-                        (key_hash, key_ciphertext, project_id, user_id))
+        cur = _execute(conn, "UPDATE projects SET ingest_key_hash=?,ingest_key_ciphertext=?,browser_ingest_key_hash=? WHERE id=? AND user_id=?",
+                        (key_hash, key_ciphertext, browser_key_hash, project_id, user_id))
         conn.commit()
         return cur.rowcount == 1
     finally:

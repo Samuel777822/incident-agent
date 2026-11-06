@@ -5,7 +5,7 @@ Agent Daemon has **two entry points and one fix engine**. The interactive versio
 
 ```
                     ┌──────────── PUSH GUARD (v3, new) ────────────┐      ┌──────── LIVE ERROR WATCH (classic) ───────┐
- developer ─ git push ─► GitHub ─ signed webhook ─► /webhooks/github/<id>     live app ─ crash ─► reporter ─► /ingest
+ developer ─ git push ─► GitHub ─ signed webhook ─► /webhooks/github/<id>     live app ─ crash ─► runtime adapter ─► /ingest or /ingest/browser
                              └─ (missed?) worker poll every 3 min ─┘                │
                                           │                                         │ dedupe into an incident
                                           ▼                                         │
@@ -38,6 +38,7 @@ Agent Daemon has **two entry points and one fix engine**. The interactive versio
 | Fix engine | `fixengine/` (orchestrator, router, guard, adapters, prompts, validator, sandbox, store, notify, ui) | worker |
 | Sandbox host | `sandbox_service.py` + `sandbox/Dockerfile.*` | a small VPS with Docker |
 | Database | `portal_db.py` (+ `fixengine/store.py` tables) | PostgreSQL (SQLite locally) |
+| Runtime monitoring installer + reporters | `monitoring_installer.py`, `monitoring_adapters.py`, `agent_monitor_client.py` | install PR + customer app |
 | Email | `notifications.py` (Brevo/Resend over HTTPS) | web + worker |
 
 ## Mixed-language repos
@@ -98,6 +99,7 @@ information, never past quota. Every decision is logged in `fx_router_decisions`
 * Customer code runs only in the sandbox: fresh container per run, non-root, read-only root FS, caps dropped, memory/CPU/PID/time
   limits, no network except dependency install, no secrets, Docker socket never mounted.
 * Webhooks are verified with a per-project HMAC secret. The webhook only queues a check; it never runs anything.
+* Browser monitoring uses a separate write-only, project-scoped token; its endpoint is rate-limited and checks the configured app origin. The full ingest key is never embedded in browser JavaScript.
 * Fix loops are impossible by construction: fix branches are ignored by the push guard, and a failing check on a commit whose message
   carries `[agent-daemon]` goes straight to a human.
 * Push checks are rate-limited per project (12/hour by default) and cost no AI tries.

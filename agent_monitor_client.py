@@ -25,16 +25,18 @@ _STATE = {"started": False, "events": [], "local": threading.local()}
 def _config():
     url = os.environ.get("INCIDENT_AGENT_INGEST_URL", "").strip()
     key = os.environ.get("INCIDENT_AGENT_INGEST_KEY", "").strip()
-    if not (url and key):
-        try:
-            path = os.path.join(os.path.dirname(os.path.abspath(__file__)), "incident_agent_config.json")
-            with open(path, encoding="utf-8") as handle:
-                data = json.load(handle)
-            url = url or str(data.get("ingest_url", "")).strip()
-            key = key or str(data.get("ingest_key", "")).strip()
-        except Exception:
-            pass
-    return url, key
+    browser_url = browser_key = ""
+    try:
+        path = os.path.join(os.path.dirname(os.path.abspath(__file__)), "incident_agent_config.json")
+        with open(path, encoding="utf-8") as handle:
+            data = json.load(handle)
+        url = url or str(data.get("ingest_url", "")).strip()
+        key = key or str(data.get("ingest_key", "")).strip()
+        browser_url = str(data.get("browser_ingest_url", "")).strip()
+        browser_key = str(data.get("browser_ingest_key", "")).strip()
+    except Exception:
+        pass
+    return url, key, browser_url, browser_key
 
 
 def _post(url, key, payload):
@@ -59,9 +61,19 @@ def _allowed():
 
 
 def _send(payload):
-    url, key = _config()
+    url, key, browser_url, browser_key = _config()
     if url and key:
         _post(url, key, payload)
+    elif browser_url and browser_key:
+        try:
+            request = urllib.request.Request(
+                browser_url,
+                data=json.dumps({"project_key": browser_key, "event": payload}).encode("utf-8"),
+                headers={"Content-Type": "application/json"}, method="POST")
+            with urllib.request.urlopen(request, timeout=3):
+                return True
+        except Exception:
+            pass
 
 
 def report(message, tb="", level="ERROR", exception_type="", wait=False):
@@ -145,7 +157,7 @@ def _install_hooks():
 def _heartbeat_loop():
     while True:
         try:
-            url, key = _config()
+            url, key, _, _ = _config()
             if url and key:
                 base = url[:-len("/ingest")] if url.endswith("/ingest") else url.rsplit("/", 1)[0]
                 _post(base + "/heartbeat", key, {})
@@ -157,12 +169,13 @@ def _heartbeat_loop():
 def start():
     if _STATE["started"]:
         return
-    url, key = _config()
-    if not (url and key):
+    url, key, browser_url, browser_key = _config()
+    if not ((url and key) or (browser_url and browser_key)):
         return
     _STATE["started"] = True
     _install_hooks()
-    threading.Thread(target=_heartbeat_loop, name="agent-daemon-heartbeat", daemon=True).start()
+    if url and key:
+        threading.Thread(target=_heartbeat_loop, name="agent-daemon-heartbeat", daemon=True).start()
 
 
 start()
