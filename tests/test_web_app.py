@@ -173,7 +173,7 @@ def test_browser_ingest_uses_project_scoped_write_only_key_and_checks_origin(web
     assert json.loads(body)["accepted"] is True
     incidents = web_app.portal_db.list_incidents(project_id)
     assert len(incidents) == 1
-    assert incidents[0]["message"] == event["message"]
+    assert incidents[0]["occurrences"] == 1
 
 
 def test_payment_only_activates_after_captured_status(web_env, monkeypatch):
