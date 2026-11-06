@@ -265,7 +265,8 @@ def open_monitoring_pr(*, owner: str, repo: str, base_branch: str, project_id: s
         if node_entry:
             source = _read_file(api, token, base_branch, node_entry)
             if source is not None:
-                esm = package.get("type") == "module" or node_entry.endswith((".mjs", ".mts"))
+                esm = node_entry.endswith((".mjs", ".mts")) or (
+                    package.get("type") == "module" and not node_entry.endswith(".cjs"))
                 monitor_name = "incident_agent_monitor.mjs" if esm else "incident_agent_monitor.cjs"
                 adapter = NODE_ESM_SOURCE if esm else NODE_CJS_SOURCE
                 patched = _insert_js_monitor(source, esm=esm, monitor_path=monitor_name)
