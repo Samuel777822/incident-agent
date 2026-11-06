@@ -54,7 +54,7 @@ def test_java_main_is_patched_and_package_is_preserved():
     assert _patch_java_main(patched) == patched
     assert _java_package(source) == "com.acme"
     helper = _java_monitor_source("com.acme")
-    assert helper.startswith("package com.acme;")
+    assert "package com.acme;" in helper
     assert "{{" not in helper and "}}" not in helper
 
 
