@@ -44,13 +44,13 @@
       "failing": null,
       "system_fault": false,
       "error": "",
-      "seconds": 26.9,
+      "seconds": 3.5,
       "phases": [
         {
           "name": "build",
           "ok": true,
           "rc": 0,
-          "seconds": 25.7,
+          "seconds": 1.3,
           "tests": null,
           "log_tail": "static_check: 0 errors in 9 files\n"
         },
@@ -58,7 +58,7 @@
           "name": "smoke",
           "ok": true,
           "rc": 0,
-          "seconds": 1.2,
+          "seconds": 2.1,
           "tests": null,
           "log_tail": "SMOKE OK: HTTP 200\n"
         }
@@ -88,25 +88,25 @@
       "failing": 0,
       "system_fault": false,
       "error": "",
-      "seconds": 4.1,
+      "seconds": 4.9,
       "phases": [
         {
           "name": "test",
           "ok": true,
           "rc": 0,
-          "seconds": 2.8,
+          "seconds": 3.3,
           "tests": {
             "failed": 0,
             "discovered": 43,
             "passed": 43
           },
-          "log_tail": " item throws\n  ---\n  duration_ms: 0.591195\n  type: 'test'\n  ...\n# Subtest: wishlists: search and counts\nok 43 - wishlists: search and counts\n  ---\n  duration_ms: 1.241901\n  type: 'test'\n  ...\n1..43\n# tests 43\n# suites 0\n# pass 43\n# fail 0\n# cancelled 0\n# skipped 0\n# todo 0\n# duration_ms 1809.463973\n"
+          "log_tail": " item throws\n  ---\n  duration_ms: 1.127913\n  type: 'test'\n  ...\n# Subtest: wishlists: search and counts\nok 43 - wishlists: search and counts\n  ---\n  duration_ms: 2.087906\n  type: 'test'\n  ...\n1..43\n# tests 43\n# suites 0\n# pass 43\n# fail 0\n# cancelled 0\n# skipped 0\n# todo 0\n# duration_ms 2178.763519\n"
         },
         {
           "name": "smoke",
           "ok": true,
           "rc": 0,
-          "seconds": 1.2,
+          "seconds": 1.4,
           "tests": null,
           "log_tail": "SMOKE OK: HTTP 200\n"
         }
@@ -136,13 +136,13 @@
       "failing": 0,
       "system_fault": false,
       "error": "",
-      "seconds": 12.9,
+      "seconds": 13.3,
       "phases": [
         {
           "name": "install",
           "ok": true,
           "rc": 0,
-          "seconds": 7.1,
+          "seconds": 7.4,
           "tests": null,
           "log_tail": "\nadded 1 package in 6s\n"
         },
@@ -150,7 +150,7 @@
           "name": "build",
           "ok": true,
           "rc": 0,
-          "seconds": 3.3,
+          "seconds": 3.1,
           "tests": null,
           "log_tail": ""
         },
@@ -158,13 +158,13 @@
           "name": "test",
           "ok": true,
           "rc": 0,
-          "seconds": 2.5,
+          "seconds": 2.7,
           "tests": {
             "failed": 0,
             "discovered": 34,
             "passed": 34
           },
-          "log_tail": " item throws\n  ---\n  duration_ms: 0.392403\n  type: 'test'\n  ...\n# Subtest: wishlists: search and counts\nok 34 - wishlists: search and counts\n  ---\n  duration_ms: 0.899252\n  type: 'test'\n  ...\n1..34\n# tests 34\n# suites 0\n# pass 34\n# fail 0\n# cancelled 0\n# skipped 0\n# todo 0\n# duration_ms 1785.501932\n"
+          "log_tail": " item throws\n  ---\n  duration_ms: 0.949417\n  type: 'test'\n  ...\n# Subtest: wishlists: search and counts\nok 34 - wishlists: search and counts\n  ---\n  duration_ms: 1.130318\n  type: 'test'\n  ...\n1..34\n# tests 34\n# suites 0\n# pass 34\n# fail 0\n# cancelled 0\n# skipped 0\n# todo 0\n# duration_ms 1937.817469\n"
         }
       ]
     },
@@ -192,13 +192,13 @@
       "failing": 0,
       "system_fault": false,
       "error": "",
-      "seconds": 6.9,
+      "seconds": 8.1,
       "phases": [
         {
           "name": "build",
           "ok": true,
           "rc": 0,
-          "seconds": 5.9,
+          "seconds": 6.8,
           "tests": null,
           "log_tail": "Can not write to /root/.m2/copy_reference_file.log. Wrong volume permissions? Carrying on ...\nmkdir: cannot create directory \u2018/root\u2019: Permission denied\nPicked up JAVA_TOOL_OPTIONS: -Duser.home=/tmp\n"
         },
@@ -206,7 +206,7 @@
           "name": "test",
           "ok": true,
           "rc": 0,
-          "seconds": 0.9,
+          "seconds": 1.2,
           "tests": {
             "passed": 91,
             "failed": 0
@@ -239,13 +239,13 @@
       "failing": 0,
       "system_fault": false,
       "error": "",
-      "seconds": 4.8,
+      "seconds": 5.4,
       "phases": [
         {
           "name": "install",
           "ok": true,
           "rc": 0,
-          "seconds": 1.8,
+          "seconds": 1.6,
           "tests": null,
           "log_tail": ""
         },
@@ -253,7 +253,7 @@
           "name": "build",
           "ok": true,
           "rc": 0,
-          "seconds": 1.3,
+          "seconds": 1.8,
           "tests": null,
           "log_tail": ""
         },
@@ -261,12 +261,12 @@
           "name": "test",
           "ok": true,
           "rc": 0,
-          "seconds": 1.6,
+          "seconds": 1.9,
           "tests": {
             "passed": 40,
             "failed": 0
           },
-          "log_tail": "........................................                                 [100%]\n40 passed in 0.49s\n"
+          "log_tail": "........................................                                 [100%]\n40 passed in 0.74s\n"
         }
       ]
     },
@@ -320,18 +320,10 @@
       "failing": 0,
       "system_fault": false,
       "error": "",
-      "seconds": 14.0,
+      "seconds": 14.9,
       "phases": [
         {
           "name": "Python (tools): install",
-          "ok": true,
-          "rc": 0,
-          "seconds": 1.2,
-          "tests": null,
-          "log_tail": ""
-        },
-        {
-          "name": "Python (tools): build",
           "ok": true,
           "rc": 0,
           "seconds": 1.3,
@@ -339,33 +331,41 @@
           "log_tail": ""
         },
         {
+          "name": "Python (tools): build",
+          "ok": true,
+          "rc": 0,
+          "seconds": 1.2,
+          "tests": null,
+          "log_tail": ""
+        },
+        {
           "name": "Python (tools): test",
           "ok": true,
           "rc": 0,
-          "seconds": 1.5,
+          "seconds": 1.8,
           "tests": {
             "passed": 40,
             "failed": 0
           },
-          "log_tail": "........................................                                 [100%]\n40 passed in 0.51s\n"
+          "log_tail": "........................................                                 [100%]\n40 passed in 0.75s\n"
         },
         {
           "name": "JavaScript/TypeScript (web): test",
           "ok": true,
           "rc": 0,
-          "seconds": 2.0,
+          "seconds": 2.4,
           "tests": {
             "failed": 0,
             "discovered": 43,
             "passed": 43
           },
-          "log_tail": " item throws\n  ---\n  duration_ms: 0.463118\n  type: 'test'\n  ...\n# Subtest: wishlists: search and counts\nok 43 - wishlists: search and counts\n  ---\n  duration_ms: 1.047268\n  type: 'test'\n  ...\n1..43\n# tests 43\n# suites 0\n# pass 43\n# fail 0\n# cancelled 0\n# skipped 0\n# todo 0\n# duration_ms 1327.013629\n"
+          "log_tail": " item throws\n  ---\n  duration_ms: 0.453084\n  type: 'test'\n  ...\n# Subtest: wishlists: search and counts\nok 43 - wishlists: search and counts\n  ---\n  duration_ms: 1.672023\n  type: 'test'\n  ...\n1..43\n# tests 43\n# suites 0\n# pass 43\n# fail 0\n# cancelled 0\n# skipped 0\n# todo 0\n# duration_ms 1510.438788\n"
         },
         {
           "name": "JavaScript/TypeScript (web): smoke",
           "ok": true,
           "rc": 0,
-          "seconds": 1.1,
+          "seconds": 1.0,
           "tests": null,
           "log_tail": "SMOKE OK: HTTP 200\n"
         },
@@ -373,7 +373,7 @@
           "name": "Java: build",
           "ok": true,
           "rc": 0,
-          "seconds": 5.5,
+          "seconds": 5.8,
           "tests": null,
           "log_tail": "Can not write to /root/.m2/copy_reference_file.log. Wrong volume permissions? Carrying on ...\nmkdir: cannot create directory \u2018/root\u2019: Permission denied\nPicked up JAVA_TOOL_OPTIONS: -Duser.home=/tmp\n"
         },
@@ -427,19 +427,19 @@
       "failing": 0,
       "system_fault": false,
       "error": "",
-      "seconds": 9.4,
+      "seconds": 8.5,
       "phases": [
         {
           "name": "JavaScript/TypeScript (ui): test",
           "ok": true,
           "rc": 0,
-          "seconds": 2.2,
+          "seconds": 1.9,
           "tests": {
             "failed": 0,
             "discovered": 43,
             "passed": 43
           },
-          "log_tail": " item throws\n  ---\n  duration_ms: 0.447249\n  type: 'test'\n  ...\n# Subtest: wishlists: search and counts\nok 43 - wishlists: search and counts\n  ---\n  duration_ms: 0.965382\n  type: 'test'\n  ...\n1..43\n# tests 43\n# suites 0\n# pass 43\n# fail 0\n# cancelled 0\n# skipped 0\n# todo 0\n# duration_ms 1625.274733\n"
+          "log_tail": " item throws\n  ---\n  duration_ms: 0.459594\n  type: 'test'\n  ...\n# Subtest: wishlists: search and counts\nok 43 - wishlists: search and counts\n  ---\n  duration_ms: 1.037862\n  type: 'test'\n  ...\n1..43\n# tests 43\n# suites 0\n# pass 43\n# fail 0\n# cancelled 0\n# skipped 0\n# todo 0\n# duration_ms 1216.163278\n"
         },
         {
           "name": "JavaScript/TypeScript (ui): smoke",
@@ -453,7 +453,7 @@
           "name": "Java: build",
           "ok": true,
           "rc": 0,
-          "seconds": 5.1,
+          "seconds": 4.5,
           "tests": null,
           "log_tail": "Can not write to /root/.m2/copy_reference_file.log. Wrong volume permissions? Carrying on ...\nmkdir: cannot create directory \u2018/root\u2019: Permission denied\nPicked up JAVA_TOOL_OPTIONS: -Duser.home=/tmp\n"
         },
@@ -478,7 +478,7 @@
       "passed": false,
       "timed_out": true,
       "rc": 124,
-      "seconds": 25.4,
+      "seconds": 25.3,
       "system_fault": false,
       "error": "",
       "log_tail": ""
@@ -489,7 +489,7 @@
       "passed": false,
       "timed_out": false,
       "rc": 137,
-      "seconds": 3.2,
+      "seconds": 2.8,
       "system_fault": false,
       "error": "",
       "log_tail": "Killed\n"
@@ -500,10 +500,10 @@
       "passed": false,
       "timed_out": false,
       "rc": 1,
-      "seconds": 1.4,
+      "seconds": 1.3,
       "system_fault": false,
       "error": "",
-      "log_tail": "or\n=========================== short test summary info ============================\nFAILED test_probe.py::test_net - OSError: [Errno 101] Network is unreachable\n!!!!!!!!!!!!!!!!!!!!!!!!!! stopping after 1 failures !!!!!!!!!!!!!!!!!!!!!!!!!!!\n1 failed in 0.09s\n"
+      "log_tail": "or\n=========================== short test summary info ============================\nFAILED test_probe.py::test_net - OSError: [Errno 101] Network is unreachable\n!!!!!!!!!!!!!!!!!!!!!!!!!! stopping after 1 failures !!!!!!!!!!!!!!!!!!!!!!!!!!!\n1 failed in 0.12s\n"
     },
     {
       "probe": "read-only root fs (write /etc/x)",
@@ -511,10 +511,10 @@
       "passed": false,
       "timed_out": false,
       "rc": 1,
-      "seconds": 1.8,
+      "seconds": 1.2,
       "system_fault": false,
       "error": "",
-      "log_tail": "======================= short test summary info ============================\nFAILED test_probe.py::test_ro - OSError: [Errno 30] Read-only file system: '/etc/x'\n!!!!!!!!!!!!!!!!!!!!!!!!!! stopping after 1 failures !!!!!!!!!!!!!!!!!!!!!!!!!!!\n1 failed in 0.06s\n"
+      "log_tail": "======================= short test summary info ============================\nFAILED test_probe.py::test_ro - OSError: [Errno 30] Read-only file system: '/etc/x'\n!!!!!!!!!!!!!!!!!!!!!!!!!! stopping after 1 failures !!!!!!!!!!!!!!!!!!!!!!!!!!!\n1 failed in 0.05s\n"
     },
     {
       "probe": "non-root user (uid must be 10001)",
@@ -522,10 +522,10 @@
       "passed": true,
       "timed_out": false,
       "rc": 0,
-      "seconds": 1.7,
+      "seconds": 1.1,
       "system_fault": false,
       "error": "",
-      "log_tail": ".                                                                        [100%]\n1 passed in 0.07s\n"
+      "log_tail": ".                                                                        [100%]\n1 passed in 0.04s\n"
     },
     {
       "probe": "pids limit (fork bomb, 256 cap)",
@@ -533,21 +533,21 @@
       "passed": true,
       "timed_out": false,
       "rc": 0,
-      "seconds": 2.3,
+      "seconds": 2.1,
       "system_fault": false,
       "error": "",
-      "log_tail": ".                                                                        [100%]\n1 passed in 0.62s\n"
+      "log_tail": ".                                                                        [100%]\n1 passed in 0.48s\n"
     },
     {
-      "probe": "no secrets in the environment",
+      "probe": "no host secrets in the environment",
       "expectation": "expect pass",
-      "passed": false,
+      "passed": true,
       "timed_out": false,
-      "rc": 1,
+      "rc": 0,
       "seconds": 1.3,
       "system_fault": false,
       "error": "",
-      "log_tail": "======================= short test summary info ============================\nFAILED test_probe.py::test_env - AssertionError: ['GPG_KEY']\nassert not ['GPG_KEY']\n!!!!!!!!!!!!!!!!!!!!!!!!!! stopping after 1 failures !!!!!!!!!!!!!!!!!!!!!!!!!!!\n1 failed in 0.08s\n"
+      "log_tail": ".                                                                        [100%]\n1 passed in 0.05s\n"
     }
   ],
   "remote": {
@@ -572,7 +572,7 @@
         0
       ]
     ],
-    "signed_run_seconds": 7.1,
+    "signed_run_seconds": 4.5,
     "bad_signature_http": 401,
     "stale_timestamp_http": 401,
     "wrong_secret_result": {

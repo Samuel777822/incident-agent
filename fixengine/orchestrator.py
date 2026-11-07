@@ -297,10 +297,11 @@ class Engine:
                                  error_summary="")
             return ("pass", {"new_files": new_files, "diff": diff, "diagnosis": parsed["diagnosis"], "level": level,
                              "tier": tier, "model": model, "attempt_id": attempt_id})
-        after_fp = fingerprint.fingerprint(sres.output[:400], sres.output)
+        tail = sres.output[-600:]
+        after_fp = fingerprint.fingerprint(tail[:400], tail)
         before_fp = _fp_of(bug, last)
         progressed = fingerprint.made_progress(before_fp, after_fp, prev_failing if (prev_failing or 0) >= 0 else None, sres.failing)
-        store.finish_attempt(attempt_id, result="fail", error_summary=sres.output[-600:], diagnosis=parsed["diagnosis"][:500],
+        store.finish_attempt(attempt_id, result="fail", error_summary=tail, diagnosis=parsed["diagnosis"][:500],
                              patch_json=patch_json, failing_before=prev_failing, failing_after=sres.failing,
                              progress=1 if progressed else 0)
         if tier in router.STRONG:

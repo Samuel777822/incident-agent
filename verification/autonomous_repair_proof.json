@@ -1,0 +1,90 @@
+{
+  "incident_id": "5e4e8002-9890-4a98-82d3-cf9bce70b985",
+  "incident_new": true,
+  "repair_outcome": "pr_opened",
+  "elapsed_seconds": 10.69,
+  "sandbox_runner": "DockerRunner",
+  "sandbox_image": "fixengine-sandbox-python:1",
+  "bug_record": {
+    "id": "6f430b806f394d33a5f57ff8ae977b34",
+    "bug_class": "medium",
+    "category": "logic",
+    "baseline_failing_tests": 3,
+    "baseline_output": "[test] exit 1\n...............FFF......................                                 [100%]\n=================================== FAILURES ===================================\n_______________________________ test_order_total _______________________________\n\n    def test_order_total():\n        o = orders.create_order([('tea', 2)], 10)\n>       assert o['total'] == 216.0\nE       assert 0.0 == 216.0\n\ntests/test_orders.py:6: AssertionError\n________________________________ test_discount _________________________________\n\n    def test_discount():\n>       assert apply_discount(200, 10) == 180\nE       assert 0.0 == 180\nE        +  where 0.0 = apply_discount(200, 10)\n\ntests/test_pricing.py:5: AssertionError\n__________________________________ test_line ___________________________________\n\n    def test_line():\n>       assert line_total(100, 3, 10) == 270\nE       assert 0.0 == 270\nE        +  where 0.0 = line_total(100, 3, 10)\n\ntests/test_pricing.py:9: AssertionError\n=========================== short test summary info ============================\nFAILED tests/test_orders.py::test_order_total - assert 0.0 == 216.0\nFAILED tests/test_pricing.py::test_discount - assert 0.0 == 180\n +  where 0.0 = apply_discount(200, 10)\nFAILED tests/test_pricing.py::test_line - assert 0.0 == 270\n +  where 0.0 = line_total(100, 3, 10)\n3 failed, 37 passed in 0.89s\n",
+    "status": "pr_opened",
+    "verification_level": "strong",
+    "pr_url": "https://github.com/acme/buggy-shop/pull/42",
+    "pr_number": 42,
+    "pr_branch": "agent-daemon/fix-6f430b806f394d"
+  },
+  "router_decisions": [
+    {
+      "chosen": "groq",
+      "reason": "free first: try 1 of 3"
+    },
+    {
+      "chosen": "groq",
+      "reason": "free first: try 2 of 3"
+    },
+    {
+      "chosen": "groq",
+      "reason": "free first: try 3 of 3"
+    },
+    {
+      "chosen": "haiku",
+      "reason": "Haiku floor: 0 of 2 tries done"
+    }
+  ],
+  "attempts": [
+    {
+      "tier": "groq",
+      "model": "openai/gpt-oss-120b",
+      "result": "unusable",
+      "failing_before": null,
+      "failing_after": null,
+      "progress": 0,
+      "diagnosis": ""
+    },
+    {
+      "tier": "groq",
+      "model": "openai/gpt-oss-120b",
+      "result": "unusable",
+      "failing_before": null,
+      "failing_after": null,
+      "progress": 0,
+      "diagnosis": ""
+    },
+    {
+      "tier": "groq",
+      "model": "openai/gpt-oss-120b",
+      "result": "unusable",
+      "failing_before": null,
+      "failing_after": null,
+      "progress": 0,
+      "diagnosis": ""
+    },
+    {
+      "tier": "haiku",
+      "model": "claude-haiku-5-5",
+      "result": "pass",
+      "failing_before": 3,
+      "failing_after": 0,
+      "progress": 1,
+      "diagnosis": "apply_discount in pricing.py divides pct by 10 instead of 100, causing a 10% discount to wipe out 100% of the price."
+    }
+  ],
+  "opened_pr": {
+    "url": "https://github.com/acme/buggy-shop/pull/42",
+    "number": 42,
+    "branch": "agent-daemon/fix-6f430b806f394d",
+    "head_sha": "9f8e7d6c9f8e7d6c9f8e7d6c9f8e7d6c9f8e7d6c",
+    "path": "pricing.py",
+    "diff": "--- a/pricing.py\n+++ b/pricing.py\n@@ -5,7 +5,7 @@\n def apply_discount(price: float, pct: float) -> float:\n     if pct < 0 or pct > 100:\n         raise ValueError(\"discount must be between 0 and 100\")\n-    return round(price - price * pct / 10, 2)\n+    return round(price - price * pct / 100, 2)\n \n \n def add_tax(price: float) -> float:\n",
+    "title": "fix: apply_discount in pricing.py divides pct by 10 instead of 10 [agent-daemon]",
+    "body": "## Agent Daemon fix\n\n- Incident: 5e4e8002-9890-4a98-82d3-cf9bce70b985\n- Diagnosis: apply_discount in pricing.py divides pct by 10 instead of 100, causing a 10% discount to wipe out 100% of the price.\n- Model: Normal (claude-haiku-5-5), after 4 tries\n\n### Verification\nTests that failed before the fix now pass, the project builds, and (where detectable) it starts.\n\nNothing was pushed to your main branch. Review the diff before merging.",
+    "ci_status": "pending",
+    "merged": false
+  },
+  "incident_status_after": "pr_opened",
+  "auto_merged": false
+}

@@ -6,25 +6,25 @@ Docker 29.9.2 (linux/amd64)
 
 | Case | Detected stacks (image) | Passed | Phases (rc, seconds) | Tests |
 |---|---|---|---|---|
-| html-css-only | HTML/CSS/JS site (fixengine-sandbox-node:1) | True | build rc=0 25.7s, smoke rc=0 1.2s | - |
-| javascript-node | JavaScript/TypeScript (fixengine-sandbox-node:1) | True | test rc=0 2.8s, smoke rc=0 1.2s | test: {'failed': 0, 'discovered': 43, 'passed': 43} |
-| typescript | TypeScript (fixengine-sandbox-node:1) | True | install rc=0 7.1s, build rc=0 3.3s, test rc=0 2.5s | test: {'failed': 0, 'discovered': 34, 'passed': 34} |
-| java | Java (fixengine-sandbox-java:1) | True | build rc=0 5.9s, test rc=0 0.9s | test: {'passed': 91, 'failed': 0} |
-| python | Python (fixengine-sandbox-python:1) | True | install rc=0 1.8s, build rc=0 1.3s, test rc=0 1.6s | test: {'passed': 40, 'failed': 0} |
-| mixed-java+js+python | Python (tools) (fixengine-sandbox-python:1); JavaScript/TypeScript (web) (fixengine-sandbox-node:1); Java (fixengine-sandbox-java:1) | True | Python (tools): install rc=0 1.2s, Python (tools): build rc=0 1.3s, Python (tools): test rc=0 1.5s, JavaScript/TypeScript (web): test rc=0 2.0s, JavaScript/TypeScript (web): smoke rc=0 1.1s, Java: build rc=0 5.5s, Java: test rc=0 0.9s | Python (tools): test: {'passed': 40, 'failed': 0}; JavaScript/TypeScript (web): test: {'failed': 0, 'discovered': 43, 'passed': 43}; Java: test: {'passed': 91, 'failed': 0} |
-| mixed-java+js (no Python) | JavaScript/TypeScript (ui) (fixengine-sandbox-node:1); Java (fixengine-sandbox-java:1) | True | JavaScript/TypeScript (ui): test rc=0 2.2s, JavaScript/TypeScript (ui): smoke rc=0 1.0s, Java: build rc=0 5.1s, Java: test rc=0 0.9s | JavaScript/TypeScript (ui): test: {'failed': 0, 'discovered': 43, 'passed': 43}; Java: test: {'passed': 91, 'failed': 0} |
+| html-css-only | HTML/CSS/JS site (fixengine-sandbox-node:1) | True | build rc=0 1.3s, smoke rc=0 2.1s | - |
+| javascript-node | JavaScript/TypeScript (fixengine-sandbox-node:1) | True | test rc=0 3.3s, smoke rc=0 1.4s | test: {'failed': 0, 'discovered': 43, 'passed': 43} |
+| typescript | TypeScript (fixengine-sandbox-node:1) | True | install rc=0 7.4s, build rc=0 3.1s, test rc=0 2.7s | test: {'failed': 0, 'discovered': 34, 'passed': 34} |
+| java | Java (fixengine-sandbox-java:1) | True | build rc=0 6.8s, test rc=0 1.2s | test: {'passed': 91, 'failed': 0} |
+| python | Python (fixengine-sandbox-python:1) | True | install rc=0 1.6s, build rc=0 1.8s, test rc=0 1.9s | test: {'passed': 40, 'failed': 0} |
+| mixed-java+js+python | Python (tools) (fixengine-sandbox-python:1); JavaScript/TypeScript (web) (fixengine-sandbox-node:1); Java (fixengine-sandbox-java:1) | True | Python (tools): install rc=0 1.3s, Python (tools): build rc=0 1.2s, Python (tools): test rc=0 1.8s, JavaScript/TypeScript (web): test rc=0 2.4s, JavaScript/TypeScript (web): smoke rc=0 1.0s, Java: build rc=0 5.8s, Java: test rc=0 0.9s | Python (tools): test: {'passed': 40, 'failed': 0}; JavaScript/TypeScript (web): test: {'failed': 0, 'discovered': 43, 'passed': 43}; Java: test: {'passed': 91, 'failed': 0} |
+| mixed-java+js (no Python) | JavaScript/TypeScript (ui) (fixengine-sandbox-node:1); Java (fixengine-sandbox-java:1) | True | JavaScript/TypeScript (ui): test rc=0 1.9s, JavaScript/TypeScript (ui): smoke rc=0 1.0s, Java: build rc=0 4.5s, Java: test rc=0 0.9s | JavaScript/TypeScript (ui): test: {'failed': 0, 'discovered': 43, 'passed': 43}; Java: test: {'passed': 91, 'failed': 0} |
 
 ## Limits and isolation
 
 | Probe | Expected | rc | timed out | seconds | Log tail |
 |---|---|---|---|---|---|
-| timeout (infinite loop, 15 s limit) | expect timed_out | 124 | True | 25.4 | `` |
-| memory limit (allocate 3 GiB, 1 GiB cap) | expect rc 137 (OOM kill) | 137 | False | 3.2 | `Killed` |
-| network isolation (connect to 1.1.1.1:53) | expect failure | 1 | False | 1.4 | `twork is unreachable !!!!!!!!!!!!!!!!!!!!!!!!!! stopping after 1 failures !!!!!!!!!!!!!!!!!!!!!!!!!!! 1 failed in 0.09s` |
-| read-only root fs (write /etc/x) | expect failure | 1 | False | 1.8 | `ile system: '/etc/x' !!!!!!!!!!!!!!!!!!!!!!!!!! stopping after 1 failures !!!!!!!!!!!!!!!!!!!!!!!!!!! 1 failed in 0.06s` |
-| non-root user (uid must be 10001) | expect pass | 0 | False | 1.7 | `.                                                                        [100%] 1 passed in 0.07s` |
-| pids limit (fork bomb, 256 cap) | expect pass: OSError at the cap | 0 | False | 2.3 | `.                                                                        [100%] 1 passed in 0.62s` |
-| no secrets in the environment | expect pass | 1 | False | 1.3 | `sert not ['GPG_KEY'] !!!!!!!!!!!!!!!!!!!!!!!!!! stopping after 1 failures !!!!!!!!!!!!!!!!!!!!!!!!!!! 1 failed in 0.08s` |
+| timeout (infinite loop, 15 s limit) | expect timed_out | 124 | True | 25.3 | `` |
+| memory limit (allocate 3 GiB, 1 GiB cap) | expect rc 137 (OOM kill) | 137 | False | 2.8 | `Killed` |
+| network isolation (connect to 1.1.1.1:53) | expect failure | 1 | False | 1.3 | `twork is unreachable !!!!!!!!!!!!!!!!!!!!!!!!!! stopping after 1 failures !!!!!!!!!!!!!!!!!!!!!!!!!!! 1 failed in 0.12s` |
+| read-only root fs (write /etc/x) | expect failure | 1 | False | 1.2 | `ile system: '/etc/x' !!!!!!!!!!!!!!!!!!!!!!!!!! stopping after 1 failures !!!!!!!!!!!!!!!!!!!!!!!!!!! 1 failed in 0.05s` |
+| non-root user (uid must be 10001) | expect pass | 0 | False | 1.1 | `.                                                                        [100%] 1 passed in 0.04s` |
+| pids limit (fork bomb, 256 cap) | expect pass: OSError at the cap | 0 | False | 2.1 | `.                                                                        [100%] 1 passed in 0.48s` |
+| no host secrets in the environment | expect pass | 0 | False | 1.3 | `.                                                                        [100%] 1 passed in 0.05s` |
 
 ## Render -> VPS path
 
@@ -51,7 +51,7 @@ Docker 29.9.2 (linux/amd64)
       0
     ]
   ],
-  "signed_run_seconds": 7.1,
+  "signed_run_seconds": 4.5,
   "bad_signature_http": 401,
   "stale_timestamp_http": 401,
   "wrong_secret_result": {

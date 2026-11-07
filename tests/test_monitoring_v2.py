@@ -712,8 +712,8 @@ def test_no_retired_model_ids_are_left_in_our_own_code():
     ours = {}
     for path in ROOT.rglob("*"):
         rel = path.relative_to(ROOT).as_posix()
-        if path.is_file() and path.suffix in (".py", ".js", ".cjs", ".json", ".yaml", ".yml") and not rel.startswith(("tests/", "bench/")) \
-                and rel not in ("model_registry.json", "scripts/simulate_monitoring.py"):   # registry + simulation fixtures
+        if path.is_file() and path.suffix in (".py", ".js", ".cjs", ".json", ".yaml", ".yml") and not rel.startswith(("tests/", "bench/", "verification/")) \
+                and rel not in ("model_registry.json", "scripts/simulate_monitoring.py"):   # registry + simulation/verification fixtures
             ours[rel] = path.read_text(encoding="utf-8", errors="ignore")
     assert model_fix.scan_files(ours) == []
 

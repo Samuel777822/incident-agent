@@ -1,0 +1,416 @@
+{
+  "connected_at_utc": "2026-11-07T09:12:29+00:00",
+  "project_id": "de232088-d2bb-42a3-bb81-f4487fd54745",
+  "activation_result": {
+    "install": {
+      "public": false,
+      "pr_url": "https://github.com/acme/platform/pull/1",
+      "targets": [
+        {
+          "label": "Node.js server",
+          "kind": "node",
+          "wired": true,
+          "file": "web/package.json",
+          "how": "`npm start` now loads the monitor first (node -r)"
+        },
+        {
+          "label": "Python app",
+          "kind": "python",
+          "wired": true,
+          "file": "backend/app.py",
+          "how": "one import line at the top of backend/app.py"
+        },
+        {
+          "label": "Web pages (HTML/JS)",
+          "kind": "browser",
+          "wired": true,
+          "file": "site/about.html, site/contact.html, site/faq.html \u2026",
+          "how": "a <script> tag at the top of 5 page(s)"
+        }
+      ],
+      "files": [
+        "web/incident-agent-monitor.cjs",
+        "web/incident-agent-config.json",
+        "web/package.json",
+        "backend/incident_agent_monitor.py",
+        "backend/incident_agent_config.json",
+        "backend/app.py",
+        "site/incident-agent-monitor.js",
+        "site/about.html",
+        "site/contact.html",
+        "site/faq.html",
+        "site/index.html",
+        "site/products.html"
+      ]
+    },
+    "push": {
+      "webhook": {
+        "ok": true,
+        "id": 101
+      },
+      "queued": true
+    }
+  },
+  "queued_immediately_on_connect": true,
+  "check_source": "connect",
+  "commit_sha": "1a2b3c4d1a2b3c4d1a2b3c4d1a2b3c4d1a2b3c4d",
+  "scan_outcome": "passed",
+  "github_commit_statuses_sent": [
+    {
+      "sha": "1a2b3c4d1a2b3c4d1a2b3c4d1a2b3c4d1a2b3c4d",
+      "state": "pending",
+      "description": "Testing Python (backend), JavaScript/TypeScript (web), HTML/CSS/JS site in the Agent Daemon sandbox"
+    },
+    {
+      "sha": "1a2b3c4d1a2b3c4d1a2b3c4d1a2b3c4d1a2b3c4d",
+      "state": "success",
+      "description": "Python (backend), JavaScript/TypeScript (web), HTML/CSS/JS site: install, build, tests and start-up passed"
+    }
+  ],
+  "baseline_health_report": {
+    "commit": "1a2b3c4d1a2b3c4d1a2b3c4d1a2b3c4d1a2b3c4d",
+    "network": "only the install phase had network access; build, test and start-up ran with --network none",
+    "output_tail": "all stacks passed: Python (backend), JavaScript/TypeScript (web), HTML/CSS/JS site",
+    "passed": true,
+    "queued_at": "2026-11-07T09:12:29+00:00",
+    "reported_at": "2026-11-07T09:12:42+00:00",
+    "runner": "DockerRunner",
+    "source": "connect",
+    "stacks": [
+      {
+        "commands": {
+          "build": "python -m compileall -q .",
+          "install": "pip install --no-input --disable-pip-version-check --no-cache-dir -r requirements.txt --target /work/.fx_deps",
+          "smoke": "python app.py",
+          "test": "python -m pytest -q --maxfail=50 -p no:cacheprovider"
+        },
+        "has_tests": true,
+        "label": "Python (backend)",
+        "language": "python",
+        "not_run": [],
+        "notes": [],
+        "ok": true,
+        "phase": "smoke",
+        "phases": [
+          {
+            "name": "install",
+            "ok": true,
+            "rc": 0,
+            "seconds": 1.1
+          },
+          {
+            "name": "build",
+            "ok": true,
+            "rc": 0,
+            "seconds": 1.4
+          },
+          {
+            "name": "test",
+            "ok": true,
+            "rc": 0,
+            "seconds": 1.8
+          },
+          {
+            "name": "smoke",
+            "ok": true,
+            "rc": 0,
+            "seconds": 1.3
+          }
+        ],
+        "tests": {
+          "discovered": 40,
+          "failed": 0,
+          "passed": 40
+        }
+      },
+      {
+        "commands": {
+          "build": null,
+          "install": null,
+          "smoke": "npm start",
+          "test": "npm test --silent"
+        },
+        "has_tests": true,
+        "label": "JavaScript/TypeScript (web)",
+        "language": "node",
+        "not_run": [],
+        "notes": [],
+        "ok": true,
+        "phase": "smoke",
+        "phases": [
+          {
+            "name": "test",
+            "ok": true,
+            "rc": 0,
+            "seconds": 2.8
+          },
+          {
+            "name": "smoke",
+            "ok": true,
+            "rc": 0,
+            "seconds": 1.2
+          }
+        ],
+        "tests": {
+          "discovered": 43,
+          "failed": 0,
+          "passed": 43
+        }
+      },
+      {
+        "commands": {
+          "build": "python3 /opt/static_check.py . --site-root site --exclude backend --exclude web",
+          "install": null,
+          "smoke": "cd site && python3 -m http.server $PORT",
+          "test": null
+        },
+        "has_tests": false,
+        "label": "HTML/CSS/JS site",
+        "language": "static",
+        "not_run": [],
+        "notes": [],
+        "ok": true,
+        "phase": "smoke",
+        "phases": [
+          {
+            "name": "build",
+            "ok": true,
+            "rc": 0,
+            "seconds": 1.6
+          },
+          {
+            "name": "smoke",
+            "ok": true,
+            "rc": 0,
+            "seconds": 1.2
+          }
+        ],
+        "tests": {}
+      }
+    ],
+    "started_at": "2026-11-07T09:12:29+00:00",
+    "tests_count_unknown_for": [],
+    "tests_total": {
+      "discovered": 83,
+      "failed": 0,
+      "passed": 83
+    }
+  },
+  "universal_installer_matrix": [
+    {
+      "repo_type": "html-css-only",
+      "sandbox_stacks": [
+        {
+          "label": "HTML/CSS/JS site",
+          "language": "static",
+          "image": "fixengine-sandbox-node:1"
+        }
+      ],
+      "monitor_targets": [
+        {
+          "kind": "browser",
+          "base": "",
+          "framework": "static",
+          "entry": "about.html",
+          "label": "Web pages (HTML/JS)",
+          "pages": [
+            "about.html",
+            "contact.html",
+            "faq.html",
+            "index.html",
+            "products.html"
+          ]
+        }
+      ],
+      "monitor_install_results": [
+        {
+          "label": "Web pages (HTML/JS)",
+          "kind": "browser",
+          "wired": true,
+          "file": "about.html, contact.html, faq.html \u2026",
+          "how": "a <script> tag at the top of 5 page(s)"
+        }
+      ],
+      "committed_monitor_files": [
+        "about.html",
+        "contact.html",
+        "faq.html",
+        "incident-agent-monitor.js",
+        "index.html",
+        "products.html"
+      ]
+    },
+    {
+      "repo_type": "javascript-node",
+      "sandbox_stacks": [
+        {
+          "label": "JavaScript/TypeScript",
+          "language": "node",
+          "image": "fixengine-sandbox-node:1"
+        }
+      ],
+      "monitor_targets": [
+        {
+          "kind": "node",
+          "base": "",
+          "framework": "node",
+          "entry": "src/server.js",
+          "how": "script",
+          "esm": true,
+          "label": "Node.js server"
+        }
+      ],
+      "monitor_install_results": [
+        {
+          "label": "Node.js server",
+          "kind": "node",
+          "wired": true,
+          "file": "package.json",
+          "how": "`npm start` now loads the monitor first (node -r)"
+        }
+      ],
+      "committed_monitor_files": [
+        "incident-agent-config.json",
+        "incident-agent-monitor.cjs",
+        "package.json"
+      ]
+    },
+    {
+      "repo_type": "java",
+      "sandbox_stacks": [
+        {
+          "label": "Java",
+          "language": "java",
+          "image": "fixengine-sandbox-java:1"
+        }
+      ],
+      "monitor_targets": [],
+      "monitor_install_results": [],
+      "committed_monitor_files": []
+    },
+    {
+      "repo_type": "python",
+      "sandbox_stacks": [
+        {
+          "label": "Python",
+          "language": "python",
+          "image": "fixengine-sandbox-python:1"
+        }
+      ],
+      "monitor_targets": [
+        {
+          "kind": "python",
+          "base": "",
+          "framework": "python",
+          "entry": "app.py",
+          "package": false,
+          "label": "Python app"
+        }
+      ],
+      "monitor_install_results": [
+        {
+          "label": "Python app",
+          "kind": "python",
+          "wired": true,
+          "file": "app.py",
+          "how": "one import line at the top of app.py"
+        }
+      ],
+      "committed_monitor_files": [
+        "app.py",
+        "incident_agent_config.json",
+        "incident_agent_monitor.py"
+      ]
+    },
+    {
+      "repo_type": "mixed-language",
+      "sandbox_stacks": [
+        {
+          "label": "Python (backend)",
+          "language": "python",
+          "image": "fixengine-sandbox-python:1"
+        },
+        {
+          "label": "JavaScript/TypeScript (web)",
+          "language": "node",
+          "image": "fixengine-sandbox-node:1"
+        },
+        {
+          "label": "HTML/CSS/JS site",
+          "language": "static",
+          "image": "fixengine-sandbox-node:1"
+        }
+      ],
+      "monitor_targets": [
+        {
+          "kind": "node",
+          "base": "web",
+          "framework": "node",
+          "entry": "web/src/server.js",
+          "how": "script",
+          "esm": true,
+          "label": "Node.js server"
+        },
+        {
+          "kind": "python",
+          "base": "backend",
+          "framework": "python",
+          "entry": "backend/app.py",
+          "package": false,
+          "label": "Python app"
+        },
+        {
+          "kind": "browser",
+          "base": "",
+          "framework": "static",
+          "entry": "site/about.html",
+          "label": "Web pages (HTML/JS)",
+          "pages": [
+            "site/about.html",
+            "site/contact.html",
+            "site/faq.html",
+            "site/index.html",
+            "site/products.html"
+          ]
+        }
+      ],
+      "monitor_install_results": [
+        {
+          "label": "Node.js server",
+          "kind": "node",
+          "wired": true,
+          "file": "web/package.json",
+          "how": "`npm start` now loads the monitor first (node -r)"
+        },
+        {
+          "label": "Python app",
+          "kind": "python",
+          "wired": true,
+          "file": "backend/app.py",
+          "how": "one import line at the top of backend/app.py"
+        },
+        {
+          "label": "Web pages (HTML/JS)",
+          "kind": "browser",
+          "wired": true,
+          "file": "site/about.html, site/contact.html, site/faq.html \u2026",
+          "how": "a <script> tag at the top of 5 page(s)"
+        }
+      ],
+      "committed_monitor_files": [
+        "backend/app.py",
+        "backend/incident_agent_config.json",
+        "backend/incident_agent_monitor.py",
+        "site/about.html",
+        "site/contact.html",
+        "site/faq.html",
+        "site/incident-agent-monitor.js",
+        "site/index.html",
+        "site/products.html",
+        "web/incident-agent-config.json",
+        "web/incident-agent-monitor.cjs",
+        "web/package.json"
+      ]
+    }
+  ]
+}
