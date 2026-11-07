@@ -13,32 +13,17 @@ envVarGroups:
     envVars:
       - key: APP_ENV
         value: production
-      # Share secure login/OAuth cookies between agentdaemon.xyz and www.agentdaemon.xyz.
-      - key: COOKIE_DOMAIN
-        value: agentdaemon.xyz
-      - key: GOOGLE_CLIENT_ID
-        sync: false
-      - key: GOOGLE_CLIENT_SECRET
-        sync: false
-      - key: GOOGLE_REDIRECT_URI
-        value: https://agentdaemon.xyz/auth/google/callback
       - key: DATABASE_URL
         fromDatabase:
           name: incident-agent-db
           property: connectionString
       - key: TOKEN_ENCRYPTION_KEY
         generateValue: true
-      - key: GROQ_API_KEY
-        sync: false
       # --- Auto-fix engine (fixengine/). Off until FIXENGINE_ENABLED is 1. Keys are entered in Render, never in code. ---
       - key: FIXENGINE_ENABLED
         value: "0"
       - key: FIXENGINE_PROVIDER
         value: auto
-      - key: OPENROUTER_API_KEY
-        sync: false
-      - key: ANTHROPIC_API_KEY
-        sync: false
       - key: FIXENGINE_BUDGET_INR
         value: "400"
       - key: FIXENGINE_CREDITS_INR
@@ -46,10 +31,6 @@ envVarGroups:
       # Render cannot run Docker, so fixes are tested on a separate small server running sandbox_service.py (see FIXENGINE.md).
       - key: FIXENGINE_SANDBOX_MODE
         value: remote
-      - key: FIXENGINE_SANDBOX_URL
-        sync: false
-      - key: FIXENGINE_SANDBOX_SECRET
-        sync: false
       # --- Push guard (architecture v3): every push to a connected repo is tested in the sandbox. Free: no AI tries. ---
       - key: PUSH_CHECKS_ENABLED
         value: "1"
@@ -58,36 +39,15 @@ envVarGroups:
       - key: PUSH_MAX_CHECKS_PER_HOUR
         value: "12"
       # --- Email and links: shared by the web app AND the worker (the engine emails admins when it needs a decision) ---
-      - key: ADMIN_EMAILS
-        value: pranavvrao@agentdaemon.xyz,abhaysamuel@agentdaemon.xyz   # the only two admins
-      - key: SUPPORT_EMAIL
-        value: contact@agentdaemon.xyz
-      - key: EMAIL_FROM
-        sync: false
-      - key: BREVO_API_KEY
-        sync: false
-      - key: PORTAL_BASE_URL
-        sync: false          # the public https URL of the site: GitHub sends push webhooks there
   - name: incident-agent-web-secrets
     envVars:
       - key: SESSION_SECRET
         generateValue: true
-      - key: ADMIN_PASSWORD_PRANAVVRAO_AGENTDAEMON_XYZ
-        sync: false
-      - key: ADMIN_PASSWORD_ABHAYSAMUEL_AGENTDAEMON_XYZ
-        sync: false
-      - key: RAZORPAY_KEY_ID
-        sync: false
-      - key: RAZORPAY_KEY_SECRET
-        sync: false
-      - key: RAZORPAY_WEBHOOK_SECRET
-        sync: false
 
 services:
   - type: web
     name: incident-agent-web
     runtime: docker
-    repo: https://github.com/Samuel777822/incident-agent
     branch: main
     plan: starter
     region: singapore
@@ -97,13 +57,48 @@ services:
     envVars:
       - fromGroup: incident-agent-core
       - fromGroup: incident-agent-web-secrets
+      - key: COOKIE_DOMAIN
+        sync: false
+      - key: GOOGLE_CLIENT_ID
+        sync: false
+      - key: GOOGLE_CLIENT_SECRET
+        sync: false
+      - key: GOOGLE_REDIRECT_URI
+        sync: false
+      - key: GROQ_API_KEY
+        sync: false
+      - key: FIXENGINE_SANDBOX_URL
+        sync: false
+      - key: FIXENGINE_SANDBOX_SECRET
+        sync: false
+      - key: ADMIN_EMAILS
+        sync: false
+      - key: SUPPORT_EMAIL
+        sync: false
+      - key: EMAIL_FROM
+        sync: false
+      - key: BREVO_API_KEY
+        sync: false
+      - key: PORTAL_BASE_URL
+        sync: false
+      - key: OPENROUTER_API_KEY
+        sync: false
+      - key: ANTHROPIC_API_KEY
+        sync: false
+      - key: UPI_ID
+        sync: false
+      - key: RAZORPAY_KEY_ID
+        sync: false
+      - key: RAZORPAY_KEY_SECRET
+        sync: false
+      - key: RAZORPAY_WEBHOOK_SECRET
+        sync: false
       - key: PORTAL_RUN_WORKER
         value: "0"
 
   - type: worker
     name: incident-agent-worker
     runtime: docker
-    repo: https://github.com/Samuel777822/incident-agent
     branch: main
     plan: starter
     region: singapore
@@ -112,6 +107,26 @@ services:
     autoDeploy: true
     envVars:
       - fromGroup: incident-agent-core
+      - key: GROQ_API_KEY
+        sync: false
+      - key: FIXENGINE_SANDBOX_URL
+        sync: false
+      - key: FIXENGINE_SANDBOX_SECRET
+        sync: false
+      - key: ADMIN_EMAILS
+        sync: false
+      - key: SUPPORT_EMAIL
+        sync: false
+      - key: EMAIL_FROM
+        sync: false
+      - key: BREVO_API_KEY
+        sync: false
+      - key: PORTAL_BASE_URL
+        sync: false
+      - key: OPENROUTER_API_KEY
+        sync: false
+      - key: ANTHROPIC_API_KEY
+        sync: false
       - key: WORKER_POLL_SECONDS
         value: "5"
       - key: WORKER_MIN_OCCURRENCES

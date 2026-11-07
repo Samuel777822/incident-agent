@@ -1,28 +1,28 @@
 # Release checklist: Monitoring v2
 
-Status words: **Passed** (checked, nothing to change) · **Fixed** (checked, a problem was found and fixed) ·
-**Could Not Verify** (needs something this sandbox does not have; the reason is given).
+This file also contains notes from an earlier monitoring-v2 audit. Current evidence for this repair is in
+`VERIFICATION_REPORT.md`; the historical Phase 7 and UI/backend/deployment tables below were not rerun in this pass.
 
-Environment used for checking: Python 3.13, Node.js 22, headless Chromium 153 (Playwright), SQLite. No internet (pip/npm installs
-blocked), no Docker daemon, no PostgreSQL, no real GitHub, no AI provider keys.
+Environment used in this follow-up: Windows, Python 3.15.0, and SQLite. Git works locally, but shell-based GitHub push was not
+available in this managed environment; the authorized GitHub connector was used to update the review branch. No Java JDK,
+Playwright browser, Docker daemon, PostgreSQL client/server, Render CLI, or provider credentials were available.
 
 ## Test results
 
 | Check | Result |
 | --- | --- |
-| Full test suite (`python -m pytest -q`) | **375 passed, 3 failed**. The 3 failures are all the missing `segno` package (QR codes), which is listed in `requirements.txt` but could not be installed here (no network). Expect **378 passed** after `pip install -r requirements-test.txt`. |
-| New tests `tests/test_monitoring_v2.py` | **48 passed**, none skipped (the Node.js and real-browser tests ran) |
-| `scripts/simulate_monitoring.py` (2-second heartbeats) | PASS: Python + Node monitors checked in every 2.0 s, the retired-model 404 arrived with the provider's full message, one incident, one fix PR |
-| `scripts/simulate_monitoring.py --real` (production 30-second heartbeats, 65 s run) | PASS: check-ins at t=0.1 s, 30.1 s, 60.1 s for both Python and Node (+30.0 s each) |
-| Python syntax (`compileall`) and JS syntax (`node --check` on all monitor files) | Passed |
-| Lint (pyflakes) on every changed file | Fixed: removed unused/duplicate imports and variables in new and touched code. 3 pre-existing cosmetic notices in older `web_app.py` code left as is (no behaviour impact) |
+| Full test suite (`python -m pytest -q`) | One run before final test-only placeholder substitutions: **390 passed, 5 skipped, 0 failed** in 264.54 seconds. Later run during follow-up: **351 passed, 5 skipped, 33 failed, 6 errors** in 215.11 seconds; subprocess checks hit `WinError 6` on this host. Five skips: JDK (3), Playwright/Chromium (1), global `tsc` (1). See `VERIFICATION_REPORT.md`. |
+| Focused tests after final placeholder substitutions | **8 passed** in 2.15 seconds. Broader focused run: **135 passed, 2 skipped, 4 failed** in 51.54 seconds because local monitor checks could not connect to `127.0.0.1` (`EACCES`). |
+| Isolated large-repository checks | **6 passed** in 17.51 seconds. |
+| Python syntax (`compileall`) | Passed after the final code changes. |
+| Live monitor check-in | Passed: Python monitor ran against local portal for 186 seconds; seven beats persisted, with intervals of 30, 30, 30, 30, 31, and 30 seconds. |
 
 ## Phase 7: what the tests prove
 
 | Requirement | Status | Evidence |
 | --- | --- | --- |
-| Auto-install picks the right monitor per language, incl. mixed repos | Passed | `test_auto_install_picks_the_right_monitor_for_each_part` (11 repo shapes: Flask, FastAPI package, Django, Express, ESM Node, compiled TypeScript, plain HTML, React+Vite, React CRA, Next.js, mixed Python+Vite+Express), `test_mixed_repo_gets_one_monitor_per_part_in_the_right_place` |
-| Heartbeats arrive every 30 seconds | Passed | default 30 s in all three monitors (test), interval honoured by a real process (test), 30.0 s gaps in the `--real` simulation |
+| Auto-install picks the right monitor per language, incl. mixed repos | Passed | `test_auto_install_picks_the_right_monitor_for_each_part` (12 repo shapes, including Java, Flask, FastAPI package, Django, Node, TypeScript, browser apps, Next.js and mixed stacks), `test_java_monitor_uses_project_scoped_credentials_and_wires_a_nested_module` |
+| Heartbeats arrive every 30 seconds | Passed in local integration | default 30 s in Python, Node, browser and Java monitors; Python client ran against the local portal for 3 minutes and persisted seven heartbeat timestamps at 30-second intervals |
 | An error gets reported and triggers the fix pipeline | Passed | real Python / Node / Chromium monitors report the 404 retired-model answer; `test_a_reported_retired_model_error_is_fixed_end_to_end` (ingest → worker → PR → incident record) |
 | Public repo blocks install, private repo allows it | Passed | `test_public_repo_blocks_install_and_shows_simple_steps`, `test_private_repo_installs_immediately_on_connect`, `test_installer_itself_refuses_a_public_repo_before_writing_anything` |
 | "Install now" re-checks and proceeds correctly | Passed | `test_install_now_rechecks_and_repeats_the_steps_while_still_public`, `test_install_now_proceeds_once_private_and_runs_the_first_scan` |
@@ -51,7 +51,7 @@ blocked), no Docker daemon, no PostgreSQL, no real GitHub, no AI provider keys.
 | GitHub integration (visibility, tree listing, install PR, fix PR, merges) | Could Not Verify (live) | every call path is covered with offline stand-ins; needs a real token and repo (DEPLOY.md step 6) |
 | AI providers and adapters | Passed (code) / Could Not Verify (live) | no keys here. Model ids are configurable (`GROQ_MODEL`, `GROQ_FALLBACK_MODEL`, `CHATBOT_MODEL`, `FIXENGINE_MODEL_<MODE>`). Live model-list lookups (`fixengine/model_catalog.py`) are mocked in tests |
 | No deprecated / discontinued model names in our code | Passed | test scans every source/config file (except the registry and test fixtures). Our defaults: `openai/gpt-oss-120b`/`-20b` (Groq), `claude-haiku-5-5`, `claude-sonnet-5-5`, `claude-opus-5-5`. The OpenRouter id for Opus was already marked "verify" in RUN_TESTS.md |
-| Retired-model registry accuracy | Could Not Verify (fully) | `model_registry.json` was built on 7 Nov 2026 from Anthropic's official deprecation page and public summaries of the OpenAI, Google and Groq pages (the OpenAI page itself was not reachable from here). Each replacement is double-checked against the provider's live model list before a fix is pushed; unverified swaps are never auto-merged. Review the file monthly |
+| Retired-model registry accuracy | Could Not Verify (fully) | `model_registry.json` was built on 7 Nov 2026 from Anthropic's official deprecation page and public summaries of the OpenAI, Google and Groq pages (the OpenAI page itself was not reachable from here). Each replacement is double-checked against the provider's live model list before a fix is proposed; pull requests always need human review. Review the file monthly |
 | Email | Could Not Verify | no `BREVO_API_KEY` here; new emails ("make your repo private", "monitor offline") use the existing queue and were recorded in `notification_log` in tests |
 | Sandbox server | Could Not Verify | no Docker daemon; the code paths with and without a sandbox are tested with fakes (the first scan works without it) |
 
@@ -79,10 +79,10 @@ blocked), no Docker daemon, no PostgreSQL, no real GitHub, no AI provider keys.
 
 ## Manual steps for you (before / after deploying)
 
-1. **Before pushing:** `pip install -r requirements-test.txt` and `python -m pytest -q` on your laptop (expect 378 passed).
+1. **Before deployment:** run `pip install -r requirements-test.txt` and `python -m pytest -q` in the deployment environment; resolve the Windows subprocess-handle issue before treating the final full suite as green.
 2. **Render environment:** make sure `DATABASE_URL`, `TOKEN_ENCRYPTION_KEY`, `SESSION_SECRET` (web) and **`PORTAL_BASE_URL`** are set.
    `PORTAL_BASE_URL` must be the real public https address: every monitor installed in customer apps sends its check-ins there.
-   The new variables in DEPLOY.md step 2 are optional.
+   Set `UPI_ID` privately only if manual UPI checkout is intended; otherwise checkout remains unavailable. Never commit a real destination.
 3. **GitHub token permissions (customers):** unchanged: a classic token with `repo` + `workflow`. `repo` already lets us read
    whether a repository is private and add the webhook (the token's owner must be an admin of the repo for the webhook).
    Fine-grained tokens are still not supported. No GitHub App is needed.

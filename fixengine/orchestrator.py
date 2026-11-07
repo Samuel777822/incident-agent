@@ -369,17 +369,15 @@ class Engine:
         if level not in validator.PROVEN_LEVELS:
             store.block_automerge(claimed["incident_id"])
         elif pr.get("head_sha"):
-            # The sandbox proved the fix: say so on the fix commit, so GitHub (and Auto mode) see a passing check.
+            # The sandbox proved the fix: record the result on the fix commit for the human reviewer.
             try:
                 import push_watch
                 push_watch.set_commit_status({**project, "branch": pr["head_sha"], "project_id": claimed["project_id"]},
                                              pr["head_sha"], "success", validator.VERIFY_TEXT.get(level, "")[:139])
             except Exception:
                 log.debug("could not set the fix commit status")
-        mode = project.get("mode") or claimed.get("mode")
-        _stage(claimed["incident_id"], "merging" if (mode == "auto" and level in validator.PROVEN_LEVELS) else "pr_open",
-               "waiting for GitHub checks, then merging automatically" if mode == "auto" and level in validator.PROVEN_LEVELS
-               else "review and merge the pull request on GitHub", win["tier"])
+        _stage(claimed["incident_id"], "pr_open",
+               "the fix passed its sandbox checks; review and merge the pull request on GitHub", win["tier"])
         store.update_bug(bug["id"], status="pr_opened", pr_url=pr["url"], closed_at=store.now(), stop_reason="")
         notify.user_pr_opened(project["user_id"], project["name"], pr["url"], validator.VERIFY_TEXT.get(level, ""))
         return "pr_opened"

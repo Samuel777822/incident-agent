@@ -70,9 +70,9 @@ def test_apply_patch(tmp_path):
 
 
 def test_tester_sanitizes_tokens(monkeypatch):
-    monkeypatch.setenv("GITHUB_TOKEN", "secret_gh_token_9999")
-    monkeypatch.setenv("GROQ_API_KEY", "secret_groq_key_8888")
-    raw = "Failed on url https://x-access-token:secret_gh_token_9999@github.com with key secret_groq_key_8888"
+    monkeypatch.setenv("GITHUB_TOKEN", "TEST_ONLY_GITHUB_TOKEN")
+    monkeypatch.setenv("GROQ_API_KEY", "TEST_ONLY_GROQ_KEY")
+    raw = "Failed on url https://x-access-token:TEST_ONLY_GITHUB_TOKEN@example.invalid/repo with key TEST_ONLY_GROQ_KEY"
     sanitized = sanitize_test_output(raw)
     assert "secret_gh_token_9999" not in sanitized
     assert "secret_groq_key_8888" not in sanitized
@@ -104,7 +104,7 @@ def test_autofix_does_not_run_customer_tests_locally(tmp_path, temp_db):
         "root_cause": "cost instead of price",
         "recommended_fix": "rename cost to price",
     }
-    repo_cfg = {"mode": "pr", "branch": "master", "test_command": "pytest", "url": "https://github.com/pranavrao1-ai/cofee-shop.git"}
+    repo_cfg = {"mode": "pr", "branch": "master", "test_command": "pytest", "url": "https://github.com/sample-org/sample-repo.git"}
 
     mock_patch = {
         "file_path": "catalog.py",
@@ -117,7 +117,7 @@ def test_autofix_does_not_run_customer_tests_locally(tmp_path, temp_db):
          patch("autofix.generate_patch", return_value=mock_patch), \
          patch("autofix.create_fix_branch", return_value="fix/incident-1"), \
          patch("autofix.commit_fix"), \
-         patch("autofix.open_and_maybe_merge_pr", return_value=("https://github.com/pranavrao1-ai/cofee-shop/pull/1", False)) as mock_pr, \
+         patch("autofix.open_and_maybe_merge_pr", return_value=("https://github.com/sample-org/sample-repo/pull/1", False)) as mock_pr, \
          patch("autofix._cleanup_workspace"):
         res = attempt_autofix(incident, diagnosis, tmp_path, repo_cfg, files_text="dummy")
 
@@ -139,7 +139,7 @@ def test_autofix_opens_pr_when_post_patch_tests_pass(tmp_path, temp_db):
         "root_cause": "cost instead of price",
         "recommended_fix": "rename cost to price",
     }
-    repo_cfg = {"mode": "pr", "branch": "master", "test_command": "pytest", "url": "https://github.com/pranavrao1-ai/cofee-shop.git"}
+    repo_cfg = {"mode": "pr", "branch": "master", "test_command": "pytest", "url": "https://github.com/sample-org/sample-repo.git"}
 
     mock_patch = {
         "file_path": "catalog.py",
@@ -152,7 +152,7 @@ def test_autofix_opens_pr_when_post_patch_tests_pass(tmp_path, temp_db):
          patch("autofix.generate_patch", return_value=mock_patch), \
          patch("autofix.create_fix_branch", return_value="fix/incident-1"), \
          patch("autofix.commit_fix"), \
-         patch("autofix.open_and_maybe_merge_pr", return_value=("https://github.com/pranavrao1-ai/cofee-shop/pull/1", False)), \
+         patch("autofix.open_and_maybe_merge_pr", return_value=("https://github.com/sample-org/sample-repo/pull/1", False)), \
          patch("autofix._cleanup_workspace"):
         res = attempt_autofix(incident, diagnosis, tmp_path, repo_cfg, files_text="dummy")
 

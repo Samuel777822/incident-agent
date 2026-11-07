@@ -85,9 +85,9 @@ def main() -> None:
     adapter_proofs = []
     fallback_proofs = []
     try:
-        os.environ["OPENROUTER_API_KEY"] = "sk-or-v1-proof-redacted-key"
-        os.environ["ANTHROPIC_API_KEY"] = "sk-ant-proof-redacted-key"
-        os.environ["GROQ_API_KEY"] = "gsk_proof_redacted_key"
+        os.environ["OPENROUTER_API_KEY"] = "mock-openrouter-key"
+        os.environ["ANTHROPIC_API_KEY"] = "mock-anthropic-key"
+        os.environ["GROQ_API_KEY"] = "mock-groq-key"
 
         # 3a. OpenRouter normal call (Haiku tier with prompt caching)
         or_req = {}
@@ -213,7 +213,7 @@ def main() -> None:
         # Ensure anthropic catalogue is populated in cache (derived from live OpenRouter list when no real ANTHROPIC_API_KEY exists)
         os.environ.pop("ANTHROPIC_API_KEY", None)
         ant_live_list = model_catalog.models("anthropic") or []
-        os.environ["ANTHROPIC_API_KEY"] = "sk-ant-proof-redacted-key"
+        os.environ["ANTHROPIC_API_KEY"] = "mock-anthropic-key"
         model_catalog.set_for_tests("anthropic", ant_live_list)
         ant_rep_adapter = adapters.AnthropicAdapter("haiku", cfg, client=httpx.Client(transport=httpx.MockTransport(ant_404_handler)), sleep=lambda s: None)
         ant_rep_adapter.model = retired_ant

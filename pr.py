@@ -197,16 +197,13 @@ def open_and_maybe_merge_pr(
         return None, False
 
     pr_url, number = pr.get("html_url"), pr.get("number")
+    # Retain the legacy argument for callers that still pass it, but never merge automatically.
     merged = False
     ci_status = "unknown"
     head_sha = (pr.get("head") or {}).get("sha")
     if number and head_sha:
         try:
-            if auto_merge:
-                ci_status = wait_for_ci(api, token, head_sha,
-                    on_update=(lambda status: on_ci_update(status, pr_url, number)) if on_ci_update else None)
-            else:
-                ci_status = get_ci_status(api, token, head_sha)
+            ci_status = get_ci_status(api, token, head_sha)
             if on_ci_update:
                 on_ci_update(ci_status, pr_url, number)
         except Exception as exc:
@@ -214,20 +211,6 @@ def open_and_maybe_merge_pr(
             print(f"[PR] Could not read GitHub CI status: {mask_token(str(exc), token)}")
             if on_ci_update:
                 on_ci_update(ci_status, pr_url, number)
-    if auto_merge and number and ci_status == "success":
-        try:
-            res = _github(
-                f"{api}/pulls/{number}/merge",
-                token,
-                {
-                    "commit_title": f"Merge pull request #{number} (auto-fix incident #{incident_id})",
-                    "merge_method": "squash",
-                },
-                "PUT",
-            )
-            merged = bool(res.get("merged"))
-        except Exception as exc:
-            print(f"[PR] Auto-merge failed: {mask_token(str(exc), token)}. The PR stays open for a human.")
-    elif auto_merge and ci_status != "success":
-        print(f"[PR] CI status is '{ci_status}'. Leaving the pull request open for review.")
+    if auto_merge:
+        print("[PR] Automatic merging is disabled. The pull request remains open for human review.")
     return pr_url, merged

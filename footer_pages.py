@@ -33,7 +33,9 @@ def render_footer_html(visitor_count: int | None = None) -> str:
         import notifications
         support = notifications.support_email()
     except Exception:
-        support = "contact@agentdaemon.xyz"
+        support = ""
+    support_link = (f'<li><a href="mailto:{support}">{support}</a></li>' if support
+                    else '<li><a href="/contact">Contact Support</a></li>')
     return f"""<footer class="wrap footer">
   <div class="footer-grid">
     <div class="footer-col">
@@ -52,7 +54,7 @@ def render_footer_html(visitor_count: int | None = None) -> str:
       <ul class="footer-links">
         <li><a href="/about">About Us</a></li>
         <li><a href="/contact">Contact Us</a></li>
-        <li><a href="mailto:{support}">{support}</a></li>
+{support_link}
       </ul>
     </div>
     <div class="footer-col">
@@ -133,7 +135,7 @@ def render_footer_html(visitor_count: int | None = None) -> str:
   <div class="footer-bottom">
     <div class="footer-brand-line">
       <span class="brand"><span class="brand-mark">A</span>Agent Daemon</span>
-      <span class="muted">· Catches the bug when you push, fixes it, and pushes the fix back. Any language your app is written in.</span>
+      <span class="muted">· Catches problems on push, proposes a fix, and opens a pull request for review.</span>
     </div>
     <div class="muted" style="font-size:13px">
       &copy; 2026 Agent Daemon · By Agent Daemon team of engineers · Built for resilient engineering teams.
@@ -145,7 +147,7 @@ def render_footer_html(visitor_count: int | None = None) -> str:
 def features_page_html() -> str:
     return """<section class="about-hero">
 <div class="eyebrow">What Agent Daemon does</div>
-<h1>Push your code. The agent catches what broke, fixes it, and pushes the fix back.</h1>
+<h1>Push your code. The agent catches what broke and opens a pull request with a proposed fix.</h1>
 <p>Built for vibe coders, students and hackathon teams who have no time to debug. Works with Python, JavaScript, TypeScript, Java and plain HTML/CSS sites, including repos that mix them.</p>
 <div class="actions" style="justify-content:center"><a class="button primary" href="/how-it-works">See the architecture</a><a class="button" href="/pricing">Plans</a></div>
 </section>
@@ -164,7 +166,7 @@ def features_page_html() -> str:
   <article class="card">
     <div class="feat-ico" aria-hidden="true">&#8644;</div>
     <h3>Fix pushed back to GitHub</h3>
-    <p class="muted">The fix lands on a new <code>agent-daemon/fix-&hellip;</code> branch with a pull request. In Auto mode it is merged into your branch as soon as the same sandbox check proves it works, so the fixed version is on GitHub without you lifting a finger.</p>
+    <p class="muted">The fix lands on a new <code>agent-daemon/fix-&hellip;</code> branch with a pull request. The agent reports its sandbox and CI results; you review and merge the pull request on GitHub.</p>
   </article>
   <article class="card">
     <div class="feat-ico" aria-hidden="true">&#9889;</div>
@@ -278,9 +280,9 @@ def changelog_page_html() -> str:
     </div>
     <ul style="color:#d1c4df;font-size:14px;line-height:1.7;padding-left:18px">
       <li><b>Push checks:</b> every push to your branch is installed, built, tested and started in the sandbox. The result shows up on the commit in GitHub.</li>
-      <li><b>Fix pushed back:</b> a broken push opens an incident; the agent writes a fix, proves it with the same check, and pushes it as a pull request (merged automatically in Auto mode).</li>
+      <li><b>Fix pushed back:</b> a broken push opens an incident; the agent proposes a fix, runs the same check, and opens a pull request for human review.</li>
       <li><b>Mixed-language repos:</b> Python, JavaScript/TypeScript, Java and HTML/CSS parts of one repo are each checked on their own.</li>
-      <li><b>Live dashboard:</b> see which mode is working on a bug, what it is doing right now (testing in the sandbox, pushing, merging) and how many tries you have left.</li>
+      <li><b>Live dashboard:</b> see which mode is working on a bug, what it is doing right now (testing in the sandbox and preparing a pull request for review) and how many tries you have left.</li>
       <li><b>Projects:</b> one included, more for &#8377;30 each. Plans list 30 Normal, 6 High and 3 Extra tries a month.</li>
       <li><b>Architecture page:</b> an interactive map of the whole system at <a href="/how-it-works">/how-it-works</a>.</li>
     </ul>
@@ -293,7 +295,7 @@ def changelog_page_html() -> str:
     </div>
     <ul style="color:#d1c4df;font-size:14px;line-height:1.7;padding-left:18px">
       <li><b>Embedded Video Walkthrough:</b> Added comprehensive demo screencast with key timestamp chapters.</li>
-      <li><b>Troubleshooting Playbooks:</b> 6 actionable guides covering sleeping free containers, GitHub token errors (401/403/404), safety gates, and CI auto-merge prerequisites.</li>
+      <li><b>Troubleshooting Playbooks:</b> 6 actionable guides covering sleeping free containers, GitHub token errors (401/403/404), safety gates, and pull request checks.</li>
       <li><b>Instant Search Filter:</b> Live client-side keyword search across all documentation sections.</li>
       <li><b>Structured Footer:</b> Added organized 4-column navigation (Product, Company, Resources, Legal).</li>
     </ul>
@@ -331,8 +333,8 @@ def changelog_page_html() -> str:
     <ul style="color:#d1c4df;font-size:14px;line-height:1.7;padding-left:18px">
       <li><b>Google OAuth2 Authentication:</b> Secure, passwordless sign-in with display name capture.</li>
       <li><b>Zero-Touch Monitoring Installer:</b> One-click GitHub PR installing client, app entrypoint hook, and test workflow.</li>
-      <li><b>Autonomous Auto-Fix Engine:</b> Incident grouping, Groq root-cause extraction, AST patch synthesis, and CI-gated auto-merge.</li>
-      <li><b>Paytm UPI QR Billing:</b> QR payment generation and UTR verification workflow.</li>
+      <li><b>Autonomous Auto-Fix Engine:</b> Incident grouping, root-cause analysis, patch proposals, and sandbox validation for pull requests.</li>
+      <li><b>Manual UPI Billing:</b> QR payment generation and UTR verification workflow.</li>
     </ul>
   </article>
 
@@ -370,9 +372,9 @@ def faq_page_html() -> str:
   </details>
 
   <details class="accordion-item">
-    <summary class="accordion-summary">How does Auto mode push the fixed version to GitHub?</summary>
+    <summary class="accordion-summary">How does Agent Daemon propose a fix on GitHub?</summary>
     <div class="accordion-body">
-      <p>The fix is committed to a new <code>agent-daemon/fix-&hellip;</code> branch and opened as a pull request into your branch. When the sandbox proves the fix (the check that failed now passes), the fix commit gets a green status and Auto mode squash-merges it, so your branch on GitHub holds the fixed version. In Pull request mode it waits for you to merge. Nothing is ever pushed straight to your branch without a pull request.</p>
+      <p>The fix is committed to a new <code>agent-daemon/fix-&hellip;</code> branch and opened as a pull request into your branch. The sandbox and GitHub checks report their results on the PR. Review and merge the pull request on GitHub when you are ready.</p>
     </div>
   </details>
 
@@ -428,7 +430,7 @@ def faq_page_html() -> str:
   <details class="accordion-item">
     <summary class="accordion-summary">What happens if a patch fails tests in CI?</summary>
     <div class="accordion-body">
-      <p>Agent Daemon will <b>never</b> merge a failing PR. If tests fail, the PR is left open with the CI failure status recorded, and the incident status is escalated to <code>needs_human</code> so an engineer can inspect the situation.</p>
+      <p>Agent Daemon never merges pull requests automatically. If tests fail, the PR is left open with the CI failure status recorded, and the incident status is escalated to <code>needs_human</code> so an engineer can inspect the situation.</p>
     </div>
   </details>
 
@@ -502,17 +504,17 @@ def terms_of_service_page_html() -> str:
 
 <section class="card" style="margin-top:36px;padding:32px;line-height:1.7;color:#d1c4df">
   <h3 style="color:var(--silver);margin-bottom:8px">1. Acceptance of Terms</h3>
-  <p>By accessing or using Agent Daemon (https://incident-agent-portal.onrender.com), you agree to be bound by these Terms of Service. If you are entering into this agreement on behalf of a company or legal entity, you represent that you have the authority to bind such entity.</p>
+  <p>By accessing or using Agent Daemon, you agree to be bound by these Terms of Service. If you are entering into this agreement on behalf of a company or legal entity, you represent that you have the authority to bind such entity.</p>
 
   <h3 style="color:var(--silver);margin:24px 0 8px">2. Autonomous Pull Requests &amp; Customer Responsibility</h3>
   <p>Agent Daemon provides autonomous error diagnosis and software patch synthesis. While our system implements strict AST validation, test suite gates, and confidence thresholds, <b>the customer retains ultimate responsibility for reviewing and validating any code pushed or merged into their production repositories</b>.</p>
-  <p>In Automatic mode, Agent Daemon merges a pull request only when the fix is proven in our sandbox (the check that failed before now passes) and every GitHub check on the pull request reports success. We recommend keeping tests in every repository you connect: the more your tests cover, the more a green check means.</p>
+  <p>Agent Daemon leaves every pull request open for human review, including when the fix is proven in our sandbox and every GitHub check reports success. We recommend keeping tests in every repository you connect: the more your tests cover, the more a green check means.</p>
   <p>Push checks: by connecting a repository you allow us to add a webhook to it and to post commit statuses ("Agent Daemon / push check") on the commits we test.</p>
 
   <h3 style="color:var(--silver);margin:24px 0 8px">3. Subscriptions &amp; Billing</h3>
   <ul>
     <li><b>Free Trial:</b> Limited to one 1-day free trial per customer, subject to approval by the Agent Daemon team of engineers.</li>
-    <li><b>Paid Plans:</b> Paid access is available for &#8377;{plans.PLAN_PRICES["monthly"]:,} (30 days) and &#8377;{plans.PLAN_PRICES["yearly"]:,} (365 days). Payments made via Paytm UPI QR are activated upon administrative verification of the provided UTR reference.</li>
+    <li><b>Paid Plans:</b> Paid access is available for &#8377;{plans.PLAN_PRICES["monthly"]:,} (30 days) and &#8377;{plans.PLAN_PRICES["yearly"]:,} (365 days). Manual UPI payments are activated after verification of the provided reference.</li>
     <li><b>Monthly Fix Attempts:</b> Each paid plan includes {plans.quota_sentence()}. Quotas reset every month and do not roll over, including on the yearly plan. Extra attempts can be bought in a &#8377;{plans.PACK_PRICE} pack ({plans.PACK_HIGH_TRIES} High or {plans.PACK_EXTRA_TRIES} Extra attempts for the current month).</li>
     <li><b>Projects:</b> Every plan includes {plans.INCLUDED_PROJECTS} connected project. Each additional project is a one-time payment of &#8377;{plans.PROJECT_SLOT_PRICE} and the slot stays on your account.</li>
     <li><b>Attempts, Not Guarantees:</b> We sell attempts to fix a bug, not a guaranteed fix. Every fix is proposed as a pull request for your review.</li>

@@ -114,8 +114,8 @@ def test_static_checker_skips_excluded_folders(tmp_path):
 def _hook_project(tmp_path, monkeypatch, watch="both"):
     from cryptography.fernet import Fernet
     monkeypatch.setenv("TOKEN_ENCRYPTION_KEY", Fernet.generate_key().decode())
-    user_id, *_ = make_session("dev@example.com")
-    portal_db.admin_grant_access(user_id, 30, "paid", "admin1@example.com")
+    user_id, *_ = make_session("dev@example.invalid")
+    portal_db.admin_grant_access(user_id, 30, "paid", "admin1@example.invalid")
     project_id = project_for(user_id, watch_mode=watch)
     secret = "s3cret-for-tests"
     portal_db.set_project_webhook(project_id, "77", push_watch._encrypt(secret))
@@ -196,8 +196,8 @@ def _claim(project_id, user_id, sha="c" * 40, message="change"):
 
 
 def test_a_green_push_passes_and_closes_old_push_incidents(web_env, tmp_path):
-    user_id, *_ = make_session("dev@example.com")
-    portal_db.admin_grant_access(user_id, 30, "paid", "admin1@example.com")
+    user_id, *_ = make_session("dev@example.invalid")
+    portal_db.admin_grant_access(user_id, 30, "paid", "admin1@example.invalid")
     project_id = project_for(user_id)
     old, _ = portal_db.ingest_event(project_id, timestamp="2026-01-01T00:00:00Z", level="ERROR", message="x", signature="Push check: x")
     portal_db.mark_incident_source(old, "push", "d" * 40)
@@ -215,8 +215,8 @@ def test_a_green_push_passes_and_closes_old_push_incidents(web_env, tmp_path):
 
 
 def test_a_red_push_opens_a_push_incident_and_emails_the_owner(web_env, tmp_path):
-    user_id, *_ = make_session("dev@example.com")
-    portal_db.admin_grant_access(user_id, 30, "paid", "admin1@example.com")
+    user_id, *_ = make_session("dev@example.invalid")
+    portal_db.admin_grant_access(user_id, 30, "paid", "admin1@example.invalid")
     project_id = project_for(user_id)
     repo = put(tmp_path / "repo", {"app.py": "x = 1\n", "test_app.py": "def test_x(): assert 0\n", "requirements.txt": ""})
     check = _claim(project_id, user_id)
@@ -233,8 +233,8 @@ def test_a_red_push_opens_a_push_incident_and_emails_the_owner(web_env, tmp_path
 
 
 def test_the_agents_own_fix_failing_again_goes_to_a_human(web_env, tmp_path):
-    user_id, *_ = make_session("dev@example.com")
-    portal_db.admin_grant_access(user_id, 30, "paid", "admin1@example.com")
+    user_id, *_ = make_session("dev@example.invalid")
+    portal_db.admin_grant_access(user_id, 30, "paid", "admin1@example.invalid")
     project_id = project_for(user_id)
     repo = put(tmp_path / "repo", {"app.py": "x = 1\n", "requirements.txt": ""})
     check = _claim(project_id, user_id, message="Merge Agent Daemon fix #3 [agent-daemon]")
@@ -245,8 +245,8 @@ def test_the_agents_own_fix_failing_again_goes_to_a_human(web_env, tmp_path):
 
 
 def test_no_sandbox_means_the_check_waits_honestly(web_env, monkeypatch):
-    user_id, *_ = make_session("dev@example.com")
-    portal_db.admin_grant_access(user_id, 30, "paid", "admin1@example.com")
+    user_id, *_ = make_session("dev@example.invalid")
+    portal_db.admin_grant_access(user_id, 30, "paid", "admin1@example.invalid")
     project_id = project_for(user_id)
     monkeypatch.setenv("FIXENGINE_SANDBOX_MODE", "remote")
     monkeypatch.delenv("FIXENGINE_SANDBOX_URL", raising=False)
@@ -300,9 +300,9 @@ def test_engine_fixes_a_broken_push_proves_it_and_marks_the_fix_commit(tmp_path,
     assert outcome == "pr_opened" and w.prs
     assert w.prs[0]["title"].endswith("[agent-daemon]")                                    # marked, so its own merge never loops
     assert "Tests that failed before the fix now pass" in w.prs[0]["body"]
-    assert marked == [("f" * 40, "success")]                                                # Auto mode sees a passing check
+    assert marked == [("f" * 40, "success")]                                                # The push guard records a passing check
     row = portal_db.get_incident_row(inc)
-    assert row["stage"] == "merging" and row["stage_tier"] == "haiku"
+    assert row["stage"] == "pr_open" and row["stage_tier"] == "haiku"
 
 
 def test_a_build_break_without_tests_is_proven_by_the_same_check(tmp_path, monkeypatch):
@@ -335,8 +335,8 @@ def test_verification_levels_for_push_bugs():
 
 # ------------------------------------------------------------------------------------------------ dashboard stages
 def test_dashboard_shows_mode_stage_and_tries_left(web_env):
-    user_id, _, cookie = make_session("dev@example.com")
-    portal_db.admin_grant_access(user_id, 30, "paid", "admin1@example.com")
+    user_id, _, cookie = make_session("dev@example.invalid")
+    portal_db.admin_grant_access(user_id, 30, "paid", "admin1@example.invalid")
     project_id = project_for(user_id)
     inc, _ = portal_db.ingest_event(project_id, timestamp="2026-01-01T00:00:00Z", level="ERROR", message="boom", signature="Push check: boom")
     portal_db.mark_incident_source(inc, "push", "abcdef1234567")
@@ -350,14 +350,14 @@ def test_dashboard_shows_mode_stage_and_tries_left(web_env):
     st, _, frag = _request("/dashboard/live", cookie=cookie)
     assert st == "200 OK" and "High mode is writing a fix" in frag and "<html" not in frag
     for stage, text in (("testing_fix", "Testing the fix in the sandbox"), ("pushing", "Pushing the fix to GitHub"),
-                        ("merging", "merging into your branch"), ("merged", "the fixed version is on GitHub")):
+                        ("merging", "Fix ready · waiting for your review"), ("merged", "Fixed · merged after human review")):
         portal_db.set_incident_stage(inc, stage, "", "sonnet")
         assert text in _request("/dashboard/live", cookie=cookie)[2]
 
 
 def test_project_page_lists_push_checks_with_stacks(web_env):
-    user_id, csrf, cookie = make_session("dev@example.com")
-    portal_db.admin_grant_access(user_id, 30, "paid", "admin1@example.com")
+    user_id, csrf, cookie = make_session("dev@example.invalid")
+    portal_db.admin_grant_access(user_id, 30, "paid", "admin1@example.invalid")
     project_id = project_for(user_id)
     cid, _ = portal_db.enqueue_push_check(project_id, user_id, "2" * 40, "main", source="webhook", commit_message="new page")
     portal_db.finish_push_check(cid, "failed", output="boom", stacks=[{"label": "Python (backend)", "ok": True, "phase": "test"},
@@ -377,8 +377,8 @@ def test_second_project_needs_a_paid_slot(web_env, monkeypatch):
     monkeypatch.setenv("TOKEN_ENCRYPTION_KEY", Fernet.generate_key().decode())
     monkeypatch.setattr(web_app, "validate_repository_access", lambda **kw: {"private": True, "default_branch": "main"})
     monkeypatch.setattr(web_app, "resolve_branch", lambda **kw: "main")
-    user_id, csrf, cookie = make_session("dev@example.com")
-    portal_db.admin_grant_access(user_id, 30, "paid", "admin1@example.com")
+    user_id, csrf, cookie = make_session("dev@example.invalid")
+    portal_db.admin_grant_access(user_id, 30, "paid", "admin1@example.invalid")
     form = {"csrf": csrf, "name": "One", "repo": "demo/one", "github_token": "ghp_" + "x" * 30, "mode": "pr", "watch_mode": "push",
             "allow_install": "yes", "allow_ai_processing": "yes", "allow_remediation": "yes"}
     first = _request("/projects/new", method="POST", cookie=cookie, form=form)
@@ -392,20 +392,20 @@ def test_second_project_needs_a_paid_slot(web_env, monkeypatch):
     _request("/billing/pay", method="POST", cookie=cookie, form={"csrf": csrf, "plan": "project_slot", "transaction_ref": "123456789012"})
     payment = [p for p in portal_db.admin_list_manual_payments() if p["plan"] == "project_slot"][0]
     assert payment["amount"] == 30
-    assert portal_db.approve_manual_payment(payment["id"], "admin1@example.com")["product"] == "project_slot"
+    assert portal_db.approve_manual_payment(payment["id"], "admin1@example.invalid")["product"] == "project_slot"
     second = _request("/projects/new", method="POST", cookie=cookie, form={**form, "name": "Two", "repo": "demo/two"})
     assert second[0].startswith("201") and len(portal_db.list_projects(user_id)) == 2
 
 
 def test_addon_prices_are_fixed_and_need_an_active_plan(web_env):
-    user_id, csrf, cookie = make_session("dev@example.com")
+    user_id, csrf, cookie = make_session("dev@example.invalid")
     with pytest.raises(ValueError):
         portal_db.create_manual_payment_request(user_id, 30, "project_slot", "123456789012")        # no plan yet
-    portal_db.admin_grant_access(user_id, 30, "paid", "admin1@example.com")
+    portal_db.admin_grant_access(user_id, 30, "paid", "admin1@example.invalid")
     with pytest.raises(ValueError):
         portal_db.create_manual_payment_request(user_id, 10, "project_slot", "123456789013")        # wrong amount
     pay = portal_db.create_manual_payment_request(user_id, 100, "pack_high", "123456789014")
-    result = portal_db.approve_manual_payment(pay["id"], "admin1@example.com")
+    result = portal_db.approve_manual_payment(pay["id"], "admin1@example.invalid")
     assert result["credited"] == {"tier": "sonnet", "tries": 5}
     _, _, page = _request("/billing", cookie=cookie)
     assert "Add-ons" in page and "plan=project_slot" in page and "plan=pack_extra" in page
@@ -414,7 +414,7 @@ def test_addon_prices_are_fixed_and_need_an_active_plan(web_env):
 
 
 def test_plan_cards_list_each_monthly_quota(web_env):
-    _, _, cookie = make_session("dev@example.com")
+    _, _, cookie = make_session("dev@example.invalid")
     _, _, page = _request("/billing", cookie=cookie)
     for line in ("<b>Normal</b> · 30 tries / month", "<b>High</b> · 6 tries / month", "<b>Extra</b> · 3 tries / month"):
         assert line in page
@@ -422,10 +422,10 @@ def test_plan_cards_list_each_monthly_quota(web_env):
 
 
 def test_admin_confirm_button_says_what_it_grants(web_env, monkeypatch):
-    user_id, *_ = make_session("dev@example.com")
-    portal_db.admin_grant_access(user_id, 30, "paid", "admin1@example.com")
+    user_id, *_ = make_session("dev@example.invalid")
+    portal_db.admin_grant_access(user_id, 30, "paid", "admin1@example.invalid")
     portal_db.create_manual_payment_request(user_id, 30, "project_slot", "999988887777")
-    admin_id, _, admin_cookie = make_session("admin1@example.com")
+    admin_id, _, admin_cookie = make_session("admin1@example.invalid")
     _, _, page = _request("/admin", cookie=admin_cookie)
     assert "I received ₹30 · add 1 project slot" in page and "Java Integration Launch" not in page and "waitlist" not in page.lower()
 
@@ -435,9 +435,9 @@ def test_default_admins_and_support_address(monkeypatch):
     monkeypatch.delenv("ADMIN_EMAILS", raising=False)
     monkeypatch.delenv("ADMIN_EMAIL", raising=False)
     monkeypatch.delenv("SUPPORT_EMAIL", raising=False)
-    assert notifications.admin_emails() == ["abhaysamuel@agentdaemon.xyz", "pranavvrao@agentdaemon.xyz"]
-    assert web_app._admin_emails() == {"abhaysamuel@agentdaemon.xyz", "pranavvrao@agentdaemon.xyz"}
-    assert notifications.support_email() == "contact@agentdaemon.xyz"
+    assert notifications.admin_emails() == []
+    assert web_app._admin_emails() == set()
+    assert notifications.support_email() == ""
 
 
 def test_how_it_works_is_public_and_explains_the_algorithm(web_env):
@@ -447,9 +447,9 @@ def test_how_it_works_is_public_and_explains_the_algorithm(web_env):
 
 
 def test_admin_architecture_is_admin_only_and_the_simulator_uses_the_real_router(web_env):
-    _, _, cookie = make_session("dev@example.com")
+    _, _, cookie = make_session("dev@example.invalid")
     assert _request("/admin/architecture", cookie=cookie)[0].startswith("404")
-    _, _, admin = make_session("admin1@example.com")
+    _, _, admin = make_session("admin1@example.invalid")
     st, _, body = _request("/admin/architecture", cookie=admin)
     assert st == "200 OK" and "Model adapters" in body and "How the router decides" in body and "BaseAdapter.call" in body and "Memoization" in body
     st, _, out = _request("/admin/architecture?simulate=1&bug_class=hard&free_tries=3&haiku_tries=2", cookie=admin)
@@ -458,6 +458,6 @@ def test_admin_architecture_is_admin_only_and_the_simulator_uses_the_real_router
 
 
 def test_java_waitlist_is_gone(web_env):
-    assert _request("/api/java-waitlist", method="POST", form={"email": "a@b.co"})[0].startswith(("303", "404"))
+    assert _request("/api/java-waitlist", method="POST", form={"email": "user@example.invalid"})[0].startswith(("303", "404"))
     _, _, home = _request("/")
     assert "java-announcement" not in home and "Java Integration" not in home

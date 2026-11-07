@@ -34,7 +34,7 @@ Files: `agent_monitor_client.py` (rewritten), `web_app.py` (`_page_ingest`, `_pa
 * `monitoring_installer.detect_targets()` reads the repo's file list (one GitHub API call) and finds every part:
   Python (Flask, FastAPI, Django, plain), Node.js (Express, Fastify, NestJS, plain, compiled TypeScript), Next.js (server +
   browser), front-ends (plain HTML/JS, React with Vite or Create React App, Flask templates) and mixed repos.
-* `plan_install()` commits the right monitor next to each part and wires it in, in the same one-PR, auto-merge pattern as before:
+* `plan_install()` commits the right monitor next to each part and wires it in through one pull request for human review:
   Python import line (a guarded import for package entry files such as `app/main.py` or Django's `wsgi.py`, which never breaks
   the app), `node -r ./incident-agent-monitor.cjs` in the start script (or one `require`/`import` line), a `<script>` tag as the
   FIRST script of each HTML page, `instrumentation.js` / `instrumentation-client.js` for Next.js.
@@ -59,7 +59,7 @@ Files: `agent_monitor_client.py` (rewritten), `web_app.py` (`_page_ingest`, `_pa
 * The project page shows only this screen until it is done; the dashboard shows an "Action needed" banner and the status
   **Waiting for private repo**. The project is not marked connected/protected before the install.
 * Visibility is re-checked before EVERY commit Agent Daemon makes: monitor install (`open_monitoring_pr(require_private=True)`
-  refuses before writing), fix PRs (`git_ops.open_pr`, `portal_remediation.submit_fix_pr`) and auto-merges. The worker re-checks
+  refuses before writing), and fix PRs (`git_ops.open_pr`, `portal_remediation.submit_fix_pr`). Pull requests stay open for human review. The worker re-checks
   installed projects every ~10 minutes; a repo that became public is paused, its monitor key is revoked, waiting fixes are parked
   (they continue automatically once private), and the owner is emailed the steps (at most once a day). → `repo_guard.py`.
 * Secrets hygiene: only a project-scoped key (`adi_…`) is ever written into a repository. It can only send heartbeats and error
@@ -78,7 +78,7 @@ Files: `agent_monitor_client.py` (rewritten), `web_app.py` (`_page_ingest`, `_pa
   `git_ops.open_pr` → incident recorded with error, diagnosis, fix diff, PR link and status. No AI tries are spent.
   If the model id is not in the code (it lives in the host's environment variables) the customer gets exact instructions instead
   of a broken PR. Report-only projects get the diagnosis without a PR.
-* Auto-merge only when the replacement was verified on the live list AND validation passed; otherwise the PR waits for review.
+* Retired-model replacements are proposed in pull requests with their validation evidence; every PR waits for human review.
 * A retired-model error reported by several monitors is grouped into ONE incident and ONE PR.
 * JS stack traces now produce stable incident signatures (previously only Python tracebacks did).
 * Everything else continues through the existing router → adapter → sandbox engine, which already handled JS/TS/HTML/Python/mixed.

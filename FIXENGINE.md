@@ -115,7 +115,7 @@ The run stops by itself at B (Rs 400), each bug stops at its own cap (Rs 60), an
 - One model call per try returns diagnosis **and** patch (the old flow used two calls).
 - Router success odds shrink by `repeat_decay` (0.7) for each earlier failure of the same mode (matches the plan's own walk-through).
 - If the optimizer decides giving up is cheaper than another try, the bug ends in human review with an email and report.
-- Auto-merge needs **both** "failing tests now pass" and green GitHub CI. Unverified fixes (no tests, tests did not reproduce) are PR-only.
+- Every fix remains an open pull request for human review. The PR shows whether the sandbox reproduced and fixed the failure and whether GitHub checks passed.
 - Dependency manifests (`requirements.txt`, `package.json`, lock files) cannot be edited by the model (supply-chain risk).
 - Three pre-existing problems found, not changed: `render.yaml` assumes a separate worker while `CODEX_INSTRUCTIONS.md` says free-tier built-in worker;
   the old flow already sends code to Groq (consent is recorded in `ai_consent_at`; the consent text and the privacy policy now name all AI providers).

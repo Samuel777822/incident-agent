@@ -27,10 +27,9 @@ _SECRET_ENV = ("BREVO_API_KEY", "RESEND_API_KEY", "SMTP_PASSWORD")
 _SENDER_NAME = "Agent Daemon"
 
 
-# The two founders are the only administrators. ADMIN_EMAILS in Render overrides this list (comma separated);
-# leave it unset, or set it to exactly these two addresses. Admin addresses can never be registered on the public sign-up form.
-DEFAULT_ADMIN_EMAILS = ("pranavvrao@agentdaemon.xyz", "abhaysamuel@agentdaemon.xyz")
-DEFAULT_SUPPORT_EMAIL = "contact@agentdaemon.xyz"
+# Set these deployment-specific addresses outside the source tree.
+DEFAULT_ADMIN_EMAILS: tuple[str, ...] = ()
+DEFAULT_SUPPORT_EMAIL = ""
 
 
 def admin_emails() -> list[str]:
@@ -39,7 +38,7 @@ def admin_emails() -> list[str]:
 
 
 def support_email() -> str:
-    """Public support address (Contact page, footer, ticket emails, chatbot). SUPPORT_EMAIL overrides the default."""
+    """Configured public support address; blank keeps private contact details out of source."""
     return os.getenv("SUPPORT_EMAIL", "").strip() or DEFAULT_SUPPORT_EMAIL
 
 

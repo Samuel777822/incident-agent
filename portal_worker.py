@@ -1,10 +1,10 @@
-"""The background worker: push checks, incidents, fixes and auto-merges.
+"""The background worker: push checks, incidents, and reviewable fixes.
 
 Every loop it:
   1. checks one pushed commit in the sandbox (push guard, architecture v3; free, no AI),
   2. works on one incident (the fix engine when FIXENGINE_ENABLED=1, otherwise the classic diagnosis),
   3. resumes decisions customers did not answer in time,
-  4. every few minutes polls GitHub for pushes the webhook may have missed, and merges proven Auto-mode fixes.
+  4. every few minutes polls GitHub for pushes the webhook may have missed.
 Customer code only ever runs inside the sandbox (see fixengine/sandbox.py), never on this machine.
 """
 
@@ -24,7 +24,7 @@ import portal_db
 import push_watch
 from diagnose import diagnose_incident
 from run_diagnosis import build_evidence_text
-from portal_remediation import submit_fix_pr, process_auto_merges
+from portal_remediation import submit_fix_pr
 
 LOG = logging.getLogger("portal_worker")
 _STOP = False
@@ -322,7 +322,6 @@ def main() -> None:
         signal.signal(signal.SIGTERM, _stop)
     poll_seconds = max(1, int(os.getenv("WORKER_POLL_SECONDS", "5")))
     LOG.info("Portal incident worker started")
-    next_merge_poll = 0.0
     next_push_poll = 0.0
     next_monitor_sweep = 0.0
     next_visibility_sweep = 0.0
@@ -346,12 +345,6 @@ def main() -> None:
         except Exception:
             LOG.exception("Could not resume expired fix choices")
         now = time.monotonic()
-        if now >= next_merge_poll and not _STOP:
-            try:
-                process_auto_merges()
-            except Exception:
-                LOG.exception("Auto-merge check failed")
-            next_merge_poll = now + max(15, int(os.getenv("AUTO_MERGE_POLL_SECONDS", "30")))
         if now >= next_push_poll and not _STOP:
             try:
                 queued = push_watch.poll_once()
