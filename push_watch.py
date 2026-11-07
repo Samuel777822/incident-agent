@@ -3,12 +3,12 @@
 The classic flow waits for a LIVE app to crash and report the error. Vibe coders and hackathon teams need the opposite: the bug
 should be caught as soon as they push, fixed by the agent, and the fixed version pushed back to GitHub. This module does that:
 
-    git push ──► GitHub webhook (or the worker's poll, as a fallback) ──► push_checks queue
-             ──► worker downloads THAT commit ──► finds every stack in the repo (Python, JS/TS, Java, HTML/CSS)
-             ──► runs install → build/type-check → tests → start-up check for each stack in the sandbox
-             ──► green: GitHub commit status "success", done
-             ──► red:   commit status "failure", an incident is opened, and the fix engine takes over
-                        (router → model → patch → the SAME sandbox check must go green → fix branch + PR → auto-merge in Auto mode)
+    git push â”€â”€â–º GitHub webhook (or the worker's poll, as a fallback) â”€â”€â–º push_checks queue
+             â”€â”€â–º worker downloads THAT commit â”€â”€â–º finds every stack in the repo (Python, JS/TS, Java, HTML/CSS)
+             â”€â”€â–º runs install â†’ build/type-check â†’ tests â†’ start-up check for each stack in the sandbox
+             â”€â”€â–º green: GitHub commit status "success", done
+             â”€â”€â–º red:   commit status "failure", an incident is opened, and the fix engine takes over
+                        (router â†’ model â†’ patch â†’ the SAME sandbox check must go green â†’ fix branch + PR â†’ auto-merge in Auto mode)
 
 Nothing here calls an AI model: a push check is free. Only a failing check spends tries, through the normal quota and budget guard.
 The GitHub token is decrypted in memory only; customer code runs only inside the sandbox.
@@ -42,7 +42,7 @@ STAGE_TEXT = {
     "queued": "Waiting in line",
     "downloading": "Downloading this commit from GitHub",
     "detecting": "Finding the projects in your repo",
-    "testing": "Testing in the sandbox: install → build → tests → start-up",
+    "testing": "Testing in the sandbox: install â†’ build â†’ tests â†’ start-up",
     "waiting_retry": "Paused for a moment, will retry by itself",
     "waiting_sandbox": "Waiting for the test sandbox to come online",
     "passed": "All checks passed",
@@ -239,13 +239,36 @@ def _first_error_line(output: str) -> str:
 
 def _signature(line: str) -> str:
     text = re.sub(r"0x[0-9a-f]+|\d+", "N", line)
-    text = re.sub(r"['\"][^'\"]{0,80}['\"]", "'…'", text)
+    text = re.sub(r"['\"][^'\"]{0,80}['\"]", "'â€¦'", text)
     return ("Push check: " + text)[:180]
 
 
 def _failure_summary(stacks: list[dict]) -> str:
     bad = [s for s in stacks if s.get("ok") is False]
     return ", ".join(f"{s['label']} failed at {s['phase'] or 'a step'}" for s in bad) or "the sandbox check failed"
+
+
+def _record_report(check: dict, project: dict, stacks: list[dict], result, *, passed: bool, runner_name: str = "") -> None:
+    """Write the health report for this check to the audit log (no schema change): for the first check after a repository
+    is connected it is the BASELINE report, for later pushes a push report. Never raises: a report must not break a check."""
+    try:
+        totals = {"discovered": 0, "passed": 0, "failed": 0}
+        for s in stacks:
+            for k in totals:
+                totals[k] += int((s.get("tests") or {}).get(k, 0))
+        unknown = [s["label"] for s in stacks if s.get("has_tests") and not s.get("tests")]
+        portal_db.audit(check["project_id"], "baseline_report" if check.get("source") == "connect" else "push_report", {
+            "commit": check["sha"], "source": check.get("source", ""), "passed": bool(passed),
+            "queued_at": check.get("created_at", ""), "started_at": check.get("started_at", ""), "reported_at": portal_db._now(),
+            "stacks": [{k: s.get(k) for k in ("label", "language", "ok", "phase", "commands", "phases", "not_run", "has_tests", "tests", "notes")}
+                       for s in stacks],
+            "tests_total": totals, "tests_count_unknown_for": unknown,
+            "runner": runner_name,
+            "network": ("only the install phase had network access; build, test and start-up ran with --network none"
+                        if runner_name in ("DockerRunner", "RemoteRunner") else "NOT isolated: this was a local development runner"),
+            "output_tail": (result.output or "")[-1500:]})
+    except Exception:
+        LOG.exception("Could not record the health report for %s", str(check.get("sha", ""))[:7])
 
 
 def run_check(check: dict, *, runner=None, snapshot=None, cfg: dict | None = None, notify_fn=None) -> str:
@@ -295,7 +318,8 @@ def run_check(check: dict, *, runner=None, snapshot=None, cfg: dict | None = Non
     if result.system_fault:
         portal_db.retry_push_check(check["id"], 600, f"sandbox unavailable: {result.error}"[:200])
         return "waiting"
-    stacks = sandbox.stack_summary(profile, result)
+    stacks = sandbox.stack_report(profile, result)
+    _record_report(check, project, stacks, result, passed=result.passed, runner_name=type(runner).__name__)
     if result.passed:
         portal_db.finish_push_check(check["id"], "passed", output=result.output, stacks=stacks, detail=f"{labels}: all green")
         set_commit_status(project, check["sha"], "success", f"{labels}: install, build, tests and start-up passed")

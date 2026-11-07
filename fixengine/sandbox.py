@@ -403,6 +403,56 @@ def stack_summary(profile, result: "SandboxResult | None" = None) -> list[dict]:
     return rows
 
 
+def count_tests(output: str) -> dict:
+    """{discovered, passed, failed} read from a test runner's own summary line (pytest, node:test, Maven/Surefire, plain
+    'N passed'). Empty dict when the output has no recognisable summary: callers must then say 'unknown', never 'zero'."""
+    text = output or ""
+    passed = failed = discovered = None
+    m = re.search(r"(\d+) passed", text)
+    if m:
+        passed = int(m.group(1))
+    m = re.search(r"(\d+) failed", text)
+    if m:
+        failed = int(m.group(1))
+    m = re.search(r"(?:#|\u2139)\s*tests (\d+)", text)
+    if m:                                                   # node:test
+        discovered = int(m.group(1))
+        p = re.search(r"(?:#|\u2139)\s*pass (\d+)", text)
+        f = re.search(r"(?:#|\u2139)\s*fail (\d+)", text)
+        passed, failed = int(p.group(1)) if p else passed, int(f.group(1)) if f else failed
+    runs = re.findall(r"Tests run: (\d+), Failures: (\d+), Errors: (\d+)", text)
+    if runs and discovered is None:                         # Maven Surefire: the last line is the total
+        total, fails, errs = (int(x) for x in runs[-1])
+        discovered, failed, passed = total, fails + errs, total - fails - errs
+    if passed is None and failed is None and discovered is None:
+        return {}
+    passed, failed = passed or 0, failed or 0
+    return {"discovered": discovered if discovered is not None else passed + failed, "passed": passed, "failed": failed}
+
+
+def stack_report(profile, result: "SandboxResult") -> list[dict]:
+    """stack_summary plus everything a baseline health report needs: the commands that were configured, what each phase did
+    (exit code, seconds), the test counts, and which configured steps never ran because an earlier one failed."""
+    rows = stack_summary(profile, result)
+    parts = profile.parts if isinstance(profile, StackSet) else [profile]
+    for part, row in zip(parts, rows):
+        label = row["label"]
+        mine = [p for p in result.phases if p.name.startswith(label + ": ")] if isinstance(profile, StackSet) else list(result.phases)
+        short = lambda p: p.name.split(": ", 1)[-1]   # noqa: E731
+        configured = [n for n, c in (("install", part.install), ("build", part.build), ("test", part.test), ("smoke", part.smoke)) if c]
+        ran = {short(p) for p in mine}
+        test_phase = next((p for p in mine if short(p) == "test"), None)
+        row.update({
+            "commands": {"install": part.install, "build": part.build, "test": part.test, "smoke": part.smoke},
+            "phases": [{"name": short(p), "ok": p.ok, "rc": p.rc, "seconds": p.seconds} for p in mine],
+            "not_run": [n for n in configured if n not in ran],
+            "has_tests": bool(part.has_tests),
+            "tests": count_tests(test_phase.output) if test_phase else {},
+            "notes": list(part.notes)[:5],
+        })
+    return rows
+
+
 def _python_profile(root: Path, names: set[str], base: str) -> Profile:
     prof = Profile(language="python", workdir=base)
     py = [n for n in names if n.endswith(".py")]
