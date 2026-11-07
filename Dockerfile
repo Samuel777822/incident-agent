@@ -2,16 +2,16 @@
 FROM python:3.13-slim
 
 # CA certificates are needed for the GitHub and Groq HTTPS APIs.
-# Node.js is only used to PARSE-check JavaScript files the agent edits (node --check never runs customer code).
+# Node.js, npm, git, and pytest allow the worker container to run push checks and fixes when no external sandbox VPS is set.
 RUN apt-get update && apt-get install -y --no-install-recommends \
-    ca-certificates nodejs \
+    ca-certificates nodejs npm git \
     && rm -rf /var/lib/apt/lists/*
 
 WORKDIR /app
 
-# Install Python dependencies
+# Install Python dependencies + pytest for Python repository test execution
 COPY requirements.txt .
-RUN pip install --no-cache-dir -r requirements.txt
+RUN pip install --no-cache-dir -r requirements.txt pytest
 
 # Copy agent application code
 COPY . .

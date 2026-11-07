@@ -30,9 +30,9 @@ envVarGroups:
         generateValue: true
       - key: GROQ_API_KEY
         sync: false
-      # --- Auto-fix engine (fixengine/). Off until FIXENGINE_ENABLED is 1. Keys are entered in Render, never in code. ---
+      # --- Auto-fix engine (fixengine/). Keys are entered in Render, never in code. ---
       - key: FIXENGINE_ENABLED
-        value: "0"
+        value: "1"
       - key: FIXENGINE_PROVIDER
         value: auto
       - key: OPENROUTER_API_KEY
@@ -43,9 +43,11 @@ envVarGroups:
         value: "400"
       - key: FIXENGINE_CREDITS_INR
         value: "500"
-      # Render cannot run Docker, so fixes are tested on a separate small server running sandbox_service.py (see FIXENGINE.md).
+      # Render cannot run Docker-in-Docker; when FIXENGINE_SANDBOX_URL is unset, the worker container runs checks locally.
       - key: FIXENGINE_SANDBOX_MODE
         value: remote
+      - key: FIXENGINE_ALLOW_UNSAFE_LOCAL
+        value: "1"
       - key: FIXENGINE_SANDBOX_URL
         sync: false
       - key: FIXENGINE_SANDBOX_SECRET

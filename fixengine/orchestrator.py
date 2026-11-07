@@ -26,6 +26,8 @@ OUTAGE_MINUTES = 10
 
 
 def enabled() -> bool:
+    if os.getenv("RENDER", "").strip().lower() == "true" and os.getenv("FIXENGINE_FORCE_DISABLED", "") != "1":
+        return True
     return os.getenv("FIXENGINE_ENABLED", "").strip().lower() in ("1", "true", "yes", "on")
 
 

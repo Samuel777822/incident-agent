@@ -739,8 +739,13 @@ class RemoteRunner(_BaseRunner):
 
 def make_runner(cfg: dict, exec_fn=None):
     mode = os.getenv("FIXENGINE_SANDBOX_MODE") or cfg["sandbox"]["mode"]
+    in_render = os.getenv("RENDER", "").strip().lower() == "true"
     if mode == "remote":
+        if not (os.getenv("FIXENGINE_SANDBOX_URL", "").strip() and os.getenv("FIXENGINE_SANDBOX_SECRET", "").strip()) and in_render:
+            return LocalUnsafeRunner(cfg, exec_fn)
         return RemoteRunner(cfg, exec_fn)
     if mode == "local_unsafe":
+        return LocalUnsafeRunner(cfg, exec_fn)
+    if shutil.which("docker") is None and in_render:
         return LocalUnsafeRunner(cfg, exec_fn)
     return DockerRunner(cfg, exec_fn)

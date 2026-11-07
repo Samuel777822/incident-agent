@@ -110,6 +110,7 @@ MONITOR_DIR = Path(__file__).with_name("monitors")
 PY_FILE, PY_CONFIG = "incident_agent_monitor.py", "incident_agent_config.json"
 NODE_FILE, NODE_CONFIG = "incident-agent-monitor.cjs", "incident-agent-config.json"
 BROWSER_FILE = "incident-agent-monitor.js"
+JAVA_FILE = "AgentDaemonMonitor.java"
 MARKER = "incident-agent-monitor"
 ENTRY_CANDIDATES = ("app.py", "main.py", "wsgi.py", "server.py", "run.py", "application.py", "manage.py", "index.py")
 IMPORT_LINE = "import incident_agent_monitor  # noqa: F401  (Agent Daemon error monitoring)"
@@ -140,6 +141,18 @@ def browser_source(config: dict) -> str:
     text = (MONITOR_DIR / "browser_monitor.js").read_text(encoding="utf-8")
     start, end = text.index("/*__AGENT_DAEMON_CONFIG__*/"), text.index("/*__END__*/") + len("/*__END__*/")
     return text[:start] + json.dumps(config, separators=(", ", ": ")) + text[end:]
+
+
+def java_source(*, package: str, ingest_url: str, heartbeat_url: str, ingest_key: str,
+                project_id: str, component: str) -> str:
+    """Build the Java monitor with this project's send-only ingest credentials."""
+    text = (MONITOR_DIR / "AgentDaemonMonitor.java.template").read_text(encoding="utf-8")
+    package_line = f"package {package};\n\n" if package else ""
+    text = text.replace("__PACKAGE__", package_line)
+    for name, value in {"INGEST_URL": ingest_url, "HEARTBEAT_URL": heartbeat_url, "INGEST_KEY": ingest_key,
+                        "PROJECT_ID": project_id, "COMPONENT": component}.items():
+        text = text.replace(f"__{name}__", json.dumps(value, ensure_ascii=True))
+    return text
 
 
 def _insert_import(source: str, line: str = IMPORT_LINE):
@@ -252,15 +265,51 @@ def _node_start_entry(pkg: dict) -> tuple[str, str]:
     return "", ""
 
 
+def _java_main_entry(base: str, names: set[str], read) -> str:
+    """Find a conventional Java application entry point under a Maven or Gradle module."""
+    prefix = base + "/" if base else ""
+    pattern = re.compile(r"\bpublic\s+static\s+void\s+main\s*\(\s*String\s*(?:\[\s*\]|\.\.\.)\s*[\w$]+\s*\)")
+    for path in sorted(n for n in names if n.startswith(prefix + "src/main/java/") and n.endswith(".java")):
+        if pattern.search(read(path) or ""):
+            return path
+    return ""
+
+
+def _insert_java_monitor(source: str) -> str | None:
+    """Add the monitor start block to the Java class with the application's main method."""
+    if "AgentDaemonMonitor.start()" in source:
+        return source
+    main = re.search(r"\bpublic\s+static\s+void\s+main\s*\(\s*String\s*(?:\[\s*\]|\.\.\.)\s*[\w$]+\s*\)", source)
+    if not main:
+        return None
+    class_match = re.search(r"\bclass\s+[\w$]+[^{}]*\{", source[:main.start()])
+    if not class_match:
+        return None
+    open_brace = class_match.end() - 1
+    return source[:open_brace + 1] + "\n    static { AgentDaemonMonitor.start(); } // Agent Daemon error monitoring\n" + source[open_brace + 1:]
+
+
 def detect_targets(paths, read) -> list[dict]:
     """Every part of the repository that needs its own monitor.
 
     paths: every file path in the repo (posix, relative). read(path) -> text or None.
-    Each target: {kind: python|node|browser, base, framework, entry, label}."""
+    Each target: {kind: java|python|node|browser, base, framework, entry, label}."""
     names = {p for p in paths if _visible(p)}
     targets: list[dict] = []
     handled_html: set[str] = set()
     spa_bases: set[str] = set()
+
+    # --- Java applications (one monitor for each conventional Maven/Gradle module)
+    java_bases = set()
+    for path in names:
+        absolute = "/" + path
+        marker = "/src/main/java/"
+        if path.endswith(".java") and marker in absolute:
+            java_bases.add(absolute.split(marker, 1)[0].lstrip("/"))
+    for base in sorted(java_bases):
+        entry = _java_main_entry(base, names, read)
+        if entry:
+            targets.append({"kind": "java", "base": base, "framework": "java", "entry": entry, "label": "Java app"})
 
     # --- Node / JavaScript / TypeScript projects (every package.json)
     for pkg_path in sorted(n for n in names if n.endswith("package.json") and n.count("/") <= 3):
@@ -361,7 +410,25 @@ def plan_install(targets: list[dict], read, *, ingest_url: str, ingest_key: str,
     for t in targets:
         label, base = t["label"], t["base"]
         component = f"{t['kind']}:{base or '.'}"
-        if t["kind"] == "python":
+        if t["kind"] == "java":
+            entry = t["entry"]
+            source = current(entry) or ""
+            patched = _insert_java_monitor(source)
+            if patched is None:
+                results.append({"label": label, "kind": "java", "wired": False, "file": entry,
+                                "note": f"{entry} does not have a supported public static void main entry point, so Java monitoring was not enabled."})
+                continue
+            package_match = re.search(r"(?m)^\s*package\s+([\w.]+)\s*;", source)
+            package = package_match.group(1) if package_match else ""
+            folder = posixpath.dirname(entry)
+            files[_join(folder, JAVA_FILE)] = java_source(
+                package=package, ingest_url=ingest_url, heartbeat_url=heartbeat_url, ingest_key=ingest_key,
+                project_id=project_id, component=component)
+            if patched != source:
+                files[entry] = patched
+            results.append({"label": label, "kind": "java", "wired": True, "file": entry,
+                            "how": f"uncaught exception handler and 30-second heartbeat in {entry}"})
+        elif t["kind"] == "python":
             entry = t["entry"]
             folder = posixpath.dirname(entry) if entry else base
             files[_join(folder, PY_FILE)] = _client_source()
