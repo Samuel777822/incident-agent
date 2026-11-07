@@ -1,0 +1,103 @@
+{
+  "_comment": "Retired AI model ids and their replacements, used by the auto-fix for 'model not found / retired' errors and by the first scan of a newly connected repo. Edit this file (or set MODEL_REGISTRY_JSON) without a code change. Replacements are double-checked against the provider's live model list before a fix is pushed whenever that list can be read. Check the provider pages below when you update it.",
+  "reviewed": "2026-11-07",
+  "sources": [
+    "https://platform.claude.com/docs/en/about-claude/model-deprecations",
+    "https://platform.openai.com/docs/deprecations",
+    "https://ai.google.dev/gemini-api/docs/deprecations",
+    "https://console.groq.com/docs/deprecations",
+    "https://openrouter.ai/api/v1/models"
+  ],
+  "providers": {
+    "openai": {
+      "hosts": ["api.openai.com", "openai.azure.com"],
+      "id_hint": "^(gpt-|chatgpt-|o[1-9](-|$)|text-|code-|davinci|babbage|curie|ada)",
+      "retired": [
+        {"pattern": "(text|code)-(davinci|curie|babbage|ada|cushman)-\\d{3}", "confidence": "certain"},
+        {"pattern": "(davinci|curie|babbage|ada)(-00[12])?", "confidence": "certain", "needs_context": true},
+        {"pattern": "gpt-3\\.5-turbo(-\\d{4})?(-16k)?(-instruct)?(-0914)?", "confidence": "certain"},
+        {"pattern": "gpt-4(-0314|-0613)?", "confidence": "certain"},
+        {"pattern": "gpt-4-32k(-\\d{4})?", "confidence": "certain"},
+        {"pattern": "gpt-4-turbo(-preview|-\\d{4}-\\d{2}-\\d{2})?", "confidence": "certain"},
+        {"pattern": "gpt-4-(0125|1106)-preview|gpt-4-vision-preview", "confidence": "certain"},
+        {"pattern": "gpt-4o-2024-05-13|chatgpt-4o-latest", "confidence": "certain"},
+        {"pattern": "gpt-4\\.5-preview(-\\d{4}-\\d{2}-\\d{2})?", "confidence": "certain"},
+        {"pattern": "gpt-4\\.1-nano(-\\d{4}-\\d{2}-\\d{2})?", "confidence": "likely"},
+        {"pattern": "o1(-preview|-mini|-pro)?(-\\d{4}-\\d{2}-\\d{2})?", "confidence": "likely", "needs_context": true},
+        {"pattern": "o3-mini(-\\d{4}-\\d{2}-\\d{2})?|o4-mini(-\\d{4}-\\d{2}-\\d{2})?", "confidence": "likely", "needs_context": true},
+        {"pattern": "gpt-5(\\.\\d)?-chat-latest|gpt-5(\\.\\d)?-codex(-mini|-max)?", "confidence": "likely"}
+      ],
+      "replacements": [
+        {"match": "nano", "use": "gpt-5.6-luna"},
+        {"match": "3\\.5|mini|instruct|davinci|babbage|curie|ada", "use": "gpt-5.6-terra"},
+        {"match": ".*", "use": "gpt-5.6-sol"}
+      ]
+    },
+    "anthropic": {
+      "hosts": ["api.anthropic.com"],
+      "id_hint": "^claude-",
+      "retired": [
+        {"pattern": "claude-instant(-v?1(\\.\\d)?)?|claude-v?1(\\.\\d)?(-100k)?|claude-2(\\.\\d)?", "confidence": "certain"},
+        {"pattern": "claude-3-(opus|sonnet|haiku)-(\\d{8}|latest)", "confidence": "certain"},
+        {"pattern": "claude-3-[57]-(sonnet|haiku)-(\\d{8}|latest)", "confidence": "certain"},
+        {"pattern": "claude-(sonnet|opus)-4-(0|20250514)", "confidence": "certain"},
+        {"pattern": "claude-opus-4-1(-20250805)?", "confidence": "certain"}
+      ],
+      "replacements": [
+        {"match": "haiku|instant", "use": "claude-haiku-5-5"},
+        {"match": "opus", "use": "claude-opus-5-5"},
+        {"match": ".*", "use": "claude-sonnet-5-5"}
+      ],
+      "families": {"haiku": "^claude-haiku-[\\d-]+$", "sonnet": "^claude-sonnet-[\\d-]+$", "opus": "^claude-opus-[\\d-]+$"}
+    },
+    "google": {
+      "hosts": ["generativelanguage.googleapis.com", "aiplatform.googleapis.com"],
+      "id_hint": "^(models/)?gemini-",
+      "retired": [
+        {"pattern": "(models/)?gemini-pro(-vision)?", "confidence": "certain"},
+        {"pattern": "(models/)?gemini-1\\.0-[\\w.-]+", "confidence": "certain"},
+        {"pattern": "(models/)?gemini-1\\.5-[\\w.-]+", "confidence": "certain"},
+        {"pattern": "(models/)?gemini-2\\.0-[\\w.-]+", "confidence": "certain"},
+        {"pattern": "(models/)?gemini-exp-\\d+", "confidence": "certain"},
+        {"pattern": "(models/)?gemini-2\\.5-(pro|flash)(-lite)?-preview-[\\w-]+", "confidence": "certain"}
+      ],
+      "replacements": [
+        {"match": "flash-lite|flash-8b", "use": "gemini-3.1-flash-lite"},
+        {"match": ".*", "use": "gemini-3.6-flash"}
+      ],
+      "families": {"flash-lite": "^gemini-[\\d.]+-flash-lite$", "flash": "^gemini-[\\d.]+-flash$", "pro": "^gemini-[\\d.]+-pro$"}
+    },
+    "groq": {
+      "hosts": ["api.groq.com"],
+      "id_hint": "^(llama|mixtral|gemma|qwen|deepseek|mistral-saba|meta-llama/|moonshotai/|openai/gpt-oss)",
+      "retired": [
+        {"pattern": "mixtral-8x7b-32768|llama2-70b-4096|llama3-(8b|70b)-8192|gemma-7b-it|gemma2-9b-it", "confidence": "certain"},
+        {"pattern": "llama3-groq-(8b|70b)-8192-tool-use-preview|llama-3\\.1-(70b-versatile|405b-reasoning)", "confidence": "certain"},
+        {"pattern": "llama-3\\.2-(1b|3b|11b|90b)-(text|vision)-preview|llama-3\\.3-70b-specdec", "confidence": "certain"},
+        {"pattern": "deepseek-r1-distill-(llama-70b|qwen-32b)|qwen-qwq-32b|qwen-2\\.5-(32b|coder-32b)|mistral-saba-24b", "confidence": "likely"},
+        {"pattern": "meta-llama/llama-4-maverick-17b-128e-instruct|moonshotai/kimi-k2-instruct(-0905)?", "confidence": "likely"},
+        {"pattern": "llama-3\\.3-70b-versatile|llama-3\\.1-8b-instant", "confidence": "likely"}
+      ],
+      "replacements": [
+        {"match": "(^|-)(1b|3b|7b|8b|9b)(-|$)|instant|gemma", "use": "openai/gpt-oss-20b"},
+        {"match": ".*", "use": "openai/gpt-oss-120b"}
+      ]
+    },
+    "openrouter": {
+      "hosts": ["openrouter.ai"],
+      "id_hint": "^[a-z0-9-]+/[\\w.:-]+$",
+      "retired": [],
+      "replacements": [
+        {"match": "^anthropic/.*haiku", "use": "anthropic/claude-haiku-5.5"},
+        {"match": "^anthropic/.*opus", "use": "anthropic/claude-opus-5.5"},
+        {"match": "^anthropic/", "use": "anthropic/claude-sonnet-5.5"},
+        {"match": "^openai/.*nano", "use": "openai/gpt-5.6-luna"},
+        {"match": "^openai/.*(3\\.5|mini)", "use": "openai/gpt-5.6-terra"},
+        {"match": "^openai/", "use": "openai/gpt-5.6-sol"},
+        {"match": "^google/.*lite", "use": "google/gemini-3.1-flash-lite"},
+        {"match": "^google/", "use": "google/gemini-3.6-flash"},
+        {"match": ".*", "use": "openai/gpt-oss-120b"}
+      ]
+    }
+  }
+}

@@ -174,7 +174,7 @@ def answer_visitor_query(user_text: str, history: list[dict] | None = None) -> s
             messages.append({"role": "user", "content": user_text})
 
             response = client.chat.completions.create(
-                model="openai/gpt-oss-120b",
+                model=os.getenv("CHATBOT_MODEL", os.getenv("GROQ_MODEL", "openai/gpt-oss-120b")),
                 messages=messages,
                 temperature=0.3,
                 max_tokens=400,

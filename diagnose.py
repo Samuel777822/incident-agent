@@ -10,7 +10,8 @@ except ImportError:  # optional: only used to read a local .env file
 
 load_dotenv(Path(__file__).parent / ".env")
 
-MODEL = "openai/gpt-oss-120b"
+MODEL = os.getenv("GROQ_MODEL", "openai/gpt-oss-120b").strip() or "openai/gpt-oss-120b"
+FALLBACK_MODEL = os.getenv("GROQ_FALLBACK_MODEL", "openai/gpt-oss-20b").strip() or "openai/gpt-oss-20b"
 CATEGORIES = {"code_bug", "bad_data", "config_or_secret", "database", "external_service", "unknown"}
 CONFIDENCES = {"low", "medium", "high"}
 STILL_VALUES = {"yes", "no", "unknown"}
@@ -68,8 +69,8 @@ def call_model(client, prompt):
         if "reasoning" in err_msg:
             return client.chat.completions.create(**kwargs)
         if "413" in str(err) or "rate_limit" in err_msg or "tokens" in err_msg:
-            print("[Groq Notice] Rate limit/size threshold reached. Retrying with openai/gpt-oss-20b...")
-            kwargs["model"] = "openai/gpt-oss-20b"
+            print(f"[Groq Notice] Rate limit/size threshold reached. Retrying with {FALLBACK_MODEL}...")
+            kwargs["model"] = FALLBACK_MODEL
             return client.chat.completions.create(**kwargs)
         raise
 

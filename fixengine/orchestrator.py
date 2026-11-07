@@ -353,6 +353,12 @@ class Engine:
             if not pr.get("url") or not pr.get("number"):
                 raise RuntimeError("GitHub did not return a pull request link")
         except Exception as exc:
+            from monitoring_installer import PublicRepoError
+            if isinstance(exc, PublicRepoError):
+                # The repository is public: keep the proven fix, push nothing, continue once it is private again.
+                store.update_bug(bug["id"], status="open")
+                portal_db.park_incident_for_gate(claimed["incident_id"], claimed["project_id"])
+                return "waiting_private"
             return self._fault_wait(claimed, bug, f"could not open the PR ({exc.__class__.__name__})", 300)
         result = {"category": "code_bug", "confidence": "high" if level in validator.PROVEN_LEVELS else "medium",
                   "root_cause": win["diagnosis"], "report": f"Fixed by the {win['tier']} model. {validator.VERIFY_TEXT.get(level, '')}"}

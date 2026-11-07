@@ -112,7 +112,7 @@ PUSH_FLOW = [
 ]
 LIVE_FLOW = [
     ("app", "Your live app crashes", "A real user hits a bug in the deployed app.", "production"),
-    ("report", "Error reported", "A tiny reporter in the app (added automatically for Python apps) sends the error and stack trace to Agent Daemon.", "/ingest"),
+    ("report", "Error reported", "A tiny monitor in the app (added automatically for Python, Node.js and web pages) sends the error, the stack trace and failed API answers to Agent Daemon. It also checks in every 30 seconds.", "/ingest"),
     ("group", "Grouped into an incident", "Repeats of the same error become one incident with a count, so you are not spammed.", "dedupe"),
     ("repro", "Reproduce in the sandbox", "We download your branch and run the same install → build → tests → start-up check to see what fails today.", "baseline"),
     ("router2", "Choose an AI, fix, re-test", "Exactly the same fix loop as the push guard: economical AI first, safety rules, proof in the sandbox.", "shared engine"),
@@ -276,20 +276,15 @@ def user_page_html(cfg: dict | None = None) -> str:
     from fixengine import config as fx_config
     cfg = cfg or fx_config.load()
     legend = "".join(f"<div><b>{E(t)}</b><span class='muted'>{E(d)}</span></div>" for t, d in STAGES)
-    return f"""<style>{CSS}</style><div class='arch'>
+    import arch_diagrams
+    return f"""<style>{CSS}{arch_diagrams.CSS}</style><div class='arch'>
 <section class='section'><div class='eyebrow'>How it works</div>
 <h1>Push your code. The agent catches what broke, fixes it, and pushes the fix back.</h1>
-<p class='lead'>Two ways in, one fix engine. Tap any box to read what happens there, or press play to follow a bug from push to fix.</p>
-<div class='arch-tabs' role='tablist'>
-<button class='arch-tab' role='tab' aria-selected='true' aria-controls='panel-push'>Push guard (new · catches bugs before you deploy)</button>
-<button class='arch-tab' role='tab' aria-selected='false' aria-controls='panel-live'>Live error watch (classic · after deploy)</button></div>
-<div class='arch-panel flow-wrap' id='panel-push' role='tabpanel'>
-<div class='arch-controls'><button class='button primary arch-play' type='button'>▶ Play the flow</button><span class='arch-narr' aria-live='polite'></span></div>
-{_flow_html(PUSH_FLOW, 'push')}<div class='arch-detail' aria-live='polite'></div>
-<div class='stack-row'><span>Python</span><span>JavaScript</span><span>TypeScript</span><span>React · Next.js · Node</span><span>Java · Maven · Gradle</span><span>HTML · CSS</span><span>mixed repos</span></div></div>
-<div class='arch-panel flow-wrap' id='panel-live' role='tabpanel' hidden>
-<div class='arch-controls'><button class='button primary arch-play' type='button'>▶ Play the flow</button><span class='arch-narr' aria-live='polite'></span></div>
-{_flow_html(LIVE_FLOW, 'live')}<div class='arch-detail' aria-live='polite'></div></div>
+<p class='lead'>Connect once. Then two ways in, one fix engine: the <b>Push guard</b> tests every push (and scans your code once
+right away), and the <b>Live error watch</b> (a small monitor inside your app) reports errors and checks in every 30 seconds.
+Tap any box to read what happens there, or press play to follow a bug from connect to fix.</p>
+{arch_diagrams.general_diagram()}
+<div class='stack-row'><span>Python</span><span>JavaScript</span><span>TypeScript</span><span>React · Next.js · Node</span><span>Java · Maven · Gradle</span><span>HTML · CSS</span><span>mixed repos</span></div>
 </section>
 {_algo_section(cfg)}
 <section class='section'><div class='eyebrow'>Your dashboard</div><h2>What each status means</h2>
@@ -303,7 +298,7 @@ def user_page_html(cfg: dict | None = None) -> str:
 </div></section>
 <section class='card mission-card' style='text-align:center'><h3>Try it on your repo</h3><p class='muted'>Connect a repository and your next push is tested automatically.</p>
 <div class='actions' style='justify-content:center'><a class='button primary' href='/login'>Get started</a><a class='button' href='/pricing'>Pricing</a></div></section>
-</div><script>{SCRIPT}</script>"""
+</div><script>{SCRIPT}{arch_diagrams.SCRIPT}</script>"""
 
 
 # ------------------------------------------------------------------------------------------------------------------ admin
@@ -337,6 +332,15 @@ ADAPTER_LAYERS = [
                  ("AdapterError(kind)", "auth | rate_limit | outage | timeout | config | … ; retryable kinds back off, persistent ones auto-pause the tier."),
                  ("Ledger row", "Every call writes one fx_attempts row: tier, model, tokens, ₹ cost, result.")]),
 ]
+
+
+def _layers_list(layers) -> str:
+    """The code map behind the diagrams, as a plain list (text, not boxes)."""
+    rows = []
+    for title, boxes in layers:
+        items = "".join(f"<li><b>{E(n)}</b>: <span class='muted'>{E(d)}</span></li>" for n, d in boxes)
+        rows.append(f"<h4>{E(title)}</h4><ul>{items}</ul>")
+    return "".join(rows)
 
 
 def _layers_html(layers, ident: str) -> str:
@@ -418,23 +422,24 @@ out.innerHTML='<div class="sim-why"><p style="font-size:18px;margin:0 0 6px">Nex
 (rows?'<div class="table-wrap"><table class="table mini"><tr><th>Option</th><th>p (chance)</th><th>ĉ (provider cost of the attempt)</th><th>V (estimated total to resolve)</th></tr>'+rows+'</table></div>':'')+
 '<p class="muted">No tries were used and no AI provider was called.</p>';
 }).catch(function(){out.textContent='Could not reach the simulator.';});});})();</script>"""
-    return f"""<style>{CSS}</style><div class='arch'>
+    import arch_diagrams
+    return f"""<style>{CSS}{arch_diagrams.CSS}</style><div class='arch'>
 <section class='section'><p><a href='/admin'>← Admin</a></p><div class='eyebrow'>Admin · architecture</div>
 <h1>How Agent Daemon works inside</h1>
 <p class='lead'>The system, the model-adapter layer, and a step-by-step course on how the router chooses an AI. Every number comes live from
 <code>fixengine/config.py</code> (plus <code>FIXENGINE_CONFIG_JSON</code> overrides) and the cost ledger.</p>
 <div class='arch-tabs' role='tablist'>
 <button class='arch-tab' role='tab' aria-selected='true' aria-controls='a-system'>General architecture</button>
-<button class='arch-tab' role='tab' aria-selected='false' aria-controls='a-flows'>Request flows</button>
 <button class='arch-tab' role='tab' aria-selected='false' aria-controls='a-adapters'>Model adapters</button>
 <button class='arch-tab' role='tab' aria-selected='false' aria-controls='a-cost'>How the router decides (learn)</button></div>
-<div class='arch-panel' id='a-system' role='tabpanel'><p class='muted'>Click a box for details.</p>{_layers_html(SYSTEM_LAYERS, 'sys-layers')}
-<div class='arch-detail' id='sys-detail'><h3>Golden rule</h3><p>Only the router chooses models; every model call passes the quota and budget guard and writes one ledger row. Customer code runs only in the sandbox.</p></div></div>
-<div class='arch-panel' id='a-flows' role='tabpanel' hidden>
-<h3>Push guard (v3)</h3><div class='flow-wrap'><div class='arch-controls'><button class='button primary arch-play' type='button'>▶ Play</button><span class='arch-narr'></span></div>{_flow_html(PUSH_FLOW, 'apush')}<div class='arch-detail'></div></div>
-<h3>Live error watch (classic)</h3><div class='flow-wrap'><div class='arch-controls'><button class='button primary arch-play' type='button'>▶ Play</button><span class='arch-narr'></span></div>{_flow_html(LIVE_FLOW, 'alive')}<div class='arch-detail'></div></div></div>
-<div class='arch-panel' id='a-adapters' role='tabpanel' hidden><p class='muted'>Every model call goes down this stack. Click a box for details.</p>{_layers_html(ADAPTER_LAYERS, 'ad-layers')}
-<div class='arch-detail' id='ad-detail'><h3>One interface</h3><p>Adapters take text and return text plus token counts. They never get tools, the network is only the provider API, and every error is classified and redacted.</p></div>
+<div class='arch-panel' id='a-system' role='tabpanel'>
+<p class='muted'>Every process and how it connects. The same diagram customers see on /how-it-works. Tap a box for details.</p>
+{arch_diagrams.general_diagram()}
+<details class='more'><summary>Components behind each box (code map)</summary>{_layers_list(SYSTEM_LAYERS)}</details>
+<div class='arch-detail' id='sys-detail'><h3>Golden rule</h3><p>Only the router chooses models; every model call passes the quota and budget guard and writes one ledger row. Customer code runs only in the sandbox. Nothing is committed to a public repository.</p></div></div>
+<div class='arch-panel' id='a-adapters' role='tabpanel' hidden><p class='muted'>Every model call goes through this layer: router → guard → one adapter → provider → normalizer. Tap a box for details.</p>
+{arch_diagrams.model_diagram(cfg)}
+<details class='more'><summary>Adapter interface and error handling (code map)</summary>{_layers_list(ADAPTER_LAYERS)}</details>
 <h3>Tiers, models, prices and quotas</h3><div class='table-wrap'><table class='table mini'><tr><th>Mode</th><th>Model id</th><th>USD per M tokens (in / out)</th><th>Quota</th></tr>{prices}</table></div></div>
 <div class='arch-panel' id='a-cost' role='tabpanel' hidden>
 <div class='explain-intro card'><h3>Learn the router in 10 short lessons</h3><p class='muted'>Each lesson gives a plain definition, why Agent Daemon
@@ -444,7 +449,7 @@ changes in the product. Numbers marked ₹ are internal estimates for decisions;
 <h3 id='l-params'>Every parameter, in one table</h3><div class='table-wrap'><table class='table mini'><tr><th>Parameter</th><th>Value</th><th>What it means</th><th>If you change it</th></tr>{param_rows}</table></div>
 <p class='muted'>Change these with <code>FIXENGINE_CONFIG_JSON</code> (or the env shortcuts listed on /admin/fix). Prices, model ids and quotas are shown here, never changed here.</p>
 {sim}</div>
-</section></div><script>{SCRIPT}
+</section></div><script>{SCRIPT}{arch_diagrams.SCRIPT}
 (function(){{function wireLayers(id,detailId){{var root=document.getElementById(id),d=document.getElementById(detailId);if(!root||!d)return;
 root.querySelectorAll('.box').forEach(function(b){{b.addEventListener('click',function(){{root.querySelectorAll('.box').forEach(function(x){{x.classList.toggle('sel',x===b);}});
 d.innerHTML='<h3>'+b.getAttribute('data-title').replace(/</g,'&lt;')+'</h3><p>'+b.getAttribute('data-text').replace(/</g,'&lt;')+'</p>';}});}});}}

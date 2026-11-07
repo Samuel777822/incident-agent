@@ -28,7 +28,6 @@ from urllib.request import Request as UrlRequest, urlopen
 from wsgiref.simple_server import WSGIServer, make_server
 
 import httpx
-from urllib.parse import urlencode
 
 import incident_board
 import notifications
@@ -38,7 +37,8 @@ import chat_widget
 import portal_db
 import footer_pages
 import homepage
-from monitoring_installer import resolve_branch, GitHubInstallError, open_monitoring_pr, validate_repository_access
+from monitoring_installer import (resolve_branch, GitHubInstallError, PublicRepoError, is_private, open_monitoring_pr,
+                                  validate_repository_access)
 
 APP_NAME = "Agent Daemon"
 SESSION_COOKIE = "agent_session"
@@ -49,6 +49,10 @@ WEBHOOK_MAX_BODY = 4 * 1024 * 1024      # GitHub push payloads list every commit
 GOOGLE_CALLBACK_PATH = "/auth/google/callback"
 GOOGLE_TOKENINFO_URL = "https://oauth2.googleapis.com/tokeninfo"
 EMAIL_RE = re.compile(r"^[^\s@]+@[^\s@]+\.[^\s@]+$")
+MONITOR_PATHS = ("/ingest", "/heartbeat")
+CORS_HEADERS = [("Access-Control-Allow-Origin", "*"), ("Access-Control-Allow-Methods", "POST, OPTIONS"),
+                ("Access-Control-Allow-Headers", "Content-Type, X-Ingest-Key"), ("Access-Control-Max-Age", "86400")]
+LOG = logging.getLogger("web_app")
 REPO_RE = re.compile(r"^(?:https?://github\.com/)?([A-Za-z0-9_.-]+)/([A-Za-z0-9_.-]+?)(?:\.git)?/?$")
 
 CSS = """
@@ -84,6 +88,18 @@ CSS += """
 .section h2{margin-top:32px}
 .inline{display:inline-flex;gap:8px;align-items:center;flex-wrap:wrap}
 select{background:#0d1426;color:var(--text);border:1px solid var(--line);border-radius:10px;padding:9px}
+"""
+
+
+CSS += """
+.gate .lead{font-size:18px;color:#e9e4ee;max-width:820px}.gate h1{margin:8px 0 12px}
+.steps-grid{grid-template-columns:repeat(auto-fit,minmax(min(320px,100%),1fr));margin:18px 0}
+.steps-grid ol.steps{padding-left:20px;margin:8px 0 0}.steps-grid ol.steps li{margin:8px 0;line-height:1.5}
+.gate-form{margin:18px 0 8px}.button.big{font-size:17px;padding:14px 22px;width:100%;max-width:520px}
+.gate-banner{border-color:#a47638;margin-bottom:14px}.gate-banner h3{margin:4px 0}
+.monitor-status{margin:16px 0}.monitor-status h3{margin:2px 0 4px}.monitor-list{margin:8px 0 0;padding-left:18px}.monitor-list li{margin:6px 0}
+.card.success{border-color:#2f6b55}
+@media(max-width:640px){.button.big{max-width:none}.steps-grid{grid-template-columns:1fr}.steps-grid article:nth-child(2){order:-1}}
 """
 
 
@@ -552,7 +568,8 @@ class Request:
                 raise ValueError("Request body is too large")
             self.raw_body = environ.get("wsgi.input", BytesIO()).read(length)
             content_type = environ.get("CONTENT_TYPE", "").split(";", 1)[0].lower()
-            if content_type == "application/json":
+            # Browser monitors send JSON as text/plain (a "simple" CORS request that needs no preflight).
+            if content_type == "application/json" or (content_type in ("text/plain", "") and self.path in MONITOR_PATHS):
                 try:
                     parsed = json.loads(self.raw_body.decode("utf-8"))
                     self.form = parsed if isinstance(parsed, dict) else {}
@@ -597,6 +614,37 @@ def _google_oauth_settings() -> tuple[str, str, str]:
     return client_id, client_secret, redirect_uri
 
 
+def _app_cookie_domain() -> str:
+    """Choose a production cookie domain shared by apex and www hosts.
+
+    Render may serve the same application at agentdaemon.xyz and
+    www.agentdaemon.xyz. Host-only cookies do not cross between those hosts;
+    that can drop the OAuth state cookie on Google's callback and can also
+    make the resulting session appear signed out. COOKIE_DOMAIN can be set
+    explicitly. Otherwise derive it from GOOGLE_REDIRECT_URI and strip a
+    leading www. Local/test environments deliberately keep host-only cookies.
+    """
+    if os.getenv("APP_ENV", "development").strip().lower() != "production":
+        return ""
+    callback_uri = os.getenv("GOOGLE_REDIRECT_URI", "").strip()
+    try:
+        callback_host = (urlsplit(callback_uri).hostname or "").lower().rstrip(".")
+    except ValueError:
+        callback_host = ""
+    configured = os.getenv("COOKIE_DOMAIN", "").strip().lower().lstrip(".")
+    domain_pattern = r"(?=.{1,253}$)(?:[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?\.)+[a-z]{2,63}"
+    if configured:
+        if (not re.fullmatch(domain_pattern, configured)
+                or not callback_host or not (callback_host == configured or callback_host.endswith("." + configured))):
+            raise RuntimeError("COOKIE_DOMAIN must be a valid parent domain of GOOGLE_REDIRECT_URI.")
+        return configured
+    if callback_host.startswith("www."):
+        callback_host = callback_host[4:]
+    if not callback_host or not re.fullmatch(domain_pattern, callback_host):
+        return ""
+    return callback_host
+
+
 def _google_login_url(state: str, client_id: str, redirect_uri: str) -> str:
     params = {"client_id": client_id, "redirect_uri": redirect_uri, "response_type": "code",
               "scope": "openid email profile", "state": state, "prompt": "select_account"}
@@ -604,8 +652,14 @@ def _google_login_url(state: str, client_id: str, redirect_uri: str) -> str:
 
 
 def _verified_google_identity(code: str, state: str, request: Request) -> dict:
-    expected_state = _verify_cookie(request.cookies.get("agent_google_state", ""))
+    state_cookie = request.cookies.get("agent_google_state", "")
+    expected_state = _verify_cookie(state_cookie)
     if not state or not expected_state or not hmac.compare_digest(state, expected_state):
+        # Log only presence/match metadata. Never log the state, code, or cookie.
+        logging.getLogger(__name__).warning(
+            "Google OAuth state validation failed (state_cookie_present=%s, callback_state_present=%s)",
+            bool(state_cookie), bool(state),
+        )
         raise ValueError("Google sign-in expired or could not be validated. Please try again.")
     client_id, client_secret, redirect_uri = _google_oauth_settings()
     try:
@@ -738,10 +792,12 @@ def _redirect(location: str, headers=None):
     return Response(b"", "303 See Other", [("Location", location), ("Cache-Control", "no-store")] + list(headers or []))
 
 
-def _cookie(name: str, value: str, *, max_age: int, http_only=True):
+def _cookie(name: str, value: str, *, max_age: int, http_only=True, domain: str | None = None):
     secure = "; Secure" if os.getenv("APP_ENV", "development").lower() == "production" else ""
     http = "; HttpOnly" if http_only else ""
-    return ("Set-Cookie", f"{name}={value}; Path=/; Max-Age={max_age}; SameSite=Lax{http}{secure}")
+    selected_domain = _app_cookie_domain() if domain is None else domain.strip().lower().lstrip(".")
+    domain_attr = f"; Domain={selected_domain}" if selected_domain else ""
+    return ("Set-Cookie", f"{name}={value}; Path=/{domain_attr}; Max-Age={max_age}; SameSite=Lax{http}{secure}")
 
 
 def _csrf_valid(request: Request) -> bool:
@@ -888,6 +944,8 @@ def _access_state(user_id: str) -> dict:
 
 
 def _project_state(project: dict, has_access=None):
+    """(label, pill colour) for a project card. Never hides a silent monitor: 'Never checked in' and 'Monitor offline' are
+    states of their own, and a public repository shows 'Waiting for private repo'."""
     if has_access is None:
         until = project.get("active_until") or ""
         has_access = bool(until and until > _now().isoformat(timespec="seconds"))
@@ -895,17 +953,12 @@ def _project_state(project: dict, has_access=None):
         return "Access ended", "amber"
     if project.get("paused"):
         return "Paused", "amber"
-    status = project.get("status", "")
-    beat = _parse_iso(project.get("last_heartbeat_at") or "")
-    if status == "connected":
-        if beat is None:
-            return "Connected", "green"
-        if (_now() - beat).total_seconds() <= 900:
-            return "Live", "green"
-        return "No recent check-in", "amber"
-    if status == "install_pr_open":
-        return "Waiting for monitoring to deploy", "amber"
-    return "Setup needed", "amber"
+    state = portal_db.monitor_state(project)
+    if state["state"] == "push_only":
+        return ("Connected", "green") if project.get("status") == "connected" or project.get("last_check_at") else ("Setup needed", "amber")
+    if state["state"] == "not_installed":
+        return "Setup needed", "amber"
+    return state["headline"], state["tone"]
 
 
 def _razorpay_keys():
@@ -1432,8 +1485,8 @@ def _page_help(request: Request) -> Response:
       <div class="accordion-body">
         <p>Agent Daemon treats public and private repositories differently for strict security reasons:</p>
         <ul>
-          <li><b>Private repositories:</b> Support all three modes (<code>Automatic</code>, <code>Pull request</code>, <code>Report only</code>). Your ingest key and source files remain confidential.</li>
-          <li><b>Public repositories:</b> Automatically locked to <b>Pull request only</b> mode. Because ingest keys in public repositories are visible to anyone, auto-merge is prohibited to prevent malicious error injections from pushing unauthorized code into production. A human must always review and merge PRs in public repos.</li>
+          <li><b>Private repositories:</b> Everything works: the monitor is installed for you, the first scan runs right away, and all three modes (<code>Automatic</code>, <code>Pull request</code>, <code>Report only</code>) are available.</li>
+          <li><b>Public repositories:</b> Nothing is installed. Anyone can read a public repository, including the connection details the monitor needs, so the project waits in <b>Waiting for private repo</b> and shows you, step by step, how to make it private. Press <b>I've made it private, install now</b> and we check with GitHub and finish the setup. If a repository becomes public later, installs and fixes pause and you get an email.</li>
         </ul>
       </div>
     </details>
@@ -1444,6 +1497,9 @@ def _page_help(request: Request) -> Response:
 <!-- 4. Framework Integration Guides -->
 <section class="help-section" id="frameworks" data-category="frameworks">
   <h2 class="help-section-title">Framework Setup &amp; Manual Integration</h2>
+  <p class="muted"><b>You normally do not need this section.</b> When you connect a private repository, Agent Daemon adds the right monitor
+  to every part of it by itself: Python (Flask, FastAPI, Django), Node.js (Express, Next.js, plain Node, TypeScript) and web pages
+  (plain HTML/JS, React with Vite or Create React App). The examples below show what it adds, for the curious.</p>
   <p class="muted">If you prefer manual setup rather than the automated PR, or use custom entrypoints, simply drop <code>incident_agent_monitor.py</code> into your project root and add one line to your app:</p>
 
   <div class="accordion-group">
@@ -1493,7 +1549,7 @@ application = get_wsgi_application()</div>
   "ingest_url": "https://incident-agent-portal.onrender.com/ingest",
   "ingest_key": "YOUR_PROJECT_INGEST_KEY"
 }</div>
-        <p>The client will automatically load this config, spawn a daemonized heartbeat thread that reports health every 5 minutes, and attach an uncaught exception hook (<code>sys.excepthook</code>) and root logging handler.</p>
+        <p>The client will automatically load this config, check in every 30 seconds, and report uncaught exceptions, logged errors and failed AI/API calls (for example a retired model). Node.js apps get <code>incident-agent-monitor.cjs</code> and web pages get <code>incident-agent-monitor.js</code>, which work the same way.</p>
       </div>
     </details>
 
@@ -2580,13 +2636,23 @@ def _page_dashboard(request):
         hint = ""
         if state == "Setup needed":
             hint = "<p class='muted'>Open the project to finish setup.</p>"
-        elif state == "Waiting for monitoring to deploy":
+        elif state == "Waiting for private repo":
+            hint = "<p class='bad'>Make the repository private to finish setup. Nothing is protected yet.</p>"
+        elif state in ("Waiting for the first check-in",):
             hint = "<p class='muted'>Live monitoring starts when your app redeploys. Push checks already work.</p>"
+        elif state in ("Never checked in", "Monitor offline"):
+            hint = "<p class='bad'>The monitor is not checking in. Open the project to see how to fix it.</p>"
         cards.append(f"<a class='card project-card' href='/projects/{_escape(project['id'])}'><div class='row'><h3>{_escape(project['name'])}</h3>{_pill(state, css)}</div>"
                      f"<p class='muted'>{_escape(project['repo_owner'])}/{_escape(project['repo_name'])} · {_escape(project['branch'])}</p>"
                      f"<div class='stats'>{_pill(WATCH_LABELS.get(project.get('watch_mode') or 'both', 'Push guard'))}{_pill(MODE_LABELS.get(project['mode'], project['mode']))}</div>"
                      f"{check}<p class='muted'>Open bugs: {project['incident_open']} of {project['incident_total']}</p>{activity}{hint}</a>")
     listing = "".join(cards) or "<div class='empty'>No projects yet. Connect a GitHub repository and your next push is tested automatically.</div>"
+    for waiting in [p for p in projects if p.get("gate_state") == portal_db.GATE_WAITING]:
+        banner = (f"<article class='card gate-banner'><div class='row'><div><div class='eyebrow'>Action needed</div>"
+                  f"<h3>Make {_escape(waiting['repo_owner'])}/{_escape(waiting['repo_name'])} private</h3>"
+                  "<p class='muted'>Your monitoring agent is ready, but your repository is public, so nothing was installed yet. "
+                  "It takes about 2 minutes and we show you every step.</p></div>"
+                  f"<a class='button primary' href='/projects/{_escape(waiting['id'])}/make-private'>Show me how</a></div></article>") + banner
     slots = portal_db.project_slot_info(user_id)
     slot_note = (f"<p class='muted'>Projects: {slots['used']} of {slots['limit']} used. "
                  f"Each extra project is a one-time ₹{plans.PROJECT_SLOT_PRICE}.</p>") if access["active"] else ""
@@ -2678,16 +2744,16 @@ def _page_new_project(request):
         return _slot_full_page(request, slots)
     if request.method == "GET":
         fields = f"""<div class='field'><label>Project name</label><input name='name' required maxlength='80' placeholder='My hackathon app'></div>
-<div class='field'><label>GitHub repository</label><input name='repo' required placeholder='owner/repository'><small>Private repositories are recommended. The steps are at the top of this page.</small></div>
+<div class='field'><label>GitHub repository</label><input name='repo' required placeholder='owner/repository'><small>Must be <b>private</b> (we explain how if it is not). The steps are at the top of this page.</small></div>
 <div class='field'><label>GitHub token</label><input name='github_token' type='password' autocomplete='off' required><small>Stored encrypted and never shown again. Paste a <b>classic</b> token with the <code>repo</code> and <code>workflow</code> scopes ticked.</small></div>
 <div class='field'><label>Branch (optional)</label><input name='branch' value='' placeholder='Leave empty to use your repository default' maxlength='100'><small>The branch you push to. Every push to it is tested.</small></div>
-<fieldset class='field choice'><legend>When should the agent look for bugs?</legend>
-<label class='checkbox'><input type='radio' name='watch_mode' value='push' checked><span><b>On every push (recommended)</b><br><small>Each push to GitHub is tested in our sandbox before you deploy. Works for every language. Nothing is added to your code.</small></span></label>
-<label class='checkbox'><input type='radio' name='watch_mode' value='both'><span><b>On every push and on live errors</b><br><small>Also adds a small error reporter to your running app (automatic for Python apps).</small></span></label>
-<label class='checkbox'><input type='radio' name='watch_mode' value='runtime'><span><b>Only on live errors (classic)</b><br><small>Waits for the deployed app to crash, then fixes it.</small></span></label></fieldset>
+<input type='hidden' name='watch_mode' value='both'>
+<div class='field'><p class='muted'><b>What happens when you press Save:</b> we check that your repository is private, add a small error
+monitor to your code for you (Python, JavaScript, TypeScript, HTML and mixed projects), scan your code once right away, and then test every push.
+You do not need to install anything yourself.</p></div>
 <div class='field'><label>What should the agent do with a bug?</label><select name='mode'><option value='pr' selected>Pull request: push the fix to a new branch and open a PR for me</option><option value='auto'>Auto: push the fix and merge it once the sandbox proves it</option><option value='report'>Report only: explain the bug, change nothing</option></select><small>Fixes never go straight to your branch: they land on <code>agent-daemon/fix-…</code> with a pull request. Auto merges it only when the check that failed now passes and every GitHub check is green.</small></div>
 <div class='field'><label>App URL (optional)</label><input name='app_url' type='url' placeholder='https://app.example.com'></div>
-<div class='field'><label class='checkbox'><input name='allow_install' type='checkbox' value='yes' required><span>I authorize Agent Daemon to add a push webhook and commit statuses to this repository and, for live error watch, monitoring code through a reviewable pull request.</span></label></div>
+<div class='field'><label class='checkbox'><input name='allow_install' type='checkbox' value='yes' required><span>I authorize Agent Daemon to add a push webhook and commit statuses to this repository and to add error-monitoring code through a pull request that is merged automatically when GitHub allows it.</span></label></div>
 <div class='field'><label class='checkbox'><input name='allow_ai_processing' type='checkbox' value='yes' required><span>I understand that error output and the relevant source files are sent to third-party AI providers (Groq, and Anthropic Claude for the stronger modes, possibly through OpenRouter), and that my code is built and tested inside Agent Daemon's isolated sandbox.</span></label></div>
 <div class='field'><label class='checkbox'><input name='allow_remediation' type='checkbox' value='yes'><span>For Pull request or Auto mode, I authorize small code fixes as pull requests. Auto mode may merge a fix only after the sandbox proves it and all GitHub checks pass.</span></label></div>"""
         note = (f"<p class='muted'>Project {slots['used'] + 1} of {slots['limit']}. Extra projects are ₹{plans.PROJECT_SLOT_PRICE} each.</p>"
@@ -2719,36 +2785,162 @@ def _page_new_project(request):
     except GitHubInstallError as exc:
         return _response(f"<div class='alert'>{_escape(exc)}</div>", request, "400 Bad Request")
     branch = resolve_branch(owner=owner, repo=repo.removesuffix(".git"), token=token, requested=branch, repo_info=repo_info)
-    mode_note = ""
-    if mode == "auto" and not repo_info.get("private"):
-        mode = "pr"
-        mode_note = ("<div class='alert'>This repository is public, so fixes are opened as pull requests for a person to review "
-                     "instead of merging automatically.</div>")
-    ingest_key = secrets.token_urlsafe(32)
+    private = is_private(repo_info)
+    ingest_key = _new_ingest_key()
     ingest_hash = hashlib.sha256(ingest_key.encode()).hexdigest()
     try:
         project_id = portal_db.create_project(user_id, name=name,
             repo_owner=owner, repo_name=repo.removesuffix(".git"), branch=branch, mode=mode,
             token_ciphertext=ciphertext, ingest_key_hash=ingest_hash,
             app_url=request.form.get("app_url", "").strip(), ai_consent_at=portal_db._now(),
-            ingest_key_ciphertext=_encrypt_token(ingest_key), watch_mode=watch_mode, enforce_slots=not _is_admin(request))
+            ingest_key_ciphertext=_encrypt_token(ingest_key), watch_mode=watch_mode, enforce_slots=not _is_admin(request),
+            gate_state=portal_db.GATE_ACTIVE if private else portal_db.GATE_WAITING)
     except ValueError:
         return _slot_full_page(request, portal_db.project_slot_info(user_id))
-    portal_db.audit(project_id, "project_connected", {"repo": f"{owner}/{repo}", "mode": mode, "watch_mode": watch_mode})
+    portal_db.audit(project_id, "project_connected", {"repo": f"{owner}/{repo}", "mode": mode, "watch_mode": watch_mode,
+                                                     "visibility": "private" if private else "public"})
     portal_db.audit(project_id, "ai_diagnosis_consent", {"scope": "error output and relevant repository source sent to third-party AI providers (Groq, Anthropic, OpenRouter); code built and tested in the sandbox"})
     if mode in ("pr", "auto"):
         portal_db.audit(project_id, "remediation_consent", {"mode": mode, "auto_merge_requires_sandbox_proof_and_passing_github_checks": mode == "auto"})
-    project = {"repo_owner": owner, "repo_name": repo.removesuffix(".git"), "branch": branch, "github_token_ciphertext": ciphertext}
-    summary = ""
-    if watch_mode in ("push", "both"):
-        summary += _push_summary(_start_push_watch(project_id, user_id, project, token))
-    if watch_mode in ("runtime", "both"):
-        result = _install_monitoring(project_id, user_id, project, token, ingest_key)
-        summary += _install_summary(result, project_id)
-    summary += mode_note
-    return _response(f"<section class='card'><h1>Project saved</h1><p class='muted'>{_escape(name)} is connected. "
+    if not private:
+        # Public-repo gate: nothing is committed, no webhook, no scan, until the owner makes the repository private.
+        portal_db.audit(project_id, "install_held_public_repo", {"repo": f"{owner}/{repo}"})
+        project = portal_db.get_project(project_id, user_id)
+        return _response(_gate_page_html(project, request, first_time=True, has_pages=bool(repo_info.get("has_pages"))),
+                         request, "201 Created")
+    project = portal_db.get_project(project_id, user_id)
+    summary = _activation_summary(_activate_project(project, token, ingest_key), project)
+    return _response(f"<section class='card'><h1>Project saved</h1><p class='muted'>{_escape(name)} is connected and your repository is private. "
                      f"{'Your next push is tested automatically.' if watch_mode != 'runtime' else 'The agent starts watching as soon as monitoring is live.'}</p></section>{summary}"
                      f"<p class='actions'><a class='button primary' href='/projects/{_escape(project_id)}'>View project</a><a class='button' href='/dashboard'>Dashboard</a></p>", request, "201 Created")
+
+
+def _new_ingest_key() -> str:
+    """A project-scoped key: it can only send heartbeats and error reports for one project. Recognisable prefix for secret scanners."""
+    return "adi_" + secrets.token_urlsafe(32)
+
+
+def _activate_project(project: dict, token: str, ingest_key: str) -> dict:
+    """The repository is private: install the monitor (every language), add the push webhook and run the first scan now."""
+    out = {"install": None, "push": None}
+    watch = project.get("watch_mode") or "both"
+    if watch in ("runtime", "both"):
+        out["install"] = _install_monitoring(project["id"], project["user_id"], project, token, ingest_key)
+        if out["install"].get("public"):
+            return out
+    if watch in ("push", "both"):
+        out["push"] = _start_push_watch(project["id"], project["user_id"], project, token)
+    portal_db.set_gate_state(project["id"], portal_db.GATE_ACTIVE)
+    portal_db.unpark_gate_incidents(project["id"])
+    return out
+
+
+def _activation_summary(result: dict, project: dict) -> str:
+    html_out = ""
+    if result.get("install") is not None:
+        html_out += _install_summary(result["install"], project["id"])
+    if result.get("push") is not None:
+        html_out += _push_summary(result["push"])
+    return html_out
+
+
+def _make_private_steps(project: dict, has_pages: bool = False) -> str:
+    owner, repo = _escape(project["repo_owner"]), _escape(project["repo_name"])
+    settings = f"https://github.com/{owner}/{repo}/settings"
+    pages = ("<div class='alert'><b>Your site is on GitHub Pages.</b> On a free GitHub account, a private repository cannot use GitHub Pages, "
+             "so your site would go offline. Free options that work with private repositories: Netlify, Vercel, Render or Cloudflare Pages "
+             "(each has a one-click \"Import from GitHub\" button). Or upgrade to GitHub Pro.</div>") if has_pages else ""
+    return (f"{pages}<div class='grid steps-grid'>"
+            "<article class='card'><h3>💻 On a computer</h3><ol class='steps'>"
+            f"<li>Open your repository settings: <a href='{settings}' target='_blank' rel='noopener'><b>github.com/{owner}/{repo}/settings</b></a>. "
+            "Sign in if GitHub asks.</li>"
+            "<li>You are on the <b>General</b> page. Scroll all the way down to the red box called <b>Danger Zone</b>.</li>"
+            "<li>Find <b>Change repository visibility</b> and click <b>Change visibility</b>.</li>"
+            "<li>Choose <b>Make private</b> (GitHub may call it <b>Change to private</b>).</li>"
+            "<li>Click through the confirmation. GitHub may ask you to type the repository name or your password: do that and confirm.</li>"
+            "<li>Come back to this page and press the button below.</li></ol></article>"
+            "<article class='card'><h3>📱 On a phone</h3><ol class='steps'>"
+            "<li>Use your phone's <b>web browser</b> (Chrome or Safari). The GitHub app cannot change this setting.</li>"
+            f"<li>Tap this link: <a href='{settings}' target='_blank' rel='noopener'><b>open repository settings</b></a>. Sign in if asked.</li>"
+            "<li>If you only see a small page without <b>Settings</b>, open the browser menu (⋮ or the <b>aA</b> button) and choose "
+            "<b>Desktop site</b>, then tap the link again.</li>"
+            "<li>Scroll all the way down to the red <b>Danger Zone</b>.</li>"
+            "<li>Tap <b>Change visibility</b>, then <b>Make private</b>, and confirm (type the repository name if asked).</li>"
+            "<li>Come back here and tap the button below.</li></ol></article></div>"
+            "<p class='muted'>Do not see <b>Settings</b> or <b>Change visibility</b>? Only the owner of the repository (or an admin of the "
+            "organization) can change it. Ask them to do these steps.</p>")
+
+
+def _gate_page_html(project: dict, request, *, first_time: bool = False, still_public: bool = False, has_pages: bool = False) -> str:
+    csrf = _escape(_csrf(request))
+    pid = _escape(project["id"])
+    repo = f"{_escape(project['repo_owner'])}/{_escape(project['repo_name'])}"
+    head = ("<div class='alert'><b>Your repository is still public.</b> We checked with GitHub just now and anyone can still see it. "
+            "Nothing was installed. Please follow the steps again; it can take a few seconds after you confirm.</div>" if still_public else "")
+    intro = ("<p class='lead'>Your monitoring agent is about to be installed into your code, but we noticed your repository "
+             f"<b>{repo}</b> is <b>public</b>. Anyone on the internet could see it, including the connection details our monitor needs. "
+             "Please make your repository private first. Here is how:</p>")
+    saved = ("<p class='muted'>Your project is saved. We have not changed anything in your repository.</p>" if first_time else "")
+    return (f"<section class='section gate'><p><a href='/dashboard'>← Projects</a></p><div class='eyebrow'>One step left</div>"
+            f"<h1>Make your repository private</h1>{head}{intro}{saved}{_make_private_steps(project, has_pages)}"
+            f"<form method='post' action='/projects/{pid}/recheck-visibility' class='gate-form'><input type='hidden' name='csrf' value='{csrf}'>"
+            "<button class='button primary big' type='submit'>I've made it private, install now</button></form>"
+            "<p class='muted'>We check with GitHub when you press the button. Until the repository is private, this project stays in "
+            "<b>Waiting for private repo</b> and is not protected yet.</p></section>")
+
+
+def _page_make_private(request, project_id):
+    gate = _require_access(request)
+    if gate:
+        return gate
+    project = portal_db.get_project(project_id, request.session["user_id"])
+    if not project:
+        return _response("<h1>Project not found</h1>", request, "404 Not Found")
+    if project.get("gate_state") != portal_db.GATE_WAITING:
+        return _redirect(f"/projects/{project_id}")
+    return _response(_gate_page_html(project, request), request)
+
+
+def _page_recheck_visibility(request, project_id):
+    """The 'I've made it private, install now' button: ask GitHub again; install when private, explain again when not."""
+    gate = _require_access(request)
+    if gate:
+        return gate
+    if request.method != "POST" or not _csrf_valid(request):
+        return _response("<div class='alert'>This form expired. Refresh and try again.</div>", request, "403 Forbidden")
+    user_id = request.session["user_id"]
+    project = portal_db.get_project(project_id, user_id)
+    if not project:
+        return _response("<h1>Project not found</h1>", request, "404 Not Found")
+    back = f"<p class='actions'><a class='button' href='/projects/{_escape(project_id)}'>Back to project</a></p>"
+    try:
+        token = _decrypt_token(project["github_token_ciphertext"])
+        ingest_key = _decrypt_token(project["ingest_key_ciphertext"]) if project.get("ingest_key_ciphertext") else ""
+    except RuntimeError as exc:
+        return _response(f"<div class='alert'>{_escape(exc)}</div>{back}", request, "503 Service Unavailable")
+    try:
+        info = validate_repository_access(owner=project["repo_owner"], repo=project["repo_name"], token=token)
+    except GitHubInstallError as exc:
+        return _response(f"<div class='alert'>We could not ask GitHub right now: {_escape(exc)} Try the button again in a minute.</div>"
+                         + _gate_page_html(project, request), request, "502 Bad Gateway")
+    portal_db.audit(project_id, "visibility_rechecked", {"private": is_private(info)})
+    if not is_private(info):
+        portal_db.set_gate_state(project_id, portal_db.GATE_WAITING)
+        return _response(_gate_page_html(project, request, still_public=True, has_pages=bool(info.get("has_pages"))), request, "409 Conflict")
+    if not ingest_key:
+        ingest_key = _new_ingest_key()
+        portal_db.rotate_project_ingest_key(project_id, user_id, hashlib.sha256(ingest_key.encode()).hexdigest(), _encrypt_token(ingest_key))
+    portal_db.set_gate_state(project_id, portal_db.GATE_ACTIVE)
+    project = portal_db.get_project(project_id, user_id)
+    result = _activate_project(project, token, ingest_key)
+    token = ""
+    if (result.get("install") or {}).get("public"):
+        project = portal_db.get_project(project_id, user_id)
+        return _response(_gate_page_html(project, request, still_public=True), request, "409 Conflict")
+    return _response("<section class='card success'><div class='eyebrow'>Done</div><h1>✅ Your repository is private. Installing now.</h1>"
+                     "<p class='muted'>Thank you. Here is what we did:</p></section>" + _activation_summary(result, project)
+                     + f"<p class='actions'><a class='button primary' href='/projects/{_escape(project_id)}'>View project</a>"
+                     "<a class='button' href='/dashboard'>Dashboard</a></p>", request)
 
 
 def _push_checks_table(project: dict) -> str:
@@ -2850,6 +3042,8 @@ def _page_project(request, project_id):
     project = portal_db.get_project(project_id, request.session["user_id"])
     if not project:
         return _response("<h1>Project not found</h1>", request, "404 Not Found")
+    if request.method == "GET" and project.get("gate_state") == portal_db.GATE_WAITING:
+        return _response(_gate_page_html(project, request), request)
     if request.method == "POST":
         if not _csrf_valid(request):
             return _response("<div class='alert'>This form expired. Refresh and try again.</div>", request, "403 Forbidden")
@@ -2876,25 +3070,80 @@ def _page_project(request, project_id):
         flash = "<div class='pill amber'>That commit was already checked or is in the queue.</div>"
     cards = []
     if watch in ("runtime", "both"):
-        install_card = (f"<article class='card'><h3>Live error reporter</h3><p class='muted'>The reporter was added through this pull request. If it is not merged yet, merge it to switch live errors on.</p><a class='button primary' href='{_escape(project['install_pr_url'])}'>View installation PR</a></article>" if project.get("install_pr_url") else f"<article class='card'><h3>Install the live error reporter</h3><p class='muted'>Adds a small error reporter to your app through a pull request and merges it when it can (automatic for Python apps; other languages can post to the ingest URL).</p><form method='post' action='/projects/{_escape(project_id)}/install'><input type='hidden' name='csrf' value='{csrf}'><button class='button primary' type='submit'>Install monitoring</button></form></article>")
+        install_card = _monitor_install_card(project, csrf)
         if project.get("ci_workflow") == "missing" and project.get("mode") == "auto":
             install_card = _workflow_fix_card(project_id, request) + install_card
         cards.append(install_card)
     cards.append(f"<article class='card'><h3>Update GitHub token</h3><p class='muted'>Use a classic token with the repo and workflow scopes ticked. The new token replaces the saved one and is never shown again.</p><form method='post' action='/projects/{_escape(project_id)}/github-token'><input type='hidden' name='csrf' value='{csrf}'><div class='field'><label>New GitHub token</label><input name='github_token' type='password' autocomplete='new-password' required minlength='20' maxlength='500'></div><button class='button primary' type='submit'>Validate and save token</button></form></article>")
     if watch in ("runtime", "both"):
-        cards.append(f"<article class='card'><h3>Ingest key</h3><p class='muted'>Rotate the project key if it is exposed. The new key appears once.</p><form method='post' action='/projects/{_escape(project_id)}/rotate-key'><input type='hidden' name='csrf' value='{csrf}'><button class='button' type='submit'>Rotate key</button></form></article>")
+        cards.append(f"<article class='card'><h3>Monitor key</h3><p class='muted'>The monitor uses a key that can only <b>send</b> check-ins and error reports for this project. If you think it leaked, replace it: the old key stops working and we put the new one into your code for you.</p><form method='post' action='/projects/{_escape(project_id)}/rotate-key'><input type='hidden' name='csrf' value='{csrf}'><button class='button' type='submit'>Replace key</button></form></article>")
     cards.append(f"<article class='card'><h3>Delete project data</h3><p class='muted'>Remove this project, its incidents, checks, fixes, and stored GitHub token. The project slot stays on your account.</p><form method='post' action='/projects/{_escape(project_id)}/delete'><input type='hidden' name='csrf' value='{csrf}'><div class='field'><label>Type DELETE to confirm</label><input name='confirm' required autocomplete='off'></div><button class='button danger' type='submit'>Delete project</button></form></article>")
     state, css = _project_state(project)
-    checkin = ("<span class='pill'>Last check-in · " + _escape(_ago(project.get("last_heartbeat_at"))) + "</span>") if watch != "push" else ""
+    checkin = ""
+    monitor_panel = _monitor_status_html(project) if watch != "push" else ""
     body = (f"<section class='section'><p><a href='/dashboard'>← Projects</a></p><div class='row page-head'><div><div class='eyebrow'>Project</div><h1>{_escape(project['name'])}</h1>"
-            f"<p class='muted'><a href='https://github.com/{_escape(project['repo_owner'])}/{_escape(project['repo_name'])}' target='_blank' rel='noopener'>{_escape(project['repo_owner'])}/{_escape(project['repo_name'])}</a> · {_escape(project['branch'])} · {_escape(project['mode']).title()} mode</p></div>"
+            f"<p class='muted'><a href='https://github.com/{_escape(project['repo_owner'])}/{_escape(project['repo_name'])}' target='_blank' rel='noopener'>{_escape(project['repo_owner'])}/{_escape(project['repo_name'])}</a> · {_escape(project['branch'])} · {_escape(MODE_LABELS.get(project['mode'], project['mode']))}</p></div>"
             f"<form method='post'><input type='hidden' name='csrf' value='{csrf}'><input type='hidden' name='paused' value='{'no' if paused else 'yes'}'><button class='button {'primary' if paused else 'danger'}' type='submit'>{button}</button></form></div>"
             f"<div class='stats'><span class='pill {'amber' if paused else css}'>{'Paused' if paused else _escape(state)}</span>"
             f"<span class='pill'>{_escape(WATCH_LABELS.get(watch, watch))}</span><span class='pill'>{_escape(MODE_LABELS.get(project['mode'], project['mode']))}</span>"
-            f"{checkin}</div>{flash}"
+            f"{checkin}</div>{flash}{monitor_panel}"
             f"{_push_checks_html(project, request)}"
             f"<h2>Bugs and fixes</h2>{table}<h2>Settings</h2><section class='grid'>{''.join(cards)}</section></section>")
     return _response(body, request)
+
+
+MONITOR_KIND_LABEL = {"python": "Python server", "node": "Node.js server", "browser": "Browser (web pages)"}
+
+
+def _monitor_status_html(project: dict) -> str:
+    """Live monitor: last check-in time, 'never checked in' or 'offline', per part of the repo. Updated by the page refresh."""
+    beats = portal_db.list_monitor_heartbeats(project["id"])
+    state = portal_db.monitor_state(project, beats)
+    tone = {"green": "green", "amber": "amber", "red": "red"}.get(state["tone"], "")
+    if state.get("last_checkin"):
+        when = f"Last check-in at {_escape(_fmt_time(state['last_checkin']))} ({_escape(_ago(state['last_checkin']))})"
+    else:
+        when = "Never checked in"
+    try:
+        targets = json.loads(project.get("monitor_targets_json") or "[]")
+    except ValueError:
+        targets = []
+    rows = []
+    for b in beats:
+        age = portal_db._age_seconds(b["last_seen"]) or 0
+        alive = age <= portal_db.MONITOR_OFFLINE_SECONDS
+        rows.append(f"<tr><td>{_escape(MONITOR_KIND_LABEL.get(b['monitor'], b['monitor']))}<br><small class='muted'>{_escape(b['component'])}</small></td>"
+                    f"<td><span class='pill {'green' if alive else ('' if b['monitor'] == 'browser' else 'red')}'>{'checking in' if alive else 'quiet'}</span></td>"
+                    f"<td>{_escape(_fmt_time(b['last_seen']))}<br><small class='muted'>{_escape(_ago(b['last_seen']))} · {int(b['beats'])} check-in{'' if int(b['beats']) == 1 else 's'}</small></td>"
+                    f"<td><small class='muted'>{_escape(b.get('runtime') or '')} {_escape(b.get('version') or '')}</small></td></tr>")
+    seen = {b["monitor"] for b in beats}
+    for t in targets:
+        if t.get("wired") and t.get("kind") not in seen:
+            rows.append(f"<tr><td>{_escape(t.get('label', ''))}</td><td><span class='pill amber'>not yet</span></td>"
+                        f"<td colspan='2'><small class='muted'>Installed ({_escape(t.get('how') or '')}), waiting for the first check-in.</small></td></tr>")
+    table = _table(["Part", "Status", "Last check-in", "Runtime"], rows, "No check-ins yet.") if rows else ""
+    detail = f"<p class='muted'>{_escape(state['detail'])}</p>" if state.get("detail") else ""
+    help_steps = ""
+    if state["state"] in ("never_checked_in", "offline", "waiting_first"):
+        help_steps = ("<details class='more'><summary>How to fix it</summary><ol class='steps'>"
+                      + (f"<li>Merge the <a href='{_escape(project['install_pr_url'])}' target='_blank' rel='noopener'>monitoring pull request</a> if it is still open.</li>" if project.get("install_pr_url") else "")
+                      + "<li>Re-deploy your app (Render, Vercel, Netlify, Railway: press <b>Deploy</b> / <b>Redeploy</b>). The monitor starts with the app.</li>"
+                      "<li>Open your app in a browser once. Free hosting plans sleep when nobody visits.</li>"
+                      "<li>Still nothing after 2 minutes? Press <b>Reinstall monitoring</b> below.</li></ol></details>")
+    return (f"<section class='card monitor-status' id='monitor'><div class='row'><div><div class='eyebrow'>Live monitor</div>"
+            f"<h3>{_escape(state['headline'])}</h3><p class='muted'>{when} · checks in every 30 seconds</p></div>"
+            f"<span class='pill {tone}'>{_escape(state['headline'])}</span></div>{detail}{help_steps}{table}</section>")
+
+
+def _monitor_install_card(project: dict, csrf: str) -> str:
+    pid = _escape(project["id"])
+    pr = (f"<p class='muted'>Installed through <a href='{_escape(project['install_pr_url'])}' target='_blank' rel='noopener'>this pull request</a>.</p>"
+          if project.get("install_pr_url") else "")
+    label = "Reinstall monitoring" if (project.get("install_pr_url") or project.get("monitor_installed_at")) else "Install monitoring"
+    return (f"<article class='card'><h3>{label}</h3><p class='muted'>Adds (or repairs) the error monitor in every part of your repository: "
+            f"Python, Node.js, TypeScript and web pages. Safe to press again.</p>{pr}"
+            f"<form method='post' action='/projects/{pid}/install'><input type='hidden' name='csrf' value='{csrf}'>"
+            f"<button class='button primary' type='submit'>{label}</button></form></article>")
 
 
 def _workflow_fix_steps() -> str:
@@ -2918,21 +3167,29 @@ def _workflow_fix_card(project_id: str, request) -> str:
 
 
 def _install_monitoring(project_id: str, user_id: str, project: dict, token: str, ingest_key: str) -> dict:
-    """Add monitoring to the customer's repository with no steps for the customer.
+    """Add monitoring to every part of the customer's repository with no steps for the customer.
 
-    The connection details go into the repository through the install pull request, which is merged
-    automatically when GitHub allows it. If the branch name was wrong, the repository's default is used and saved.
-    """
+    Only for PRIVATE repositories: open_monitoring_pr re-checks visibility with GitHub right before it writes anything and
+    refuses with PublicRepoError otherwise (the project then waits for the owner to make it private). The connection details
+    go into the repository through the install pull request, which is merged automatically when GitHub allows it."""
     try:
         result = open_monitoring_pr(
             owner=project["repo_owner"], repo=project["repo_name"], base_branch=project["branch"],
             project_id=project_id, token=token, ingest_url=_base_url() + "/ingest",
-            ingest_key=ingest_key, auto_merge=True)
+            ingest_key=ingest_key, auto_merge=True, require_private=True)
+    except PublicRepoError as exc:
+        portal_db.set_gate_state(project_id, portal_db.GATE_WAITING)
+        portal_db.audit(project_id, "install_held_public_repo", {"where": "install"})
+        return {"ok": False, "public": True, "error": str(exc)}
     except (GitHubInstallError, RuntimeError) as exc:
+        LOG.warning("Monitoring install failed for project %s: %s", project_id, str(exc)[:200])
+        portal_db.audit(project_id, "monitoring_install_failed", {"error": str(exc)[:300]})
         return {"ok": False, "error": str(exc)}
     if result.get("base_branch") and result["base_branch"] != project["branch"]:
         portal_db.update_project_branch(project_id, user_id, result["base_branch"])
     ci_state = "added" if result.get("workflow_added") else ("existing" if result.get("had_ci") else "missing")
+    targets = result.get("targets") or []
+    portal_db.record_monitor_install(project_id, targets, installed=any(t.get("wired") for t in targets) or bool(result.get("patched_file")))
     if result.get("unchanged"):
         portal_db.set_ci_workflow(project_id, user_id, ci_state)
         portal_db.audit(project_id, "monitoring_reinstall_unchanged", {"ci_workflow": ci_state})
@@ -2940,12 +3197,16 @@ def _install_monitoring(project_id: str, user_id: str, project: dict, token: str
     portal_db.record_install_pr(project_id, user_id, result["url"], ci_state)
     portal_db.audit(project_id, "monitoring_pr_opened", {"pr_url": result["url"], "merged": result["merged"],
                                                           "patched_file": result["patched_file"], "key_embedded": result["embedded_key"],
-                                                          "workflow_added": result.get("workflow_added"), "had_ci": result.get("had_ci")})
+                                                          "workflow_added": result.get("workflow_added"), "had_ci": result.get("had_ci"),
+                                                          "monitors": [f"{t.get('kind')}:{t.get('label')}:{'on' if t.get('wired') else 'off'}" for t in targets]})
     return dict(result, ok=True)
 
 
 def _install_summary(result: dict, project_id: str) -> str:
     """Plain-language outcome of an install attempt. The customer is never asked to do technical chores."""
+    if result.get("public"):
+        return ("<div class='alert'>Your repository is public, so nothing was installed. "
+                f"<a href='/projects/{_escape(project_id)}/make-private'>Make it private in 2 minutes</a>, then press the install button.</div>")
     if not result.get("ok"):
         return ("<div class='alert'>Your project is saved, but monitoring could not be added yet: "
                 f"{_escape(result.get('error', 'unknown error'))} Nothing was changed in your repository. "
@@ -2956,15 +3217,25 @@ def _install_summary(result: dict, project_id: str) -> str:
             return "<div class='card'><h3>Monitoring setup</h3><p class='muted'>Everything is already installed, and this repository already has a GitHub Actions workflow.</p></div>"
         return ("<div class='card'><h3>Nothing changed yet</h3><p class='muted'>GitHub still does not let this token write workflow files.</p>"
                 + _workflow_fix_steps() + "</div>")
-    if result.get("patched_file"):
+    targets = result.get("targets") or []
+    if targets:
+        rows = []
+        for t in targets:
+            icon = "✅" if t.get("wired") else "⚠️"
+            detail = t.get("how") if t.get("wired") else t.get("note", "")
+            extra = f" <small class='muted'>{_escape(t['note'])}</small>" if t.get("wired") and t.get("note") else ""
+            rows.append(f"<li>{icon} <b>{_escape(t.get('label', ''))}</b>: {_escape(detail or '')}{extra}</li>")
+        notes.append("We found these parts in your repository and added a monitor to each:<ul class='monitor-list'>" + "".join(rows) + "</ul>")
+    elif result.get("patched_file"):
         notes.append(f"One line was added to <code>{_escape(result['patched_file'])}</code> so monitoring starts with your app.")
     elif not result.get("entry_file"):
-        notes.append("We could not find your app's main file, so add <code>import incident_agent_monitor</code> as the first import of it.")
+        notes.append("We could not find your app's main file, so the monitor was added but could not be switched on automatically.")
     if result.get("workflow_added"):
         notes.append("A GitHub Actions workflow was added that checks your code and runs your tests on every pull request. "
                      "Auto mode merges a fix only after that check passes.")
     if result.get("merged"):
-        notes.append("The change was merged automatically. Monitoring starts the next time your app deploys. Nothing else to configure.")
+        notes.append("The change was merged automatically. Monitoring starts the next time your app deploys and checks in every 30 seconds. "
+                     "Nothing else to configure.")
     else:
         notes.append(f"Merge <a href='{_escape(result['url'])}' target='_blank' rel='noopener'>this pull request</a> to turn monitoring on "
                      "(automatic merge was not possible, often because of branch protection). Nothing else to configure.")
@@ -2983,8 +3254,8 @@ def _page_install_monitoring(request, project_id):
     project = portal_db.get_project(project_id, request.session["user_id"])
     if not project:
         return _response("<h1>Project not found</h1>", request, "404 Not Found")
-    if project.get("install_pr_url") and project.get("ci_workflow") != "missing":
-        return _redirect(f"/projects/{project_id}")
+    if project.get("gate_state") == portal_db.GATE_WAITING:
+        return _redirect(f"/projects/{project_id}/make-private")
     back = f"<p><a class='button primary' href='/projects/{_escape(project_id)}'>Back to project</a></p>"
     try:
         token = _decrypt_token(project["github_token_ciphertext"])
@@ -2992,15 +3263,14 @@ def _page_install_monitoring(request, project_id):
     except RuntimeError as exc:
         return _response(f"<div class='alert'>{_escape(exc)}</div>{back}", request, "503 Service Unavailable")
     if not ingest_key:
-        return _response("<div class='alert'>This project has no stored connection key. Press <b>Rotate key</b> on the project page, then try again.</div>" + back,
-                         request, "409 Conflict")
+        ingest_key = _new_ingest_key()
+        portal_db.rotate_project_ingest_key(project_id, request.session["user_id"], hashlib.sha256(ingest_key.encode()).hexdigest(),
+                                            _encrypt_token(ingest_key))
     result = _install_monitoring(project_id, request.session["user_id"], project, token, ingest_key)
+    if result.get("public"):
+        return _redirect(f"/projects/{project_id}/make-private")
     status = "200 OK" if result.get("ok") else "502 Bad Gateway"
     return _response(_install_summary(result, project_id) + back, request, status)
-
-
-
-
 
 
 def _page_update_github_token(request, project_id):
@@ -3030,21 +3300,36 @@ def _page_update_github_token(request, project_id):
 
 
 def _page_rotate_ingest_key(request, project_id):
+    """Revoke the project's key and put a new one into the repository (private repos only) through the same install PR.
+    The customer never copies keys around."""
     gate = _require_access(request)
     if gate:
         return gate
     if request.method != "POST" or not _csrf_valid(request):
         return _response("<div class='alert'>Request expired or invalid.</div>", request, "403 Forbidden")
     user_id = request.session["user_id"]
-    if not portal_db.get_project(project_id, user_id):
+    project = portal_db.get_project(project_id, user_id)
+    if not project:
         return _response("<h1>Project not found</h1>", request, "404 Not Found")
-    key = secrets.token_urlsafe(32)
+    key = _new_ingest_key()
     key_hash = hashlib.sha256(key.encode("utf-8")).hexdigest()
     if not portal_db.rotate_project_ingest_key(project_id, user_id, key_hash, _encrypt_token(key)):
         return _response("<h1>Project not found</h1>", request, "404 Not Found")
     portal_db.audit(project_id, "ingest_key_rotated")
-    body = f"<section class='card form-card'><h1>New ingest key</h1><p class='muted'>The previous key is invalid now. Copy this value into your app environment; it will not be shown again.</p><div class='alert'><code>{_escape(key)}</code></div><a class='button primary' href='/projects/{_escape(project_id)}'>Back to project</a></section>"
-    return _response(body, request)
+    back = f"<p class='actions'><a class='button primary' href='/projects/{_escape(project_id)}'>Back to project</a></p>"
+    if project.get("gate_state") == portal_db.GATE_WAITING or (project.get("watch_mode") or "both") == "push":
+        return _response("<section class='card form-card'><h1>Key replaced</h1><p class='muted'>The old key no longer works. "
+                         "The new key is put into your code automatically when monitoring is installed.</p></section>" + back, request)
+    try:
+        token = _decrypt_token(project["github_token_ciphertext"])
+    except RuntimeError as exc:
+        return _response(f"<div class='alert'>{_escape(exc)}</div>{back}", request, "503 Service Unavailable")
+    result = _install_monitoring(project_id, user_id, project, token, key)
+    token = ""
+    if result.get("public"):
+        return _redirect(f"/projects/{project_id}/make-private")
+    return _response("<section class='card form-card'><h1>Key replaced</h1><p class='muted'>The old key no longer works. "
+                     "We put the new key into your code for you:</p></section>" + _install_summary(result, project_id) + back, request)
 
 
 def _page_delete_project(request, project_id):
@@ -3479,41 +3764,82 @@ def _json_response(payload: dict, status="200 OK"):
                      ("Cache-Control", "no-store"), ("X-Content-Type-Options", "nosniff")])
 
 
+_JS_FRAME = re.compile(r"(?:at\s+(?:[^\s(]+\s+\()?|@)(?:[a-z]+://[^/\s]+)?/?([^\s():]+\.(?:js|jsx|ts|tsx|mjs|cjs|vue|svelte)):(\d+)(?::\d+)?\)?")
+
+
+def _normalized(text: str) -> str:
+    """Request ids, timestamps and numbers differ between repeats of the same error: drop them before hashing."""
+    text = re.sub(r"[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}", "#", text, flags=re.I)
+    text = re.sub(r"\b(req|request|chatcmpl|msg|id)[_-][A-Za-z0-9]{6,}\b", "#", text)
+    return re.sub(r"\d+", "#", text)
+
+
 def _incident_signature(message: str, traceback: str, payload: dict) -> str:
+    try:   # the same retired AI model reported by several monitors (browser, server) is ONE incident and ONE fix
+        from fixengine import model_fix
+        found = model_fix.detect_error(message, traceback)
+        if found:
+            return f"{model_fix.RUNTIME_SIGNATURE}{found['model']}"[:250]
+    except Exception:
+        pass
+    context = payload.get("context") if isinstance(payload.get("context"), dict) else {}
+    if str(payload.get("exception_type", "")) == "HTTPError" and context.get("host"):
+        digest = hashlib.sha256(_normalized(message).encode("utf-8")).hexdigest()[:12]
+        return f"HTTPError:{str(context.get('host'))[:80]}:{context.get('status', '')}:{digest}"[:250]
     frames = re.findall(r'File "([^"\n]+)", line (\d+)', traceback)
     app_frames = [(path, line) for path, line in frames if "site-packages" not in path.replace("\\", "/")]
     error_type = str(payload.get("exception_type", "")).strip() or message.split(":", 1)[0].strip() or "Error"
     if app_frames:
         path, line = app_frames[-1]
         return f"{error_type}:{PurePosixPath(path.replace('\\', '/')).name}:{line}"[:250]
-    digest = hashlib.sha256(message.encode("utf-8")).hexdigest()[:16]
+    js = [(f, ln) for f, ln in _JS_FRAME.findall(traceback or "") if "node_modules" not in f and "incident-agent-monitor" not in f]
+    if js:                                     # JavaScript stacks list the failing frame first
+        path, line = js[0]
+        return f"{error_type}:{PurePosixPath(path).name}:{line}"[:250]
+    digest = hashlib.sha256(_normalized(message).encode("utf-8")).hexdigest()[:16]
     return f"{error_type}:unknown:{digest}"
 
 
 def _authorized_ingest_project(request: Request):
+    """Server monitors send the project key in X-Ingest-Key; browser monitors put it in the JSON body (no preflight)."""
     raw_key = request.environ.get("HTTP_X_INGEST_KEY", "").strip()
+    if not raw_key and isinstance(request.form, dict):
+        raw_key = str(request.form.get("ingest_key") or "").strip()
     if len(raw_key) < 24 or len(raw_key) > 256:
         return None
     key_hash = hashlib.sha256(raw_key.encode("utf-8")).hexdigest()
-    return portal_db.get_project_by_ingest_hash(key_hash)
+    project = portal_db.get_project_by_ingest_hash(key_hash)
+    claimed = str(request.form.get("project_id") or "") if isinstance(request.form, dict) else ""
+    if project and claimed and claimed != project["id"]:
+        return None                               # a key never speaks for another project
+    return project
+
+
+def _monitor_json(payload: dict, status="200 OK"):
+    response = _json_response(payload, status)
+    response.headers.extend(CORS_HEADERS)
+    return response
 
 
 def _page_ingest(request):
+    if request.method == "OPTIONS":
+        return _monitor_json({}, "204 No Content")
     if request.method != "POST" or not request.raw_body:
-        return _json_response({"error": "POST a JSON error event."}, "400 Bad Request")
-    if request.environ.get("CONTENT_TYPE", "").split(";", 1)[0].lower() != "application/json":
-        return _json_response({"error": "Content-Type must be application/json."}, "415 Unsupported Media Type")
+        return _monitor_json({"error": "POST a JSON error event."}, "400 Bad Request")
+    if request.environ.get("CONTENT_TYPE", "").split(";", 1)[0].lower() not in ("application/json", "text/plain"):
+        return _monitor_json({"error": "Content-Type must be application/json."}, "415 Unsupported Media Type")
     project = _authorized_ingest_project(request)
     if not project:
-        return _json_response({"error": "Invalid ingest key."}, "401 Unauthorized")
+        LOG.info("ingest rejected: invalid key from %s", request.remote)
+        return _monitor_json({"error": "Invalid ingest key."}, "401 Unauthorized")
     if project["paused"] or not portal_db.user_has_active_access(project["user_id"]):
-        return _json_response({"accepted": False, "reason": "access_not_active"}, "202 Accepted")
+        return _monitor_json({"accepted": False, "reason": "access_not_active"}, "202 Accepted")
     if not portal_db.allow_ingest(project["id"]):
-        return _json_response({"error": "Ingest rate limit exceeded."}, "429 Too Many Requests")
+        return _monitor_json({"error": "Ingest rate limit exceeded."}, "429 Too Many Requests")
     data = request.form
     message = data.get("message")
     if not isinstance(message, str) or not message.strip():
-        return _json_response({"error": "message is required."}, "400 Bad Request")
+        return _monitor_json({"error": "message is required."}, "400 Bad Request")
     message = message.strip()[:10000]
     traceback = data.get("traceback", "")
     if not isinstance(traceback, str):
@@ -3521,7 +3847,7 @@ def _page_ingest(request):
     traceback = traceback[:30000]
     level = str(data.get("level", "ERROR")).upper()
     if level not in {"DEBUG", "INFO", "WARNING", "ERROR", "CRITICAL"}:
-        return _json_response({"error": "level must be DEBUG, INFO, WARNING, ERROR, or CRITICAL."}, "400 Bad Request")
+        return _monitor_json({"error": "level must be DEBUG, INFO, WARNING, ERROR, or CRITICAL."}, "400 Bad Request")
     timestamp = str(data.get("timestamp") or data.get("ts") or "")
     try:
         parsed_timestamp = datetime.fromisoformat(timestamp.replace("Z", "+00:00"))
@@ -3530,26 +3856,48 @@ def _page_ingest(request):
         timestamp = parsed_timestamp.astimezone(timezone.utc).isoformat(timespec="seconds")
     except ValueError:
         timestamp = _now().isoformat(timespec="seconds")
+    context = data.get("context") if isinstance(data.get("context"), dict) else {}
+    where = " · ".join(str(x) for x in (data.get("monitor"), context.get("page") or context.get("url")) if x)
+    if where and where not in traceback:
+        traceback = (traceback + f"\n[reported by the {where}]").strip()[:30000]
     signature = _incident_signature(message, traceback, data)
     incident_id, inserted = portal_db.ingest_event(project["id"], timestamp=timestamp,
         level=level, message=message, traceback=traceback, signature=signature)
     portal_db.set_project_connected(project["id"])
-    return _json_response({"accepted": inserted, "duplicate": not inserted,
-                           "incident_id": incident_id}, "202 Accepted" if inserted else "200 OK")
+    LOG.info("ingest accepted for project %s (%s, inserted=%s)", project["id"], signature[:60], inserted)
+    return _monitor_json({"accepted": inserted, "duplicate": not inserted,
+                          "incident_id": incident_id}, "202 Accepted" if inserted else "200 OK")
+
+
+_BEAT_WRITES: dict[tuple, float] = {}
+HEARTBEAT_WRITE_MIN_SECONDS = 10      # many browser tabs: at most one database write per monitor every 10 s
 
 
 def _page_heartbeat(request):
+    """A monitor checks in (every 30 s). Recorded per monitor so the project page can say which part is alive.
+    Check-ins are recorded even when the plan is paused or ended, so 'is my monitor working?' always has an honest answer."""
+    if request.method == "OPTIONS":
+        return _monitor_json({}, "204 No Content")
     if request.method != "POST":
-        return _json_response({"error": "POST required."}, "405 Method Not Allowed")
+        return _monitor_json({"error": "POST required."}, "405 Method Not Allowed")
     project = _authorized_ingest_project(request)
     if not project:
-        return _json_response({"error": "Invalid ingest key."}, "401 Unauthorized")
-    if project["paused"] or not portal_db.user_has_active_access(project["user_id"]):
-        return _json_response({"status": "access_not_active"}, "403 Forbidden")
-    if not portal_db.allow_ingest(project["id"], maximum=60):
-        return _json_response({"error": "Heartbeat rate limit exceeded."}, "429 Too Many Requests")
-    portal_db.set_project_connected(project["id"])
-    return _json_response({"status": "connected"})
+        LOG.info("heartbeat rejected: invalid key from %s", request.remote)
+        return _monitor_json({"error": "Invalid ingest key."}, "401 Unauthorized")
+    data = request.form if isinstance(request.form, dict) else {}
+    monitor = str(data.get("monitor") or "python")[:20]
+    component = str(data.get("component") or "")[:80]
+    import time as _time
+    key = (project["id"], monitor, component)
+    now = _time.monotonic()
+    if now - _BEAT_WRITES.get(key, -1e9) >= HEARTBEAT_WRITE_MIN_SECONDS:
+        _BEAT_WRITES[key] = now
+        if len(_BEAT_WRITES) > 20000:
+            _BEAT_WRITES.clear()
+        portal_db.record_heartbeat(project["id"], monitor, component, str(data.get("version") or ""), str(data.get("runtime") or ""))
+    active = not project["paused"] and portal_db.user_has_active_access(project["user_id"])
+    return _monitor_json({"status": "connected", "interval": 30, "project_id": project["id"],
+                          "fixing": "on" if active else "paused_or_plan_ended"})
 
 
 def _razorpay_webhook(request):
@@ -3690,6 +4038,12 @@ def _dispatch(request: Request) -> Response:
     match = re.fullmatch(r"/projects/([0-9a-f-]{36})/install", request.path)
     if match:
         return _page_install_monitoring(request, match.group(1))
+    match = re.fullmatch(r"/projects/([0-9a-f-]{36})/make-private", request.path)
+    if match:
+        return _page_make_private(request, match.group(1))
+    match = re.fullmatch(r"/projects/([0-9a-f-]{36})/recheck-visibility", request.path)
+    if match:
+        return _page_recheck_visibility(request, match.group(1))
     match = re.fullmatch(r"/projects/([0-9a-f-]{36})/(check|webhook|watch)", request.path)
     if match:
         return _page_project_push_action(request, match.group(1), match.group(2))
@@ -3703,7 +4057,17 @@ def _dispatch(request: Request) -> Response:
     if match:
         return _page_incident(request, *match.groups())
     if request.path == "/health":
-        return Response(b"ok", "200 OK", [("Content-Type", "text/plain; charset=utf-8")])
+        if request.query.get("deep") == ["1"]:
+            try:
+                conn = portal_db.get_connection()
+                try:
+                    portal_db._execute(conn, "SELECT 1").fetchone()
+                finally:
+                    conn.close()
+                return _json_response({"ok": True, "database": portal_db.database_kind(), "worker_last_seen": portal_db.worker_last_seen() or ""})
+            except Exception as exc:
+                return _json_response({"ok": False, "database": "unreachable", "error": exc.__class__.__name__}, "503 Service Unavailable")
+        return Response(b"ok", "200 OK", [("Content-Type", "text/plain; charset=utf-8"), ("Cache-Control", "no-store")])
     return _response("<h1>Page not found</h1><p class='muted'>That route does not exist.</p>", request, "404 Not Found")
 
 
@@ -3720,6 +4084,10 @@ def application(environ, start_response):
         response = Response(_escape(exc), "400 Bad Request", [("Content-Type", "text/plain; charset=utf-8")])
     except RuntimeError as exc:
         response = Response(_escape(exc), "503 Service Unavailable", [("Content-Type", "text/plain; charset=utf-8"), ("Cache-Control", "no-store")])
+    except Exception:
+        LOG.exception("Unhandled error on %s %s", environ.get("REQUEST_METHOD"), environ.get("PATH_INFO"))
+        response = Response("Something went wrong on our side. Please try again in a minute.", "500 Internal Server Error",
+                            [("Content-Type", "text/plain; charset=utf-8"), ("Cache-Control", "no-store")])
     if os.getenv("APP_ENV", "development").lower() == "production":
         response.headers.extend([
             ("Strict-Transport-Security", "max-age=31536000; includeSubDomains"),

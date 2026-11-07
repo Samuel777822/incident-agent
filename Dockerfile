@@ -2,8 +2,9 @@
 FROM python:3.13-slim
 
 # CA certificates are needed for the GitHub and Groq HTTPS APIs.
+# Node.js is only used to PARSE-check JavaScript files the agent edits (node --check never runs customer code).
 RUN apt-get update && apt-get install -y --no-install-recommends \
-    ca-certificates \
+    ca-certificates nodejs \
     && rm -rf /var/lib/apt/lists/*
 
 WORKDIR /app

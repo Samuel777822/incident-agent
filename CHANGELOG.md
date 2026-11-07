@@ -1,5 +1,8 @@
 # Changelog
 
+## Monitoring v2 (7 November 2026)
+Monitors for every language with 30-second check-ins, "never checked in" / "offline" states, the public-repo gate, a first scan right after connecting, automatic fixes for retired AI models, and animated architecture diagrams. Full details: [CHANGES.md](CHANGES.md); release checks: [RELEASE_CHECKLIST.md](RELEASE_CHECKLIST.md).
+
 ## v3.1 (6 November 2026): explanations for customers, a course for admins
 
 No prices, model ids, quotas, budgets, protections, routing maths or database tables changed. Only how things are explained and shown.

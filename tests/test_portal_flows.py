@@ -483,7 +483,9 @@ def test_installer_patches_entry_file_embeds_key_and_merges(monkeypatch):
     assert set(files) == {"incident_agent_monitor.py", "incident_agent_config.json", "app.py", "INCIDENT_AGENT_SETUP.md",
                           mi.WORKFLOW_PATH}
     assert result["workflow_added"] is True and result["had_ci"] is False
-    assert json.loads(files["incident_agent_config.json"]) == {"ingest_url": "https://portal/ingest", "ingest_key": "secret-key"}
+    assert json.loads(files["incident_agent_config.json"]) == {"ingest_url": "https://portal/ingest", "heartbeat_url": "https://portal/heartbeat",
+                                                               "ingest_key": "secret-key", "project_id": "11111111-2222-3333-4444-555555555555",
+                                                               "component": "python:."}
     assert files["app.py"].split("\n")[:4] == ['"""Shop."""', "from __future__ import annotations", mi.IMPORT_LINE, "import flask"]
     assert result["merged"] and result["patched_file"] == "app.py" and result["embedded_key"] and calls["merged"]
 
@@ -616,7 +618,7 @@ def test_connecting_a_project_needs_no_work_from_the_customer(web_env, fernet_en
     user_id, csrf, cookie = make_session("c@example.com")
     portal_db.admin_grant_access(user_id, 30, "paid", "admin1@example.com")
     received = {}
-    monkeypatch.setattr(web_app, "validate_repository_access", lambda **kw: {"private": False, "default_branch": "master"})
+    monkeypatch.setattr(web_app, "validate_repository_access", lambda **kw: {"private": True, "default_branch": "master"})
     monkeypatch.setattr(web_app, "resolve_branch", lambda **kw: "master")
 
     def fake_open(**kw):
@@ -632,8 +634,8 @@ def test_connecting_a_project_needs_no_work_from_the_customer(web_env, fernet_en
     assert received["ingest_key"] and received["base_branch"] == "master"                  # key travels inside the install PR
     project = portal_db.list_projects(user_id)[0]
     assert project["branch"] == "master"
-    assert project["mode"] == "pr"                       # public repository: fixes are reviewed, never auto-merged
-    assert "pull requests for a person to review" in body
+    assert project["mode"] == "auto" and project["gate_state"] == "active"   # private repository: installed right away
+    assert received["require_private"] is True                               # the installer re-checks before writing
 
 
 def test_failed_install_explains_the_problem_and_adds_no_chores(web_env, fernet_env, monkeypatch):

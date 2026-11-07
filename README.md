@@ -19,8 +19,14 @@ Java (Maven, Gradle, plain `javac`) and plain HTML/CSS/JS sites, including repos
    downloaded into a fresh sandbox; every project inside the repo is installed, built (and type-checked), tested and started.
    The commit gets an `Agent Daemon / push check` status on GitHub. If it is red, an incident opens and the fix engine starts.
    If the webhook cannot be added, the worker polls the branch every few minutes instead.
-2. **Live error watch (classic).** A small reporter inside the running app (installed automatically for Python apps; any language
-   can POST to `/ingest`) sends crashes; they are grouped into incidents and go to the same fix engine.
+2. **Live error watch.** A small monitor inside the running app, installed automatically for every part of the repo (Python,
+   Node.js/TypeScript, web pages; mixed repos get one per part). It checks in every 30 seconds and reports crashes, unhandled
+   promise rejections, console errors and failed API calls (e.g. a retired AI model) to `/ingest`; the project page always shows
+   "Last check-in at …", "Never checked in" or "Monitor offline".
+
+**Public-repo gate.** Nothing is ever committed to a public repository. Connecting a public repo shows simple steps to make it
+private and an "I've made it private, install now" button; visibility is re-checked before every commit Agent Daemon makes.
+Right after connecting, the existing code is scanned once (no push needed), and retired AI model ids are fixed without AI tries.
 
 The fix engine: free first look → cost-aware router (expected-cost dynamic program) picks Normal / High / Extra → the model returns a
 small patch as text → policy check → **the same sandbox check must pass** → branch `agent-daemon/fix-…` + pull request → in Auto mode
@@ -33,12 +39,13 @@ it is merged once proven, so the fixed version is on GitHub. Everything is shown
 | `/` `/how-it-works` `/pricing` `/features` `/faq` `/help` | everyone | Product, the interactive diagram, how the agent chooses an AI (with a calculator), plans |
 | `/dashboard` | customer | Tries left per mode, "Agent right now" (live stage + mode + tries left), projects |
 | `/projects/new` | customer | Connect a repo (1 included, ₹30 per extra project) |
-| `/projects/<id>` | customer | Push checks (per stack), bugs and fixes, settings |
+| `/projects/<id>` | customer | Live monitor status (last check-in), push checks (per stack), bugs and fixes, settings |
+| `/projects/<id>/make-private` | customer | The public-repo screen: step-by-step instructions and the "install now" re-check |
 | `/usage` | customer | Tries per mode, Auto / Ask me / Economy, decisions, buy packs |
 | `/billing` | customer | Plans (30 Normal / 6 High / 3 Extra a month), add-ons, UPI payments |
 | `/admin` | admins | Customers, trials, UPI payments to confirm (plans, slots, packs), apps, incidents, tickets, email |
 | `/admin/fix` | admins | Spending at a glance, protections explained, approvals, mode switches, per-mode and per-customer spend, history |
-| `/admin/architecture` | admins | System + model-adapter architecture, a 10-lesson course on the router with live numbers, router simulator |
+| `/admin/architecture` | admins | Animated general + model-adapter architecture diagrams, a 10-lesson course on the router, router simulator |
 
 ## Plans
 
@@ -67,7 +74,8 @@ python portal_worker.py                                   # second terminal: che
 
 ```
 python -m pip install -r requirements-test.txt
-python -m pytest -q          # 328 tests, offline; Node / a JDK make a few extra language tests run
+python -m pytest -q          # 378 tests, offline; Node / a JDK / Playwright make a few extra tests run
+python scripts/simulate_monitoring.py   # monitors -> check-ins -> error -> fix PR, locally, in ~15 seconds
 ```
 
 ## Environment variables
@@ -84,6 +92,8 @@ See [DEPLOY.md](DEPLOY.md) for where each one goes. Most important:
 | `FIXENGINE_ENABLED` | `1` turns on the multi-language fix engine |
 | `FIXENGINE_SANDBOX_MODE=remote`, `FIXENGINE_SANDBOX_URL`, `FIXENGINE_SANDBOX_SECRET` | the sandbox server (Render cannot run Docker) |
 | `PUSH_CHECKS_ENABLED` (default `1`), `PUSH_POLL_SECONDS` (180), `PUSH_MAX_CHECKS_PER_HOUR` (12) | push guard |
+| `MONITOR_OFFLINE_SECONDS` (120), `MONITOR_FIRST_CHECKIN_GRACE_SECONDS` (1800), `VISIBILITY_CHECK_SECONDS` (600) | monitor status and the public-repo re-check |
+| `MODEL_REGISTRY_JSON`, `GROQ_MODEL`, `FIXENGINE_MODEL_<MODE>` | AI model ids and the retired-model list, without a code change |
 | `FIXENGINE_BUDGET_INR`, `FIXENGINE_CREDITS_INR` | global budget B and prepaid credits |
 | `PLAN_PRICE_MONTHLY_INR`, `PLAN_PRICE_YEARLY_INR`, `PROJECT_SLOT_PRICE_INR` | change prices without a code change |
 | `UPI_ID`, `UPI_PAYEE_NAME` | UPI recipient |

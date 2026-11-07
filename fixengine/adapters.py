@@ -221,7 +221,7 @@ class AnthropicAdapter(BaseAdapter):
 
 class GroqAdapter(BaseAdapter):
     URL = "https://api.groq.com/openai/v1/chat/completions"
-    FALLBACK = "openai/gpt-oss-20b"
+    FALLBACK = os.getenv("GROQ_FALLBACK_MODEL", "openai/gpt-oss-20b").strip() or "openai/gpt-oss-20b"
     provider = "groq"
 
     def __init__(self, tier, cfg, *, client=None, sleep=time.sleep):

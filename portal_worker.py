@@ -186,6 +186,56 @@ def _engine():
     return _ENGINE
 
 
+def _try_model_fix(incident: dict, event: dict) -> bool:
+    """Retired / unknown AI model: fixed deterministically (no AI tries). True when the incident was handled here."""
+    from fixengine import model_fix
+    runner = None
+    try:
+        ready, _why = push_watch.sandbox_ready()
+        if ready:
+            from fixengine import config as fx_config, sandbox
+            runner = sandbox.make_runner(fx_config.load())
+    except Exception:
+        runner = None
+    try:
+        outcome = model_fix.run(incident, event, runner=runner)
+    except Exception as exc:
+        LOG.exception("Model fix crashed on incident %s", incident["incident_id"])
+        portal_db.fail_diagnosis(incident["incident_id"], incident["project_id"], exc.__class__.__name__)
+        return True
+    if outcome is None:
+        if incident.get("source") == "scan":
+            portal_db.mark_remediation_needs_human(incident["incident_id"], incident["project_id"],
+                                                   "The scan finding could not be matched to a model name in the code.")
+            return True
+        return False
+    LOG.info("Model fix for incident %s: %s", incident["incident_id"], outcome)
+    return True
+
+
+def monitor_sweep() -> int:
+    """Tell owners (once) when a server-side monitor stopped checking in or never checked in. Never silent."""
+    import notifications
+    sent = 0
+    base = os.getenv("PORTAL_BASE_URL", "").strip().rstrip("/")
+    for project in portal_db.projects_needing_monitor_alert():
+        state = project["monitor"]
+        portal_db.set_monitor_alerted(project["id"])
+        portal_db.audit(project["id"], "monitor_" + state["state"], {"last_checkin": state.get("last_checkin", "")})
+        LOG.warning("Project %s monitor state: %s", project["id"], state["state"])
+        email = portal_db.get_user_email(project["user_id"])
+        if not email:
+            continue
+        notifications.notify_customer(
+            email, f"{project['name']}: {state['headline'].lower()}",
+            f"Agent Daemon has not heard from the monitor in {project['repo_owner']}/{project['repo_name']}.\n\n{state['detail']}\n\n"
+            "What to try, in order:\n1. Open your app in a browser to wake it up.\n2. If the monitoring pull request is still open on "
+            "GitHub, merge it and re-deploy.\n3. Re-deploy your app from your hosting dashboard.\n\n"
+            f"See the status on {base}/projects/{project['id']}", "monitor_offline")
+        sent += 1
+    return sent
+
+
 def process_one() -> bool:
     incident = portal_db.claim_next_incident(
         min_occurrences=int(os.getenv("WORKER_MIN_OCCURRENCES", "1")),
@@ -206,6 +256,8 @@ def process_one() -> bool:
         portal_db.set_incident_stage(incident_id, "diagnosing" if _engine() is None or incident.get("mode") not in ("pr", "auto") else "downloading")
     except Exception:
         pass
+    if _try_model_fix(incident, event):
+        return True
     if incident.get("mode") in ("pr", "auto") and _engine() is not None:
         try:
             outcome = _engine().handle_incident(incident)
@@ -262,6 +314,8 @@ def process_one() -> bool:
 def main() -> None:
     logging.basicConfig(level=os.getenv("LOG_LEVEL", "INFO").upper(),
                         format="%(asctime)s %(levelname)s %(name)s %(message)s")
+    import config_check
+    config_check.check("worker")
     portal_db.init_db()
     signal.signal(signal.SIGINT, _stop)
     if hasattr(signal, "SIGTERM"):
@@ -270,6 +324,8 @@ def main() -> None:
     LOG.info("Portal incident worker started")
     next_merge_poll = 0.0
     next_push_poll = 0.0
+    next_monitor_sweep = 0.0
+    next_visibility_sweep = 0.0
     while not _STOP:
         try:
             portal_db.touch_worker()
@@ -304,6 +360,21 @@ def main() -> None:
             except Exception:
                 LOG.exception("Push poll failed")
             next_push_poll = now + max(60, int(os.getenv("PUSH_POLL_SECONDS", "180")))
+        if now >= next_monitor_sweep and not _STOP:
+            try:
+                monitor_sweep()
+            except Exception:
+                LOG.exception("Monitor check-in sweep failed")
+            next_monitor_sweep = now + 60
+        if now >= next_visibility_sweep and not _STOP:
+            try:
+                import repo_guard
+                flagged = repo_guard.sweep_visibility()
+                if flagged:
+                    LOG.warning("%s repository(ies) became public: installs and fixes paused", flagged)
+            except Exception:
+                LOG.exception("Repository visibility sweep failed")
+            next_visibility_sweep = now + max(300, int(os.getenv("VISIBILITY_CHECK_SECONDS", "600")))
         if not worked and not _STOP:
             time.sleep(min(poll_seconds, 5))
     LOG.info("Portal diagnosis worker stopped")

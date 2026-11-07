@@ -105,6 +105,8 @@ def open_pr(project: dict, *, bug_id: str, incident_id: str, new_files: dict[str
     """Open one PR changing several files. Idempotent: a retry reuses the same branch and PR."""
     owner, repo, base = _validate(project)
     token = _token(project.get("github_token_ciphertext", ""))
+    import repo_guard
+    repo_guard.ensure_private(project, token, action="fix pull request")   # public repo: PublicRepoError, nothing is written
     api = f"https://api.github.com/repos/{quote(owner, safe='')}/{quote(repo, safe='')}"
     branch = f"agent-daemon/fix-{bug_id[:14]}"
     call = portal_remediation._api

@@ -129,6 +129,11 @@ def load() -> dict:
                 continue
             if isinstance(data, dict):
                 _merge(cfg, data)
+    # Model ids without a code change (a retired model is then a config change, not a deploy).
+    for tier in TIERS:
+        value = os.getenv(f"FIXENGINE_MODEL_{tier.upper()}", "").strip()
+        if value:
+            cfg["models"][tier] = value
     # Simple env shortcuts for the numbers the founders change most.
     for env, path_ in (("FIXENGINE_BUDGET_INR", ("budget", "b_inr")),
                        ("FIXENGINE_CREDITS_INR", ("budget", "credits_inr")),

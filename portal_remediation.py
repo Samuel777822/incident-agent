@@ -58,6 +58,13 @@ def submit_fix_pr(project: dict, incident: dict, diagnosis: dict,
             and diagnosis.get("still_present_in_current_code") == "yes"
             and diagnosis.get("safe_to_auto_fix") is True):
         raise RemediationError("Diagnosis did not meet automatic-fix safety checks")
+    import repo_guard
+    try:
+        repo_guard.ensure_private(project, action="fix pull request")
+    except repo_guard.PublicRepoError:
+        raise RemediationError("The repository is public, so no fix was pushed. Make it private and the agent continues.") from None
+    except repo_guard.GitHubInstallError as exc:
+        raise RemediationError(str(exc)[:200]) from None
     if not source_files:
         raise RemediationError("No eligible Python files were available for a safe patch")
 
@@ -180,6 +187,14 @@ def process_auto_merges() -> int:
                     continue
                 head_sha = str(pr.get("head", {}).get("sha", ""))
                 if not head_sha:
+                    continue
+                import repo_guard
+                try:   # merging is a commit too: never into a repository that became public
+                    repo_guard.ensure_private({"id": incident["project_id"], "user_id": incident.get("user_id", ""),
+                                               "repo_owner": incident["repo_owner"], "repo_name": incident["repo_name"],
+                                               "github_token_ciphertext": incident.get("github_token_ciphertext", "")},
+                                              token, action="auto-merge")
+                except repo_guard.PublicRepoError:
                     continue
                 status = _check_status(client, api, head_sha)
                 LOG.info("Auto-merge: PR #%s check status is %s", number, status)

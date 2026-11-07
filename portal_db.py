@@ -12,7 +12,6 @@ import os
 import sqlite3
 import uuid
 from datetime import datetime, timedelta, timezone
-from pathlib import Path
 import re
 
 import plans
@@ -272,6 +271,18 @@ CREATE TABLE IF NOT EXISTS push_checks (
 CREATE INDEX IF NOT EXISTS idx_push_checks_ready ON push_checks(status, available_at);
 CREATE INDEX IF NOT EXISTS idx_push_checks_project ON push_checks(project_id, created_at);
 
+CREATE TABLE IF NOT EXISTS monitor_heartbeats (
+  project_id TEXT NOT NULL REFERENCES projects(id) ON DELETE CASCADE,
+  monitor TEXT NOT NULL,
+  component TEXT NOT NULL DEFAULT '',
+  first_seen TEXT NOT NULL,
+  last_seen TEXT NOT NULL,
+  beats INTEGER NOT NULL DEFAULT 0,
+  version TEXT NOT NULL DEFAULT '',
+  runtime TEXT NOT NULL DEFAULT '',
+  PRIMARY KEY (project_id, monitor, component)
+);
+
 """
 
 
@@ -363,6 +374,14 @@ def init_db() -> None:
             ("incidents", "stage_detail", "TEXT NOT NULL DEFAULT ''"),
             ("incidents", "stage_tier", "TEXT NOT NULL DEFAULT ''"),
             ("incidents", "stage_at", "TEXT NOT NULL DEFAULT ''"),
+            # Monitoring v2: public-repo gate, multi-language monitors, check-in tracking, initial scan.
+            ("projects", "gate_state", "TEXT NOT NULL DEFAULT ''"),
+            ("projects", "gate_checked_at", "TEXT NOT NULL DEFAULT ''"),
+            ("projects", "gate_notified_at", "TEXT NOT NULL DEFAULT ''"),
+            ("projects", "monitor_targets_json", "TEXT NOT NULL DEFAULT '[]'"),
+            ("projects", "monitor_installed_at", "TEXT NOT NULL DEFAULT ''"),
+            ("projects", "monitor_alerted_at", "TEXT NOT NULL DEFAULT ''"),
+            ("push_checks", "static_done", "INTEGER NOT NULL DEFAULT 0"),
         ]
         for table, column, ddl in additions:
             if isinstance(conn, sqlite3.Connection):
@@ -545,7 +564,7 @@ def check_login_rate_limit(key: str, maximum: int = 8, window_seconds: int = 900
 def create_project(user_id: str, *, name: str, repo_owner: str, repo_name: str,
                    branch: str, mode: str, token_ciphertext: str, ingest_key_hash: str,
                    app_url: str = "", ai_consent_at: str = "", ingest_key_ciphertext: str = "",
-                   watch_mode: str = "both", enforce_slots: bool = False) -> str:
+                   watch_mode: str = "both", enforce_slots: bool = False, gate_state: str = "") -> str:
     """enforce_slots: refuse (ValueError) when the account already uses every project slot it has (1 + paid extra slots).
     Checked inside the same connection as the insert so two quick submissions cannot both slip through."""
     if watch_mode not in WATCH_MODES:
@@ -563,10 +582,11 @@ def create_project(user_id: str, *, name: str, repo_owner: str, repo_name: str,
         active_until = subscription["active_until"] if subscription else None
         _execute(conn, """INSERT INTO projects
           (id,user_id,name,repo_owner,repo_name,branch,mode,github_token_ciphertext,
-           ingest_key_hash,app_url,active_until,created_at,ai_consent_at,ingest_key_ciphertext,watch_mode)
-          VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)""",
+           ingest_key_hash,app_url,active_until,created_at,ai_consent_at,ingest_key_ciphertext,watch_mode,gate_state,gate_checked_at)
+          VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)""",
           (project_id,user_id,name,repo_owner,repo_name,branch,mode,token_ciphertext,
-           ingest_key_hash,app_url,active_until,_now(),ai_consent_at,ingest_key_ciphertext,watch_mode))
+           ingest_key_hash,app_url,active_until,_now(),ai_consent_at,ingest_key_ciphertext,watch_mode,gate_state,
+           _now() if gate_state else ""))
         conn.commit()
         return project_id
     finally:
@@ -598,7 +618,7 @@ def list_projects(user_id: str):
 def get_project_by_ingest_hash(key_hash: str):
     conn = get_connection()
     try:
-        row = _execute(conn, "SELECT id,user_id,name,repo_owner,repo_name,branch,mode,status,paused FROM projects WHERE ingest_key_hash=?", (key_hash,)).fetchone()
+        row = _execute(conn, "SELECT id,user_id,name,repo_owner,repo_name,branch,mode,status,paused,gate_state FROM projects WHERE ingest_key_hash=?", (key_hash,)).fetchone()
         return dict(row) if row else None
     finally:
         conn.close()
@@ -898,7 +918,7 @@ def record_remediation(incident_id: str, project_id: str, *, branch: str, file_p
         _execute(conn, """UPDATE incidents SET status='pr_opened',pr_url=?,pr_number=?,ci_status=?,
                           report=COALESCE(report,'') || ? WHERE id=? AND project_id=?""",
                  (pr_url, pr_number, ci_status,
-                  "\\n\\nFix pull request opened: " + pr_url + ". Customer code and tests were not run.",
+                  "\n\nFix pull request opened: " + pr_url + ".",
                   incident_id, project_id))
         _execute(conn, "INSERT INTO audit_log(id,project_id,action,detail,created_at) VALUES(?,?,?,?,?)",
                  (_id(), project_id, "fix_pr_opened", json.dumps({"incident_id":incident_id,"pr_url":pr_url},sort_keys=True), now))
@@ -914,10 +934,10 @@ def mark_remediation_needs_human(incident_id: str, project_id: str, reason: str)
     """Keep diagnosis available while recording that no safe PR was created."""
     conn = get_connection()
     now = _now()
-    safe_reason = str(reason).replace("\\n", " ")[:400]
+    safe_reason = str(reason).replace("\n", " ")[:400]
     try:
         _execute(conn, "UPDATE incidents SET status='needs_human',report=COALESCE(report,'') || ? WHERE id=? AND project_id=?",
-                 ("\\n\\nNo fix PR was created: " + safe_reason, incident_id, project_id))
+                 ("\n\nNo fix PR was created: " + safe_reason, incident_id, project_id))
         _execute(conn, "INSERT INTO audit_log(id,project_id,action,detail,created_at) VALUES(?,?,?,?,?)",
                  (_id(), project_id, "fix_pr_not_created", json.dumps({"incident_id":incident_id,"reason":safe_reason},sort_keys=True), now))
         conn.commit()
@@ -1475,8 +1495,7 @@ def recent_activity(user_id: str, limit: int = 8) -> list[dict]:
 def admin_projects() -> list[dict]:
     conn = get_connection()
     try:
-        rows = _execute(conn, """SELECT p.id,p.name,p.repo_owner,p.repo_name,p.status,p.paused,p.mode,
-            p.last_heartbeat_at,p.active_until,u.email AS owner_email,
+        rows = _execute(conn, """SELECT p.*,u.email AS owner_email,
             (SELECT COUNT(*) FROM incidents i WHERE i.project_id=p.id AND i.status<>'resolved') AS open_incidents
             FROM projects p JOIN users u ON u.id=p.user_id ORDER BY p.created_at DESC""").fetchall()
         return [dict(row) for row in rows]
@@ -1903,7 +1922,7 @@ def claim_next_push_check(lease_seconds: int = 900, max_attempts: int = 6):
             JOIN projects p ON p.id=c.project_id
             JOIN subscriptions s ON s.user_id=p.user_id
             WHERE ((c.status='queued' AND c.available_at<=?) OR (c.status='running' AND c.locked_until<?))
-              AND c.attempts<? AND p.paused=0 AND s.active_until>?
+              AND c.attempts<? AND p.paused=0 AND s.active_until>? AND p.gate_state<>'waiting_private'
             ORDER BY c.available_at ASC LIMIT 1{lock}""", (now_s, now_s, max_attempts, now_s)).fetchone()
         if not row:
             conn.rollback()
@@ -1913,7 +1932,7 @@ def claim_next_push_check(lease_seconds: int = 900, max_attempts: int = 6):
                  (lease, now_s, row["id"]))
         conn.commit()
         claimed = _execute(conn, """SELECT c.*, p.name AS project_name, p.repo_owner, p.repo_name, p.branch AS project_branch,
-                p.mode, p.github_token_ciphertext, p.watch_mode FROM push_checks c JOIN projects p ON p.id=c.project_id
+                p.mode, p.github_token_ciphertext, p.watch_mode, p.gate_state FROM push_checks c JOIN projects p ON p.id=c.project_id
                 WHERE c.id=?""", (row["id"],)).fetchone()
         return dict(claimed) if claimed else None
     except Exception:
@@ -1988,7 +2007,8 @@ def projects_to_poll() -> list[dict]:
     conn = get_connection()
     try:
         rows = _execute(conn, """SELECT p.* FROM projects p JOIN subscriptions s ON s.user_id=p.user_id
-                                 WHERE p.paused=0 AND s.active_until>? AND p.watch_mode IN ('push','both')""", (now_s,)).fetchall()
+                                 WHERE p.paused=0 AND s.active_until>? AND p.watch_mode IN ('push','both')
+                                   AND p.gate_state<>'waiting_private'""", (now_s,)).fetchall()
         return [dict(r) for r in rows]
     finally:
         conn.close()
@@ -2091,5 +2111,235 @@ def resolve_push_incidents(project_id: str, note: str) -> int:
             _execute(conn, "UPDATE incident_jobs SET status='done',locked_until=NULL,updated_at=? WHERE incident_id=?", (now, r["id"]))
         conn.commit()
         return len(rows)
+    finally:
+        conn.close()
+
+
+# ============================================================================================================
+# Monitoring v2: public-repo gate, multi-language monitors and check-in (heartbeat) tracking.
+# ============================================================================================================
+GATE_WAITING = "waiting_private"   # repository is public: nothing is committed until it is private
+GATE_ACTIVE = "active"             # repository verified private: monitor installed / fixes allowed
+MONITOR_OFFLINE_SECONDS = int(os.getenv("MONITOR_OFFLINE_SECONDS", "120") or 120)       # 4 missed 30-second check-ins
+MONITOR_FIRST_CHECKIN_GRACE_SECONDS = int(os.getenv("MONITOR_FIRST_CHECKIN_GRACE_SECONDS", "1800") or 1800)
+
+
+def set_gate_state(project_id: str, state: str, *, notified: bool = False) -> None:
+    conn = get_connection()
+    try:
+        now = _now()
+        if notified:
+            _execute(conn, "UPDATE projects SET gate_state=?,gate_checked_at=?,gate_notified_at=? WHERE id=?", (state, now, now, project_id))
+        else:
+            _execute(conn, "UPDATE projects SET gate_state=?,gate_checked_at=? WHERE id=?", (state, now, project_id))
+        conn.commit()
+    finally:
+        conn.close()
+
+
+def record_monitor_install(project_id: str, targets: list, *, installed: bool) -> None:
+    """Remember which monitors were put into the repo (shown on the project page) and when."""
+    conn = get_connection()
+    try:
+        if installed:
+            _execute(conn, "UPDATE projects SET monitor_targets_json=?,monitor_installed_at=? WHERE id=?",
+                     (json.dumps(targets or [])[:20000], _now(), project_id))
+        else:
+            _execute(conn, "UPDATE projects SET monitor_targets_json=? WHERE id=?", (json.dumps(targets or [])[:20000], project_id))
+        conn.commit()
+    finally:
+        conn.close()
+
+
+def record_heartbeat(project_id: str, monitor: str, component: str = "", version: str = "", runtime: str = "") -> None:
+    """One check-in from one monitor (python / node / browser) of one part of the repo."""
+    monitor = (monitor or "unknown")[:20]
+    component = (component or "")[:80]
+    now = _now()
+    conn = get_connection()
+    try:
+        _execute(conn, """INSERT INTO monitor_heartbeats(project_id,monitor,component,first_seen,last_seen,beats,version,runtime)
+                          VALUES(?,?,?,?,?,1,?,?) ON CONFLICT(project_id,monitor,component) DO UPDATE SET
+                          last_seen=excluded.last_seen,beats=monitor_heartbeats.beats+1,version=excluded.version,runtime=excluded.runtime""",
+                 (project_id, monitor, component, now, now, version[:20], runtime[:40]))
+        _execute(conn, "UPDATE projects SET status='connected',last_heartbeat_at=?,monitor_alerted_at='' WHERE id=?", (now, project_id))
+        conn.commit()
+    finally:
+        conn.close()
+
+
+def list_monitor_heartbeats(project_id: str) -> list[dict]:
+    conn = get_connection()
+    try:
+        rows = _execute(conn, "SELECT * FROM monitor_heartbeats WHERE project_id=? ORDER BY monitor, component", (project_id,)).fetchall()
+        return [dict(r) for r in rows]
+    finally:
+        conn.close()
+
+
+def _age_seconds(value: str) -> float | None:
+    if not value:
+        return None
+    try:
+        stamp = datetime.fromisoformat(str(value).replace("Z", "+00:00"))
+    except ValueError:
+        return None
+    if stamp.tzinfo is None:
+        stamp = stamp.replace(tzinfo=timezone.utc)
+    return (datetime.now(timezone.utc) - stamp).total_seconds()
+
+
+def monitor_state(project: dict, beats: list[dict] | None = None) -> dict:
+    """Plain-language monitor status for one project. Never silent: 'never checked in' and 'offline' are states too.
+
+    Returns {state, tone, headline, detail, last_checkin, server_side}. States:
+      waiting_private | not_installed | install_failed | waiting_first | never_checked_in | online | offline | idle_browser | push_only
+    """
+    watch = project.get("watch_mode") or "both"
+    if project.get("gate_state") == GATE_WAITING:
+        return {"state": "waiting_private", "tone": "amber", "headline": "Waiting for private repo",
+                "detail": "Make the repository private to finish setup. Nothing has been installed yet.", "last_checkin": "", "server_side": False}
+    if watch == "push":
+        return {"state": "push_only", "tone": "", "headline": "Live monitor off (push checks only)", "detail": "", "last_checkin": "",
+                "server_side": False}
+    beats = beats if beats is not None else list_monitor_heartbeats(project["id"])
+    try:
+        targets = json.loads(project.get("monitor_targets_json") or "[]")
+    except ValueError:
+        targets = []
+    server_kinds = {t.get("kind") for t in targets if t.get("wired")} - {"browser"}
+    last = project.get("last_heartbeat_at") or max((b["last_seen"] for b in beats), default="")
+    age = _age_seconds(last)
+    installed_age = _age_seconds(project.get("monitor_installed_at") or "")
+    server_beats = [b for b in beats if b["monitor"] != "browser"]
+    if age is None:
+        if not project.get("monitor_installed_at") and not project.get("install_pr_url"):
+            return {"state": "not_installed", "tone": "amber", "headline": "Monitor not installed",
+                    "detail": "Press Install monitoring below.", "last_checkin": "", "server_side": bool(server_kinds)}
+        if installed_age is not None and installed_age > MONITOR_FIRST_CHECKIN_GRACE_SECONDS:
+            return {"state": "never_checked_in", "tone": "red", "headline": "Never checked in",
+                    "detail": "The monitor was installed but has not checked in once. Usually the app has not been re-deployed since "
+                              "the monitoring pull request was merged, or the pull request is still open.",
+                    "last_checkin": "", "server_side": bool(server_kinds)}
+        return {"state": "waiting_first", "tone": "amber", "headline": "Waiting for the first check-in",
+                "detail": "Merge the monitoring pull request (if it is still open) and re-deploy your app. The first check-in "
+                          "arrives within 30 seconds of the app starting.", "last_checkin": "", "server_side": bool(server_kinds)}
+    if age <= MONITOR_OFFLINE_SECONDS:
+        return {"state": "online", "tone": "green", "headline": "Live", "detail": "", "last_checkin": last, "server_side": bool(server_kinds)}
+    if not server_kinds and not server_beats:
+        return {"state": "idle_browser", "tone": "", "headline": "No visitors right now",
+                "detail": "Your site is only watched while someone has it open in a browser. It checks in again with the next visitor.",
+                "last_checkin": last, "server_side": False}
+    return {"state": "offline", "tone": "red", "headline": "Monitor offline",
+            "detail": "No check-in for a while. Your app may be down, asleep (free hosting sleeps after ~15 minutes), or was "
+                      "re-deployed without the monitor.", "last_checkin": last, "server_side": True}
+
+
+def projects_needing_monitor_alert() -> list[dict]:
+    """Projects whose server-side monitor went offline (or never checked in) and whose owner was not told yet."""
+    now_s = _now()
+    conn = get_connection()
+    try:
+        rows = _execute(conn, """SELECT p.* FROM projects p JOIN subscriptions s ON s.user_id=p.user_id
+            WHERE p.paused=0 AND s.active_until>? AND p.watch_mode IN ('runtime','both') AND p.gate_state<>'waiting_private'
+              AND p.monitor_installed_at<>'' AND p.monitor_alerted_at=''""", (now_s,)).fetchall()
+        projects = [dict(r) for r in rows]
+    finally:
+        conn.close()
+    out = []
+    for p in projects:
+        state = monitor_state(p)
+        if state["state"] in ("offline", "never_checked_in") and state["server_side"]:
+            out.append({**p, "monitor": state})
+    return out
+
+
+def set_monitor_alerted(project_id: str) -> None:
+    conn = get_connection()
+    try:
+        _execute(conn, "UPDATE projects SET monitor_alerted_at=? WHERE id=?", (_now(), project_id))
+        conn.commit()
+    finally:
+        conn.close()
+
+
+def projects_for_visibility_check(min_age_seconds: int = 1800) -> list[dict]:
+    """Active (installed) projects whose repository visibility was not re-checked recently."""
+    cutoff = (datetime.now(timezone.utc) - timedelta(seconds=min_age_seconds)).isoformat(timespec="seconds")
+    now_s = _now()
+    conn = get_connection()
+    try:
+        rows = _execute(conn, """SELECT p.* FROM projects p JOIN subscriptions s ON s.user_id=p.user_id
+            WHERE p.paused=0 AND s.active_until>? AND p.gate_state<>'waiting_private' AND p.gate_checked_at<?""",
+                        (now_s, cutoff)).fetchall()
+        return [dict(r) for r in rows]
+    finally:
+        conn.close()
+
+
+def projects_waiting_private(user_id: str) -> list[dict]:
+    conn = get_connection()
+    try:
+        rows = _execute(conn, "SELECT * FROM projects WHERE user_id=? AND gate_state='waiting_private' ORDER BY created_at",
+                        (user_id,)).fetchall()
+        return [dict(r) for r in rows]
+    finally:
+        conn.close()
+
+
+def mark_static_done(check_id: str) -> None:
+    conn = get_connection()
+    try:
+        _execute(conn, "UPDATE push_checks SET static_done=1 WHERE id=?", (check_id,))
+        conn.commit()
+    finally:
+        conn.close()
+
+
+def resolve_scan_incidents(project_id: str, keep_signatures: set[str], note: str) -> int:
+    """Close scan findings (retired AI models) that the newest scan no longer finds."""
+    now = _now()
+    conn = get_connection()
+    try:
+        rows = _execute(conn, """SELECT id,signature FROM incidents WHERE project_id=? AND source='scan'
+            AND status NOT IN ('resolved','reverted','pr_opened')""", (project_id,)).fetchall()
+        closed = 0
+        for r in rows:
+            if r["signature"] in keep_signatures:
+                continue
+            _execute(conn, "UPDATE incidents SET status='resolved',resolved_at=?,stage='resolved',stage_detail=?,stage_at=? WHERE id=?",
+                     (now, note[:300], now, r["id"]))
+            _execute(conn, "UPDATE incident_jobs SET status='done',locked_until=NULL,updated_at=? WHERE incident_id=?", (now, r["id"]))
+            closed += 1
+        conn.commit()
+        return closed
+    finally:
+        conn.close()
+
+
+def park_incident_for_gate(incident_id: str, project_id: str, delay_seconds: int = 1800) -> None:
+    """The repository is public: keep the incident, try again later (after the owner makes the repo private)."""
+    when = (datetime.now(timezone.utc) + timedelta(seconds=delay_seconds)).isoformat(timespec="seconds")
+    conn = get_connection()
+    try:
+        _execute(conn, "UPDATE incidents SET status='queued',stage='waiting_private',stage_detail=?,stage_at=? WHERE id=? AND project_id=?",
+                 ("Your repository is public, so the fix was not pushed. Make it private and it continues.", _now(), incident_id, project_id))
+        _execute(conn, """UPDATE incident_jobs SET status='queued',available_at=?,locked_until=NULL,
+                          attempts=CASE WHEN attempts>0 THEN attempts-1 ELSE 0 END,updated_at=? WHERE incident_id=?""",
+                 (when, _now(), incident_id))
+        conn.commit()
+    finally:
+        conn.close()
+
+
+def unpark_gate_incidents(project_id: str) -> int:
+    conn = get_connection()
+    try:
+        cur = _execute(conn, """UPDATE incident_jobs SET available_at=?,updated_at=? WHERE incident_id IN
+            (SELECT id FROM incidents WHERE project_id=? AND stage='waiting_private')""", (_now(), _now(), project_id))
+        _execute(conn, "UPDATE incidents SET stage='queued',stage_detail='the repository is private again: continuing' WHERE project_id=? AND stage='waiting_private'",
+                 (project_id,))
+        conn.commit()
+        return cur.rowcount or 0
     finally:
         conn.close()

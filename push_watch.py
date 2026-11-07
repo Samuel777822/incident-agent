@@ -255,15 +255,27 @@ def run_check(check: dict, *, runner=None, snapshot=None, cfg: dict | None = Non
                "repo_owner": check["repo_owner"], "repo_name": check["repo_name"], "branch": check["sha"],
                "github_token_ciphertext": check["github_token_ciphertext"], "name": check.get("project_name", "")}
     ready, why = sandbox_ready(cfg) if runner is None else (True, "")
+    snapshot = snapshot or (lambda p: repo_snapshot(p, cfg))
     if not ready:
+        if not check.get("static_done"):
+            # The code scan (retired AI models, ...) needs no sandbox: run it now, the sandbox part waits.
+            try:
+                with snapshot(project) as root:
+                    static_scan(check, root)
+            except Exception as exc:
+                LOG.info("Static scan of %s postponed: %s", check["sha"][:7], exc.__class__.__name__)
         portal_db.retry_push_check(check["id"], 900, why)
         portal_db.set_push_check_stage(check["id"], "waiting_sandbox", why)
         return "waiting"
     runner = runner or sandbox.make_runner(cfg)
-    snapshot = snapshot or (lambda p: repo_snapshot(p, cfg))
     portal_db.set_push_check_stage(check["id"], "downloading", f"commit {check['sha'][:7]}")
     try:
         with snapshot(project) as root:
+            if not check.get("static_done"):
+                try:
+                    static_scan(check, root)
+                except Exception:
+                    LOG.exception("Static scan of %s failed", check["sha"][:7])
             portal_db.set_push_check_stage(check["id"], "detecting")
             from fixengine import repo_context
             files = repo_context.scan_repo(root, max_files=int(cfg["sandbox"]["max_repo_files"]))["files"]
@@ -319,6 +331,33 @@ def run_check(check: dict, *, runner=None, snapshot=None, cfg: dict | None = Non
     return "failed"
 
 
+def static_scan(check: dict, root) -> list[dict]:
+    """The code scan that runs on the first check after connecting and on every push: finds AI model ids that the provider
+    has retired (the classic 'chatbot suddenly broken' bug that no build or test catches). Each finding becomes an incident
+    and goes through the same fix pipeline (fixengine/model_fix.py). Findings that are gone are closed."""
+    from fixengine import model_fix
+    files = model_fix.read_repo(root)
+    findings = model_fix.scan_files(files)
+    keep = set()
+    for f in findings:
+        sig = model_fix.scan_signature(f["model"])
+        keep.add(sig)
+        where = ", ".join(f["files"][:6])
+        message = (f"Your code uses the AI model {f['model']}, which the provider has retired (provider: {f['provider']}). "
+                   f"Requests to it fail. Found in: {where}")
+        incident_id, new = portal_db.ingest_event(check["project_id"], timestamp=portal_db._now(), level="ERROR", message=message[:2000],
+                                                  traceback=f"Scan of commit {check['sha']}: {where}", signature=sig)
+        if incident_id:
+            portal_db.mark_incident_source(incident_id, "scan", check["sha"])
+            portal_db.set_incident_stage(incident_id, "queued", f"retired AI model {f['model']}: a fix starts in a few seconds"
+                                         if check.get("mode") in ("pr", "auto") else "report-only project: explanation only")
+    portal_db.resolve_scan_incidents(check["project_id"], keep, f"commit {check['sha'][:7]} no longer uses a retired AI model")
+    portal_db.mark_static_done(check["id"])
+    if findings:
+        LOG.info("Scan of %s found %s retired model(s)", check["sha"][:7], len(findings))
+    return findings
+
+
 def _notify_owner(check: dict, summary: str, first: str, mode: str) -> None:
     import notifications
     email = portal_db.get_user_email(check["user_id"])
@@ -362,6 +401,8 @@ def handle_webhook(project_id: str, event: str, body: bytes, signature: str) -> 
         return 202, {"ok": True, "ignored": event}
     if project.get("watch_mode") not in ("push", "both") or project.get("paused"):
         return 202, {"ok": True, "ignored": "push checks are off for this project"}
+    if project.get("gate_state") == portal_db.GATE_WAITING:
+        return 202, {"ok": True, "ignored": "waiting for the repository to be made private"}
     try:
         payload = json.loads(body.decode("utf-8"))
     except (UnicodeDecodeError, ValueError):
