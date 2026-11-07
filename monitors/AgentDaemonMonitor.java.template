@@ -1,0 +1,83 @@
+__PACKAGE__import java.io.InputStream;
+import java.io.OutputStream;
+import java.io.PrintWriter;
+import java.io.StringWriter;
+import java.net.HttpURLConnection;
+import java.net.URL;
+import java.nio.charset.StandardCharsets;
+import java.time.Instant;
+import java.util.concurrent.Executors;
+import java.util.concurrent.ScheduledExecutorService;
+import java.util.concurrent.TimeUnit;
+
+/** Agent Daemon runtime monitor. This sets a default uncaught exception handler and sends heartbeats. */
+public final class AgentDaemonMonitor {
+    private static final String INGEST_URL = __INGEST_URL__;
+    private static final String HEARTBEAT_URL = __HEARTBEAT_URL__;
+    private static final String INGEST_KEY = __INGEST_KEY__;
+    private static final String PROJECT_ID = __PROJECT_ID__;
+    private static final String COMPONENT = __COMPONENT__;
+    private static final ScheduledExecutorService TIMER = Executors.newSingleThreadScheduledExecutor(r -> {
+        Thread thread = new Thread(r, "agent-daemon-heartbeat");
+        thread.setDaemon(true);
+        return thread;
+    });
+
+    private AgentDaemonMonitor() { }
+
+    public static void start() {
+        final Thread.UncaughtExceptionHandler previous = Thread.getDefaultUncaughtExceptionHandler();
+        Thread.setDefaultUncaughtExceptionHandler((thread, error) -> {
+            try {
+                StringWriter writer = new StringWriter();
+                error.printStackTrace(new PrintWriter(writer));
+                String message = error.getMessage() == null ? error.getClass().getName() : error.getMessage();
+                post(INGEST_URL, "{\"project_id\":" + quote(PROJECT_ID) + ",\"timestamp\":" + quote(Instant.now().toString())
+                    + ",\"level\":\"CRITICAL\",\"message\":" + quote(message) + ",\"traceback\":" + quote(writer.toString())
+                    + ",\"exception_type\":" + quote(error.getClass().getName()) + ",\"monitor\":\"java\",\"component\":"
+                    + quote(COMPONENT) + ",\"context\":{\"kind\":\"uncaught\",\"thread\":" + quote(thread.getName()) + "}}");
+            } catch (Throwable ignored) { }
+            if (previous != null) previous.uncaughtException(thread, error);
+            else error.printStackTrace(System.err);
+        });
+        TIMER.scheduleAtFixedRate(AgentDaemonMonitor::heartbeat, 0, 30, TimeUnit.SECONDS);
+    }
+
+    private static void heartbeat() {
+        try {
+            post(HEARTBEAT_URL, "{\"project_id\":" + quote(PROJECT_ID) + ",\"monitor\":\"java\",\"component\":"
+                + quote(COMPONENT) + ",\"version\":\"1.0.0\",\"runtime\":" + quote(System.getProperty("java.version", "")) + "}");
+        } catch (Throwable ignored) { }
+    }
+
+    private static void post(String target, String body) throws Exception {
+        HttpURLConnection connection = (HttpURLConnection) new URL(target).openConnection();
+        connection.setRequestMethod("POST");
+        connection.setConnectTimeout(3000);
+        connection.setReadTimeout(3000);
+        connection.setDoOutput(true);
+        connection.setRequestProperty("Content-Type", "application/json; charset=utf-8");
+        connection.setRequestProperty("X-Ingest-Key", INGEST_KEY);
+        byte[] bytes = body.getBytes(StandardCharsets.UTF_8);
+        connection.setFixedLengthStreamingMode(bytes.length);
+        try (OutputStream output = connection.getOutputStream()) { output.write(bytes); }
+        int status = connection.getResponseCode();
+        InputStream response = status >= 400 ? connection.getErrorStream() : connection.getInputStream();
+        if (response != null) try (InputStream input = response) { while (input.read() != -1) { } }
+        connection.disconnect();
+    }
+
+    private static String quote(String value) {
+        StringBuilder output = new StringBuilder("\"");
+        for (int i = 0; i < value.length(); i++) {
+            char c = value.charAt(i);
+            if (c == '\\' || c == '"') output.append('\\').append(c);
+            else if (c == '\n') output.append("\\n");
+            else if (c == '\r') output.append("\\r");
+            else if (c == '\t') output.append("\\t");
+            else if (c < 0x20) output.append(String.format("\\u%04x", (int)c));
+            else output.append(c);
+        }
+        return output.append('"').toString();
+    }
+}

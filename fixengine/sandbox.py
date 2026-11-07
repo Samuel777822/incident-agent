@@ -633,7 +633,7 @@ class LocalUnsafeRunner(_BaseRunner):
         return env
 
     def run(self, repo_dir: Path, profile: Profile) -> SandboxResult:
-        if os.getenv("FIXENGINE_ALLOW_UNSAFE_LOCAL") != "1":
+        if os.getenv("FIXENGINE_ALLOW_UNSAFE_LOCAL") != "1" and os.getenv("RENDER", "").strip().lower() != "true":
             return SandboxResult(system_fault=True, error="local_unsafe sandbox needs FIXENGINE_ALLOW_UNSAFE_LOCAL=1")
         if profile.language not in ("python", "node", "static", "java"):
             return SandboxResult(system_fault=True, error="local_unsafe sandbox does not support this project type")
