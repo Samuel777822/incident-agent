@@ -1,4 +1,7 @@
-"""End-to-end checks for the customer, admin, trial, payment and email flows."""
+"""End-to-end checks for the customer, admin, trial, payment and email flows.
+
+All identities and contact/payment values below are synthetic test placeholders; do not use real customer data.
+"""
 import hashlib
 import hmac
 import json
@@ -19,6 +22,11 @@ import web_app
 from test_web_app import _request, web_env  # noqa: F401  (web_env is a fixture)
 
 ROOT = Path(__file__).resolve().parent.parent
+
+
+@pytest.fixture(autouse=True)
+def _synthetic_test_admins(monkeypatch, web_env):
+    monkeypatch.setenv("ADMIN_EMAILS", "test-admin-01@example.invalid,test-admin-02@example.invalid")
 
 
 def make_session(email):
@@ -58,14 +66,14 @@ def days_left(until):
 # --- navigation: every page has its own job ---------------------------------
 
 def test_inactive_customer_sees_dashboard_not_a_redirect(web_env):
-    _, _, cookie = make_session("c@example.com")
+    _, _, cookie = make_session("test-user-06@example.invalid")
     status, _, body = _request("/dashboard", cookie=cookie)
     assert status == "200 OK"
     assert "Monitoring is off" in body and "Get access" in body
 
 
 def test_dashboard_and_plan_pages_are_different(web_env):
-    _, _, cookie = make_session("c@example.com")
+    _, _, cookie = make_session("test-user-06@example.invalid")
     _, _, dash = _request("/dashboard", cookie=cookie)
     _, _, bill = _request("/billing", cookie=cookie)
     assert "<h1>Your projects</h1>" in dash and "<h1>Plan &amp; billing</h1>" in bill
@@ -74,7 +82,7 @@ def test_dashboard_and_plan_pages_are_different(web_env):
 
 
 def test_admins_go_to_admin_not_customer_pages(web_env):
-    _, _, cookie = make_session("admin1@example.com")
+    _, _, cookie = make_session("test-admin-01@example.invalid")
     for path in ("/dashboard", "/billing"):
         status, headers, _ = _request(path, cookie=cookie)
         assert status == "303 See Other" and location(headers) == "/admin"
@@ -82,14 +90,14 @@ def test_admins_go_to_admin_not_customer_pages(web_env):
 
 def test_admin_email_cannot_be_registered_by_email_and_password(web_env):
     status, _, _ = _request("/signup", method="POST",
-                            form={"csrf": "x", "email": "admin1@example.com", "password": "a-long-test-password"})
+                            form={"csrf": "x", "email": "test-admin-01@example.invalid", "password": "a-long-test-password"})
     assert status == "303 See Other"
-    assert portal_db.get_user_by_email("admin1@example.com") is None
+    assert portal_db.get_user_by_email("test-admin-01@example.invalid") is None
 
 
 def test_admin_signs_in_with_google_even_if_an_old_account_exists(web_env):
-    old_id = portal_db.create_user("admin2@example.com", "old-hash")
-    user = portal_db.get_or_create_google_user("admin2@example.com", "google-sub-admin2", True)
+    old_id = portal_db.create_user("test-admin-02@example.invalid", "old-hash")
+    user = portal_db.get_or_create_google_user("test-admin-02@example.invalid", "google-sub-admin2", True)
     assert user["id"] == old_id
     assert web_app._is_admin(type("R", (), {"session": {"email": user["email"]}})())
 
@@ -97,8 +105,8 @@ def test_admin_signs_in_with_google_even_if_an_old_account_exists(web_env):
 # --- trial: one request, one decision, one use --------------------------------
 
 def test_trial_flow_end_to_end(web_env):
-    user_id, csrf, cookie = make_session("c@example.com")
-    _, admin_csrf, admin_cookie = make_session("admin1@example.com")
+    user_id, csrf, cookie = make_session("test-user-06@example.invalid")
+    _, admin_csrf, admin_cookie = make_session("test-admin-01@example.invalid")
     status, _, body = post("/billing/trial-request", cookie, csrf)
     assert status == "200 OK" and "Request received" in body
     post("/billing/trial-request", cookie, csrf)  # double click
@@ -123,8 +131,8 @@ def test_trial_flow_end_to_end(web_env):
 
 
 def test_rejected_trial_can_be_requested_again(web_env):
-    user_id, csrf, cookie = make_session("c@example.com")
-    _, admin_csrf, admin_cookie = make_session("admin1@example.com")
+    user_id, csrf, cookie = make_session("test-user-06@example.invalid")
+    _, admin_csrf, admin_cookie = make_session("test-admin-01@example.invalid")
     post("/billing/trial-request", cookie, csrf)
     trial = portal_db.admin_list_trial_requests()[0]
     post("/admin", admin_cookie, admin_csrf, action="reject_trial", request_id=trial["id"])
@@ -134,8 +142,8 @@ def test_rejected_trial_can_be_requested_again(web_env):
 
 
 def test_double_approval_grants_one_day_only(web_env):
-    user_id, csrf, cookie = make_session("c@example.com")
-    _, admin_csrf, admin_cookie = make_session("admin1@example.com")
+    user_id, csrf, cookie = make_session("test-user-06@example.invalid")
+    _, admin_csrf, admin_cookie = make_session("test-admin-01@example.invalid")
     post("/billing/trial-request", cookie, csrf)
     trial = portal_db.admin_list_trial_requests()[0]
     first = post("/admin", admin_cookie, admin_csrf, action="approve_trial", request_id=trial["id"])
@@ -147,9 +155,9 @@ def test_double_approval_grants_one_day_only(web_env):
 # --- access state rules ---------------------------------------------------------
 
 def test_paid_plan_is_not_downgraded_by_a_later_trial(web_env):
-    user_id, *_ = make_session("c@example.com")
-    portal_db.admin_grant_access(user_id, 30, "paid", "admin1@example.com")
-    portal_db.admin_grant_access(user_id, 1, "trial", "admin1@example.com")
+    user_id, *_ = make_session("test-user-06@example.invalid")
+    portal_db.admin_grant_access(user_id, 30, "paid", "test-admin-01@example.invalid")
+    portal_db.admin_grant_access(user_id, 1, "trial", "test-admin-01@example.invalid")
     conn = portal_db.get_connection()
     row = portal_db._execute(conn, "SELECT grant_type FROM subscriptions WHERE user_id=?", (user_id,)).fetchone()
     conn.close()
@@ -158,16 +166,16 @@ def test_paid_plan_is_not_downgraded_by_a_later_trial(web_env):
 
 
 def test_revoke_pauses_projects_and_regrant_resumes_them(web_env):
-    user_id, *_ = make_session("c@example.com")
+    user_id, *_ = make_session("test-user-06@example.invalid")
     running, self_paused = new_project(user_id, "a" * 40), new_project(user_id, "b" * 40)
     conn = portal_db.get_connection()
     portal_db._execute(conn, "UPDATE projects SET paused=1 WHERE id=?", (self_paused,))
     conn.commit()
     conn.close()
-    portal_db.admin_grant_access(user_id, 30, "paid", "admin1@example.com")
+    portal_db.admin_grant_access(user_id, 30, "paid", "test-admin-01@example.invalid")
     portal_db.admin_revoke_access(user_id)
     assert portal_db.get_project(running, user_id)["paused"] == 2
-    portal_db.admin_grant_access(user_id, 30, "paid", "admin1@example.com")
+    portal_db.admin_grant_access(user_id, 30, "paid", "test-admin-01@example.invalid")
     assert portal_db.get_project(running, user_id)["paused"] == 0
     assert portal_db.get_project(self_paused, user_id)["paused"] == 1  # the customer's own pause is respected
 
@@ -175,35 +183,35 @@ def test_revoke_pauses_projects_and_regrant_resumes_them(web_env):
 # --- manual UPI (used until a payment gateway is configured) --------------------
 
 def test_manual_upi_page_has_inline_qr_and_fixed_amounts(web_env):
-    _, _, cookie = make_session("c@example.com")
+    _, _, cookie = make_session("test-user-06@example.invalid")
     status, headers, body = _request("/billing/pay?plan=monthly", cookie=cookie)
     assert status == "200 OK"
     assert "src='data:image/svg+xml" in body and "quickchart" not in body
-    assert "am=200.00" in body and "am=1500.00" not in body and "cu=INR" in body and "pa=7975291636@ptsbi" in body
+    assert "am=200.00" in body and "am=1500.00" not in body and "cu=INR" in body and "pa=" in body
     assert "img-src 'self' data:" in dict(headers)["Content-Security-Policy"]
     _, _, yearly = _request("/billing/pay?plan=yearly", cookie=cookie)
     assert "am=1500.00" in yearly and "am=200.00&" not in yearly
 
 
 def test_manual_payment_references_are_validated_and_unique(web_env):
-    _, csrf1, cookie1 = make_session("one@example.com")
-    _, csrf2, cookie2 = make_session("two@example.com")
+    _, csrf1, cookie1 = make_session("test-user-09@example.invalid")
+    _, csrf2, cookie2 = make_session("test-user-12@example.invalid")
     assert post("/billing/pay", cookie1, csrf1, plan="monthly", transaction_ref="123")[0] == "400 Bad Request"
     assert post("/billing/pay", cookie1, csrf1, plan="monthly", transaction_ref="not valid!!")[0] == "400 Bad Request"
-    assert post("/billing/pay", cookie1, csrf1, plan="monthly", transaction_ref="412345678901")[0] == "200 OK"
-    status, _, body = post("/billing/pay", cookie2, csrf2, plan="monthly", transaction_ref="4123 4567 8901")
+    assert post("/billing/pay", cookie1, csrf1, plan="monthly", transaction_ref="TESTREF000002")[0] == "200 OK"
+    status, _, body = post("/billing/pay", cookie2, csrf2, plan="monthly", transaction_ref="TESTREF000002")
     assert status == "400 Bad Request" and "already been submitted" in body
-    assert post("/billing/pay", cookie1, csrf1, plan="monthly", transaction_ref="412345678901")[0] == "200 OK"
+    assert post("/billing/pay", cookie1, csrf1, plan="monthly", transaction_ref="TESTREF000002")[0] == "200 OK"
     assert len(portal_db.admin_list_manual_payments()) == 1
-    for ref in ("500000000001", "500000000002"):
+    for ref in ("TESTREF000004", "TESTREF000005"):
         post("/billing/pay", cookie1, csrf1, plan="yearly", transaction_ref=ref)
-    status, _, body = post("/billing/pay", cookie1, csrf1, plan="yearly", transaction_ref="500000000003")
+    status, _, body = post("/billing/pay", cookie1, csrf1, plan="yearly", transaction_ref="TESTREF000006")
     assert status == "400 Bad Request" and "waiting for review" in body
 
 
 def test_admin_confirmation_grants_exactly_the_paid_plan(web_env):
-    _, admin_csrf, admin_cookie = make_session("admin1@example.com")
-    for email, plan, ref, expected in (("m@example.com", "monthly", "600000000001", 30), ("y@example.com", "yearly", "600000000002", 365)):
+    _, admin_csrf, admin_cookie = make_session("test-admin-01@example.invalid")
+    for email, plan, ref, expected in (("test-user-08@example.invalid", "monthly", "TESTREF000007", 30), ("test-user-13@example.invalid", "yearly", "TESTREF000008", 365)):
         user_id, csrf, cookie = make_session(email)
         post("/billing/pay", cookie, csrf, plan=plan, transaction_ref=ref)
         payment = next(p for p in portal_db.admin_list_manual_payments() if p["user_id"] == user_id)
@@ -216,9 +224,9 @@ def test_admin_confirmation_grants_exactly_the_paid_plan(web_env):
 
 
 def test_rejected_payment_grants_nothing(web_env):
-    user_id, csrf, cookie = make_session("c@example.com")
-    _, admin_csrf, admin_cookie = make_session("admin1@example.com")
-    post("/billing/pay", cookie, csrf, plan="monthly", transaction_ref="700000000001")
+    user_id, csrf, cookie = make_session("test-user-06@example.invalid")
+    _, admin_csrf, admin_cookie = make_session("test-admin-01@example.invalid")
+    post("/billing/pay", cookie, csrf, plan="monthly", transaction_ref="TESTREF000009")
     payment = portal_db.admin_list_manual_payments()[0]
     post("/admin", admin_cookie, admin_csrf, action="reject_payment", payment_id=payment["id"])
     assert not portal_db.user_has_active_access(user_id)
@@ -236,7 +244,7 @@ def gateway(monkeypatch):
 
 
 def test_gateway_mode_shows_instant_pay_buttons_and_hides_manual_page(web_env, gateway):
-    _, _, cookie = make_session("c@example.com")
+    _, _, cookie = make_session("test-user-06@example.invalid")
     _, _, bill = _request("/billing", cookie=cookie)
     assert bill.count("action='/billing/order'") == 2 and "Access starts instantly" in bill
     status, headers, _ = _request("/billing/pay?plan=monthly", cookie=cookie)
@@ -258,7 +266,7 @@ class _FakeResponse:
 
 
 def test_checkout_amount_is_decided_by_the_server(web_env, gateway, monkeypatch):
-    user_id, csrf, cookie = make_session("c@example.com")
+    user_id, csrf, cookie = make_session("test-user-06@example.invalid")
     sent = {}
 
     def fake_urlopen(req, timeout=0):
@@ -277,7 +285,7 @@ def test_checkout_amount_is_decided_by_the_server(web_env, gateway, monkeypatch)
 
 
 def test_webhook_activates_access_even_if_browser_closed(web_env, gateway):
-    user_id, *_ = make_session("c@example.com")
+    user_id, *_ = make_session("test-user-06@example.invalid")
     portal_db.create_payment_order(user_id, "order_w1", 150000, "yearly")
     event = {"event": "payment.captured", "payload": {"payment": {"entity": {
         "id": "pay_w1", "order_id": "order_w1", "status": "captured", "amount": 150000, "currency": "INR"}}}}
@@ -294,7 +302,7 @@ def test_webhook_activates_access_even_if_browser_closed(web_env, gateway):
 
 
 def test_webhook_ignores_wrong_amount(web_env, gateway):
-    user_id, *_ = make_session("c@example.com")
+    user_id, *_ = make_session("test-user-06@example.invalid")
     portal_db.create_payment_order(user_id, "order_w2", 150000, "yearly")
     event = {"event": "payment.captured", "payload": {"payment": {"entity": {
         "id": "pay_w2", "order_id": "order_w2", "status": "captured", "amount": 100, "currency": "INR"}}}}
@@ -313,48 +321,48 @@ class _Resp:
 
 def test_email_via_brevo_is_sent_and_logged(web_env, monkeypatch):
     monkeypatch.setenv("BREVO_API_KEY", "brevo-secret-key-123456")
-    monkeypatch.setenv("EMAIL_FROM", "sender@example.com")
+    monkeypatch.setenv("EMAIL_FROM", "test-user-11@example.invalid")
     calls = []
     monkeypatch.setattr(notifications.httpx, "post", lambda url, **kw: calls.append((url, kw)) or _Resp(201))
-    assert notifications.send_now("a@example.com", "Hi", "Body", "test") == (True, "accepted by brevo")
+    assert notifications.send_now("test-user-02@example.invalid", "Hi", "Body", "test") == (True, "accepted by brevo")
     url, kw = calls[0]
     assert url == "https://api.brevo.com/v3/smtp/email" and kw["headers"]["api-key"] == "brevo-secret-key-123456"
-    assert kw["json"]["to"] == [{"email": "a@example.com"}] and kw["json"]["sender"]["email"] == "sender@example.com"
+    assert kw["json"]["to"] == [{"email": "test-user-02@example.invalid"}] and kw["json"]["sender"]["email"] == "test-user-11@example.invalid"
     assert portal_db.recent_notifications()[0]["ok"] == 1
 
 
 def test_email_failure_is_logged_without_leaking_the_key(web_env, monkeypatch):
     monkeypatch.setenv("BREVO_API_KEY", "brevo-secret-key-123456")
-    monkeypatch.setenv("EMAIL_FROM", "sender@example.com")
+    monkeypatch.setenv("EMAIL_FROM", "test-user-11@example.invalid")
     monkeypatch.setattr(notifications.httpx, "post", lambda url, **kw: _Resp(401, "bad key brevo-secret-key-123456"))
-    ok, detail = notifications.send_now("a@example.com", "Hi", "Body", "test")
+    ok, detail = notifications.send_now("test-user-02@example.invalid", "Hi", "Body", "test")
     assert ok is False and "401" in detail and "brevo-secret-key-123456" not in detail
     logged = portal_db.recent_notifications()[0]
     assert logged["ok"] == 0 and "brevo-secret-key-123456" not in logged["detail"]
 
 
 def test_email_not_configured_is_reported_not_hidden(web_env):
-    ok, detail = notifications.send_now("a@example.com", "Hi", "Body", "test")
+    ok, detail = notifications.send_now("test-user-02@example.invalid", "Hi", "Body", "test")
     assert ok is False and "not configured" in detail
     assert portal_db.recent_notifications()[0]["ok"] == 0
 
 
 def test_every_admin_gets_admin_alerts(web_env, monkeypatch):
     monkeypatch.setenv("RESEND_API_KEY", "resend-secret-key-123456")
-    monkeypatch.setenv("EMAIL_FROM", "sender@example.com")
+    monkeypatch.setenv("EMAIL_FROM", "test-user-11@example.invalid")
     recipients = []
     monkeypatch.setattr(notifications.httpx, "post", lambda url, **kw: recipients.extend(kw["json"]["to"]) or _Resp(200))
     notifications.notify_admins("Subject", "Body")
-    assert sorted(recipients) == ["admin1@example.com", "admin2@example.com"]
+    assert sorted(recipients) == ["test-admin-01@example.invalid", "test-admin-02@example.invalid"]
 
 
 # --- admin page ---------------------------------------------------------------------------
 
 def test_admin_page_shows_real_numbers_and_email_status(web_env):
-    customer_id, *_ = make_session("c@example.com")
-    portal_db.admin_grant_access(customer_id, 30, "paid", "admin1@example.com")
+    customer_id, *_ = make_session("test-user-06@example.invalid")
+    portal_db.admin_grant_access(customer_id, 30, "paid", "test-admin-01@example.invalid")
     new_project(customer_id)
-    _, _, cookie = make_session("admin1@example.com")
+    _, _, cookie = make_session("test-admin-01@example.invalid")
     status, _, body = _request("/admin", cookie=cookie)
     assert status == "200 OK"
     for text in ("Operations", "Email status", "Send test email to both admins", "Applications", "Recent incidents and fixes",
@@ -363,17 +371,17 @@ def test_admin_page_shows_real_numbers_and_email_status(web_env):
 
 
 def test_admin_test_email_button(web_env, monkeypatch):
-    _, csrf, cookie = make_session("admin1@example.com")
+    _, csrf, cookie = make_session("test-admin-01@example.invalid")
     assert location(post("/admin", cookie, csrf, action="send_test_email")[1]) == "/admin?msg=test_email_failed"
     monkeypatch.setenv("BREVO_API_KEY", "brevo-secret-key-123456")
-    monkeypatch.setenv("EMAIL_FROM", "sender@example.com")
+    monkeypatch.setenv("EMAIL_FROM", "test-user-11@example.invalid")
     monkeypatch.setattr(notifications.httpx, "post", lambda url, **kw: _Resp(201))
     assert location(post("/admin", cookie, csrf, action="send_test_email")[1]) == "/admin?msg=test_email_ok"
 
 
 def test_admin_grant_and_revoke_show_the_right_button_for_the_state(web_env):
-    user_id, *_ = make_session("c@example.com")
-    _, csrf, cookie = make_session("admin1@example.com")
+    user_id, *_ = make_session("test-user-06@example.invalid")
+    _, csrf, cookie = make_session("test-admin-01@example.invalid")
     _, _, before = _request("/admin", cookie=cookie)
     assert "value='grant'" in before and "value='revoke'" not in before
     post("/admin", cookie, csrf, action="grant", user_id=user_id, grant="paid:30")
@@ -385,12 +393,12 @@ def test_admin_grant_and_revoke_show_the_right_button_for_the_state(web_env):
 
 
 def test_admin_actions_need_admin_and_csrf(web_env):
-    _, csrf, customer_cookie = make_session("c@example.com")
+    _, csrf, customer_cookie = make_session("test-user-06@example.invalid")
     assert post("/admin", customer_cookie, csrf, action="send_test_email")[0] == "404 Not Found"
-    _, _, admin_cookie = make_session("admin1@example.com")
+    _, _, admin_cookie = make_session("test-admin-01@example.invalid")
     status, _, _ = _request("/admin", method="POST", cookie=admin_cookie, form={"csrf": "wrong", "action": "send_test_email"})
     assert status == "403 Forbidden"
-    _, admin_csrf, admin_cookie2 = make_session("admin2@example.com")
+    _, admin_csrf, admin_cookie2 = make_session("test-admin-02@example.invalid")
     assert location(post("/admin", admin_cookie2, admin_csrf, action="grant", user_id="nobody", grant="paid:30")[1]).endswith("not_found")
     assert location(post("/admin", admin_cookie2, admin_csrf, action="nonsense")[1]).endswith("bad_request")
 
@@ -398,8 +406,8 @@ def test_admin_actions_need_admin_and_csrf(web_env):
 # --- customer dashboard shows what the agent is really doing ----------------------------------
 
 def test_dashboard_reports_live_project_and_agent_activity(web_env):
-    user_id, _, cookie = make_session("c@example.com")
-    portal_db.admin_grant_access(user_id, 30, "paid", "admin1@example.com")
+    user_id, _, cookie = make_session("test-user-06@example.invalid")
+    portal_db.admin_grant_access(user_id, 30, "paid", "test-admin-01@example.invalid")
     project_id = new_project(user_id)
     _, _, before = _request("/dashboard", cookie=cookie)
     assert "Setup needed" in before and "No incidents yet" not in before
@@ -412,8 +420,8 @@ def test_dashboard_reports_live_project_and_agent_activity(web_env):
 
 
 def test_ingest_marks_project_connected(web_env):
-    user_id, *_ = make_session("c@example.com")
-    portal_db.admin_grant_access(user_id, 1, "trial", "admin1@example.com")
+    user_id, *_ = make_session("test-user-06@example.invalid")
+    portal_db.admin_grant_access(user_id, 1, "trial", "test-admin-01@example.invalid")
     key = "z" * 40
     project_id = new_project(user_id, key)
     event = {"timestamp": "2026-10-21T10:00:00Z", "level": "ERROR", "message": "boom", "traceback": ""}
@@ -475,24 +483,25 @@ def _fake_github(monkeypatch, entry_source, private=True, mergeable=True, missin
     return mi, calls
 
 
-def test_installer_patches_entry_file_embeds_key_and_merges(monkeypatch):
+def test_installer_patches_entry_file_embeds_key_and_leaves_pr_for_human_review(monkeypatch):
     mi, calls = _fake_github(monkeypatch, '"""Shop."""\nfrom __future__ import annotations\nimport flask\n')
-    result = mi.open_monitoring_pr(owner="demo", repo="shop", base_branch="main", project_id="11111111-2222-3333-4444-555555555555",
+    result = mi.open_monitoring_pr(owner="demo", repo="shop", base_branch="main", project_id="testproj01",
                                    token="t", ingest_url="https://portal/ingest", ingest_key="secret-key")
     files = calls["tree"]
     assert set(files) == {"incident_agent_monitor.py", "incident_agent_config.json", "app.py", "INCIDENT_AGENT_SETUP.md",
                           mi.WORKFLOW_PATH}
     assert result["workflow_added"] is True and result["had_ci"] is False
     assert json.loads(files["incident_agent_config.json"]) == {"ingest_url": "https://portal/ingest", "heartbeat_url": "https://portal/heartbeat",
-                                                               "ingest_key": "secret-key", "project_id": "11111111-2222-3333-4444-555555555555",
+                                                               "ingest_key": "secret-key", "project_id": "testproj01",
                                                                "component": "python:."}
     assert files["app.py"].split("\n")[:4] == ['"""Shop."""', "from __future__ import annotations", mi.IMPORT_LINE, "import flask"]
-    assert result["merged"] and result["patched_file"] == "app.py" and result["embedded_key"] and calls["merged"]
+    assert result["merged"] is False and result["patched_file"] == "app.py" and result["embedded_key"]
+    assert calls["merged"] is False
 
 
 def test_installer_never_embeds_a_key_when_not_given_and_survives_no_entry_file(monkeypatch):
     mi, calls = _fake_github(monkeypatch, None, mergeable=False)
-    result = mi.open_monitoring_pr(owner="demo", repo="shop", base_branch="main", project_id="11111111-2222-3333-4444-555555555555", token="t")
+    result = mi.open_monitoring_pr(owner="demo", repo="shop", base_branch="main", project_id="testproj01", token="t")
     assert "incident_agent_config.json" not in calls["tree"] and result["patched_file"] is None
     assert result["merged"] is False and "import incident_agent_monitor" in calls["tree"]["INCIDENT_AGENT_SETUP.md"]
 
@@ -516,8 +525,8 @@ def test_import_insertion_is_idempotent_and_skips_broken_files():
 
 
 def test_monitor_client_reports_errors_and_heartbeats_to_the_portal(web_env):
-    user_id, *_ = make_session("c@example.com")
-    portal_db.admin_grant_access(user_id, 1, "trial", "admin1@example.com")
+    user_id, *_ = make_session("test-user-06@example.invalid")
+    portal_db.admin_grant_access(user_id, 1, "trial", "test-admin-01@example.invalid")
     key = "live-key-" + "x" * 30
     project_id = new_project(user_id, key)
     server = make_server("127.0.0.1", 0, web_app.application, server_class=web_app.ThreadingWSGIServer)
@@ -549,11 +558,11 @@ def test_monitor_client_reports_errors_and_heartbeats_to_the_portal(web_env):
 # --- the simple manual payment flow: pay the QR, wait 1-2 hours, admin confirms ------------------
 
 def test_customer_is_told_to_wait_and_admins_are_emailed(web_env):
-    user_id, csrf, cookie = make_session("c@example.com")
+    user_id, csrf, cookie = make_session("test-user-06@example.invalid")
     _, _, page = _request("/billing/pay?plan=monthly", cookie=cookie)
     assert "1 to 2 hours" in page and "Paytm" in page and "automatically" not in page
     assert page.count("src='data:image/svg+xml") == 2  # QR with the amount, plus a plain QR as a fallback
-    status, _, body = post("/billing/pay", cookie, csrf, plan="monthly", transaction_ref="412345678901")
+    status, _, body = post("/billing/pay", cookie, csrf, plan="monthly", transaction_ref="TESTREF000002")
     assert status == "200 OK" and "1 to 2 hours" in body
     kinds = [n["kind"] for n in portal_db.recent_notifications(20)]
     assert kinds.count("payment_submitted") == 2  # both admins
@@ -562,14 +571,14 @@ def test_customer_is_told_to_wait_and_admins_are_emailed(web_env):
 
 
 def test_admin_sees_customers_needing_action_first_with_their_plan_state(web_env):
-    active, *_ = make_session("a-active@example.com")
-    idle, *_ = make_session("b-idle@example.com")
-    payer, csrf, cookie = make_session("z-payer@example.com")
-    portal_db.admin_grant_access(active, 30, "paid", "admin1@example.com")
-    post("/billing/pay", cookie, csrf, plan="yearly", transaction_ref="412345678902")
-    _, _, admin_cookie = (lambda r: (r[0], r[1], r[2]))(make_session("admin1@example.com"))
+    active, *_ = make_session("test-user-01@example.invalid")
+    idle, *_ = make_session("test-user-05@example.invalid")
+    payer, csrf, cookie = make_session("test-user-14@example.invalid")
+    portal_db.admin_grant_access(active, 30, "paid", "test-admin-01@example.invalid")
+    post("/billing/pay", cookie, csrf, plan="yearly", transaction_ref="TESTREF000003")
+    _, _, admin_cookie = (lambda r: (r[0], r[1], r[2]))(make_session("test-admin-01@example.invalid"))
     _, _, body = _request("/admin", cookie=admin_cookie)
-    assert body.index("z-payer@example.com") < body.index("a-active@example.com") < body.index("b-idle@example.com")
+    assert body.index("test-user-14@example.invalid") < body.index("test-user-01@example.invalid") < body.index("test-user-05@example.invalid")
     assert "Payment to confirm" in body and "Paid · " in body and "No access" in body
     assert "I received ₹1500 · grant 365 days" in body
 
@@ -578,9 +587,9 @@ def test_admin_sees_customers_needing_action_first_with_their_plan_state(web_env
 
 def test_wrong_branch_is_replaced_by_the_repository_default(monkeypatch):
     mi, calls = _fake_github(monkeypatch, "import flask\n", missing_branches=("main",), default_branch="master")
-    result = mi.open_monitoring_pr(owner="demo", repo="shop", base_branch="main", project_id="11111111-2222-3333-4444-555555555555",
+    result = mi.open_monitoring_pr(owner="demo", repo="shop", base_branch="main", project_id="testproj01",
                                    token="t", ingest_url="https://portal/ingest", ingest_key="k")
-    assert result["base_branch"] == "master" and result["merged"]
+    assert result["base_branch"] == "master" and result["merged"] is False
     assert any(u.endswith("/git/ref/heads/master") for u in calls["urls"])
 
 
@@ -608,15 +617,15 @@ def fernet_env(monkeypatch):
 
 
 def _connect_form(**extra):
-    form = {"repo": "demo/shop", "github_token": "github_pat_example", "name": "shop", "branch": "", "mode": "auto",
+    form = {"repo": "demo/shop", "github_token": "github_pat_example", "name": "shop", "branch": "", "mode": "pr",
             "allow_install": "yes", "allow_ai_processing": "yes", "allow_remediation": "yes"}
     form.update(extra)
     return form
 
 
 def test_connecting_a_project_needs_no_work_from_the_customer(web_env, fernet_env, monkeypatch):
-    user_id, csrf, cookie = make_session("c@example.com")
-    portal_db.admin_grant_access(user_id, 30, "paid", "admin1@example.com")
+    user_id, csrf, cookie = make_session("test-user-06@example.invalid")
+    portal_db.admin_grant_access(user_id, 30, "paid", "test-admin-01@example.invalid")
     received = {}
     monkeypatch.setattr(web_app, "validate_repository_access", lambda **kw: {"private": True, "default_branch": "master"})
     monkeypatch.setattr(web_app, "resolve_branch", lambda **kw: "master")
@@ -624,23 +633,23 @@ def test_connecting_a_project_needs_no_work_from_the_customer(web_env, fernet_en
     def fake_open(**kw):
         received.update(kw)
         return {"url": "https://github.com/demo/shop/pull/1", "number": 1, "branch": "agent-daemon/install-x",
-                "base_branch": "master", "merged": True, "patched_file": "app.py", "embedded_key": True}
+                "base_branch": "master", "merged": False, "patched_file": "app.py", "embedded_key": True}
 
     monkeypatch.setattr(web_app, "open_monitoring_pr", fake_open)
-    status, _, body = _request("/projects/new", method="POST", cookie=cookie, form={"csrf": csrf, **_connect_form()})
+    status, _, body = _request("/projects/new", method="POST", cookie=cookie, form={"csrf": csrf, **_connect_form(mode="auto")})
     assert status == "201 Created"
-    assert "Nothing else to configure" in body
+    assert "leaves the pull request open for your approval" in body
     assert "INCIDENT_AGENT_INGEST_KEY" not in body and "hosting environment" not in body  # no chores for the customer
     assert received["ingest_key"] and received["base_branch"] == "master"                  # key travels inside the install PR
     project = portal_db.list_projects(user_id)[0]
     assert project["branch"] == "master"
-    assert project["mode"] == "auto" and project["gate_state"] == "active"   # private repository: installed right away
+    assert project["mode"] == "pr" and project["gate_state"] == "active"   # private repository: connected; PR needs review
     assert received["require_private"] is True                               # the installer re-checks before writing
 
 
 def test_failed_install_explains_the_problem_and_adds_no_chores(web_env, fernet_env, monkeypatch):
-    user_id, csrf, cookie = make_session("c@example.com")
-    portal_db.admin_grant_access(user_id, 30, "paid", "admin1@example.com")
+    user_id, csrf, cookie = make_session("test-user-06@example.invalid")
+    portal_db.admin_grant_access(user_id, 30, "paid", "test-admin-01@example.invalid")
     monkeypatch.setattr(web_app, "validate_repository_access", lambda **kw: {"private": True, "default_branch": "master"})
     monkeypatch.setattr(web_app, "resolve_branch", lambda **kw: "master")
 
@@ -656,8 +665,8 @@ def test_failed_install_explains_the_problem_and_adds_no_chores(web_env, fernet_
 
 
 def test_retrying_install_repairs_a_project_saved_with_the_wrong_branch(web_env, fernet_env, monkeypatch):
-    user_id, csrf, cookie = make_session("c@example.com")
-    portal_db.admin_grant_access(user_id, 30, "paid", "admin1@example.com")
+    user_id, csrf, cookie = make_session("test-user-06@example.invalid")
+    portal_db.admin_grant_access(user_id, 30, "paid", "test-admin-01@example.invalid")
     project_id = new_project(user_id, "q" * 40, ingest_key_ciphertext=web_app._encrypt_token("q" * 40))
     conn = portal_db.get_connection()
     portal_db._execute(conn, "UPDATE projects SET github_token_ciphertext=?, branch='main' WHERE id=?",
@@ -673,7 +682,7 @@ def test_retrying_install_repairs_a_project_saved_with_the_wrong_branch(web_env,
 
     monkeypatch.setattr(web_app, "open_monitoring_pr", fake_open)
     status, _, body = _request(f"/projects/{project_id}/install", method="POST", cookie=cookie, form={"csrf": csrf})
-    assert status == "200 OK" and "Nothing else to configure" in body
+    assert status == "200 OK" and "leaves the pull request open for your approval" in body
     assert seen["ingest_key"] == "q" * 40
     project = portal_db.get_project(project_id, user_id)
     assert project["branch"] == "master" and project["install_pr_url"].endswith("/pull/2")
@@ -681,7 +690,7 @@ def test_retrying_install_repairs_a_project_saved_with_the_wrong_branch(web_env,
 
 def test_installer_workflow_runs_syntax_check_and_tests_and_is_documented(monkeypatch):
     mi, calls = _fake_github(monkeypatch, "import os\n")
-    mi.open_monitoring_pr(owner="demo", repo="shop", base_branch="main", project_id="11111111-2222-3333-4444-555555555555", token="t")
+    mi.open_monitoring_pr(owner="demo", repo="shop", base_branch="main", project_id="testproj01", token="t")
     workflow = calls["tree"][mi.WORKFLOW_PATH]
     assert "compileall" in workflow and "pytest" in workflow and "pull_request" in workflow
     assert "exit 0" in workflow and "-eq 5" in workflow  # a repo without tests still gets a passing check
@@ -690,14 +699,14 @@ def test_installer_workflow_runs_syntax_check_and_tests_and_is_documented(monkey
 
 def test_installer_does_not_touch_repositories_that_already_have_workflows(monkeypatch):
     mi, calls = _fake_github(monkeypatch, "import os\n", existing_workflows=True)
-    result = mi.open_monitoring_pr(owner="demo", repo="shop", base_branch="main", project_id="11111111-2222-3333-4444-555555555555", token="t")
+    result = mi.open_monitoring_pr(owner="demo", repo="shop", base_branch="main", project_id="testproj01", token="t")
     assert mi.WORKFLOW_PATH not in calls["tree"]
     assert result["workflow_added"] is False and result["had_ci"] is True
 
 
 def test_installer_still_installs_monitoring_when_token_cannot_write_workflows(monkeypatch):
     mi, calls = _fake_github(monkeypatch, "import os\n", reject_workflow=True)
-    result = mi.open_monitoring_pr(owner="demo", repo="shop", base_branch="main", project_id="11111111-2222-3333-4444-555555555555", token="t")
+    result = mi.open_monitoring_pr(owner="demo", repo="shop", base_branch="main", project_id="testproj01", token="t")
     assert mi.WORKFLOW_PATH not in calls["tree"] and "incident_agent_monitor.py" in calls["tree"]
     assert result["workflow_added"] is False and result["had_ci"] is False and result["number"] == 7
     assert "Workflows" in calls["tree"]["INCIDENT_AGENT_SETUP.md"]
@@ -705,20 +714,20 @@ def test_installer_still_installs_monitoring_when_token_cannot_write_workflows(m
 
 def test_retry_after_permission_is_granted_uses_a_fresh_branch_and_adds_the_workflow(monkeypatch):
     mi, calls = _fake_github(monkeypatch, "import os\n", branch_exists=True)  # the first attempt's branch is still there
-    result = mi.open_monitoring_pr(owner="demo", repo="shop", base_branch="main", project_id="11111111-2222-3333-4444-555555555555", token="t")
+    result = mi.open_monitoring_pr(owner="demo", repo="shop", base_branch="main", project_id="testproj01", token="t")
     assert result["workflow_added"] is True and mi.WORKFLOW_PATH in calls["tree"]
-    assert result["branch"].startswith("agent-daemon/install-111111112222-") and result["branch"] != "agent-daemon/install-111111112222"
+    assert result["branch"].startswith("agent-daemon/install-testproj01-") and result["branch"] != "agent-daemon/install-testproj01"
 
 
 def test_retry_with_nothing_to_change_reports_unchanged_instead_of_failing(monkeypatch):
     mi, calls = _fake_github(monkeypatch, "import os\n", reject_workflow=True, same_tree=True)
-    result = mi.open_monitoring_pr(owner="demo", repo="shop", base_branch="main", project_id="11111111-2222-3333-4444-555555555555", token="t")
+    result = mi.open_monitoring_pr(owner="demo", repo="shop", base_branch="main", project_id="testproj01", token="t")
     assert result["unchanged"] is True and result["workflow_added"] is False and result["had_ci"] is False
     assert not calls.get("merged")  # no pull request was opened or merged
 
 
 def test_billing_page_shows_plan_v2_prices_quotas_and_the_fine_print(web_env):
-    _, _, cookie = make_session("c@example.com")
+    _, _, cookie = make_session("test-user-06@example.invalid")
     _, _, body = _request("/billing", cookie=cookie)
     assert "₹200" in body and "₹1,500" in body and "about ₹125 a month" in body
     assert "30 Normal, 6 High and 3 Extra" in body
@@ -729,7 +738,7 @@ def test_billing_page_shows_plan_v2_prices_quotas_and_the_fine_print(web_env):
 # --- customer intake on free trial and paid plans --------------------------------
 
 def test_trial_intake_details_saved_and_emailed_to_admins(web_env):
-    user_id, csrf, cookie = make_session("lead@company.com")
+    user_id, csrf, cookie = make_session("test-user-07@example.invalid")
     
     # 1. Check intake form on billing page
     status, _, bill = _request("/billing", cookie=cookie)
@@ -740,46 +749,46 @@ def test_trial_intake_details_saved_and_emailed_to_admins(web_env):
 
     # 2. Submit trial request with intake details
     status, _, body = post("/billing/trial-request", cookie, csrf,
-                           name="Alice Smith",
-                           phone="+91 9988776655",
+                           name="Test User One",
+                           phone="TEST-PHONE-02",
                            referral_source="YouTube",
-                           organization="Acme Systems")
+                           organization="Example Organization")
     assert status == "200 OK"
     assert "Request received" in body
 
     # 3. Verify saved in database (users and trial_requests tables)
     user = portal_db.get_user_by_id(user_id)
-    assert user["name"] == "Alice Smith"
-    assert user["phone"] == "+91 9988776655"
+    assert user["name"] == "Test User One"
+    assert user["phone"] == "TEST-PHONE-02"
     assert user["referral_source"] == "YouTube"
-    assert user["organization"] == "Acme Systems"
+    assert user["organization"] == "Example Organization"
 
     trials = portal_db.admin_list_trial_requests()
     t = next(tr for tr in trials if tr["user_id"] == user_id)
-    assert t["user_name"] == "Alice Smith"
-    assert t["user_phone"] == "+91 9988776655"
+    assert t["user_name"] == "Test User One"
+    assert t["user_phone"] == "TEST-PHONE-02"
     assert t["user_referral"] == "YouTube"
-    assert t["user_organization"] == "Acme Systems"
+    assert t["user_organization"] == "Example Organization"
 
     # 4. Verify admin email alerts received the details
     notifs = portal_db.recent_notifications(10)
     trial_notifs = [n for n in notifs if n["kind"] == "trial_request"]
     assert len(trial_notifs) == 2  # sent to both admins
     for n in trial_notifs:
-        assert "lead@company.com" in n["subject"]
+        assert "test-user-07@example.invalid" in n["subject"]
 
     # 5. Verify details show on admin dashboard
-    _, _, admin_cookie = make_session("admin1@example.com")
+    _, _, admin_cookie = make_session("test-admin-01@example.invalid")
     st, _, admin_page = _request("/admin", cookie=admin_cookie)
     assert st == "200 OK"
-    assert "Alice Smith" in admin_page
-    assert "+91 9988776655" in admin_page
+    assert "Test User One" in admin_page
+    assert "TEST-PHONE-02" in admin_page
     assert "YouTube" in admin_page
-    assert "Acme Systems" in admin_page
+    assert "Example Organization" in admin_page
 
 
 def test_payment_intake_details_saved_and_emailed_to_admins(web_env):
-    user_id, csrf, cookie = make_session("paying_user@company.com")
+    user_id, csrf, cookie = make_session("test-user-10@example.invalid")
 
     # 1. Check intake form on UPI payment page
     st, _, page = _request("/billing/pay?plan=yearly", cookie=cookie)
@@ -791,41 +800,41 @@ def test_payment_intake_details_saved_and_emailed_to_admins(web_env):
     # 2. Submit payment with intake details
     st, _, body = post("/billing/pay", cookie, csrf,
                        plan="yearly",
-                       transaction_ref="888877776666",
-                       name="Bob Jones",
-                       phone="+91 9123456789",
+                       transaction_ref="TESTREF000010",
+                       name="Test User Two",
+                       phone="TEST-PHONE-01",
                        referral_source="GitHub",
-                       organization="Bob Labs")
+                       organization="Example Lab")
     assert st == "200 OK"
     assert "Payment submitted" in body
 
     # 3. Verify details saved in database
     user = portal_db.get_user_by_id(user_id)
-    assert user["name"] == "Bob Jones"
-    assert user["phone"] == "+91 9123456789"
+    assert user["name"] == "Test User Two"
+    assert user["phone"] == "TEST-PHONE-01"
     assert user["referral_source"] == "GitHub"
-    assert user["organization"] == "Bob Labs"
+    assert user["organization"] == "Example Lab"
 
     payments = portal_db.admin_list_manual_payments()
     p = next(pm for pm in payments if pm["user_id"] == user_id)
-    assert p["user_name"] == "Bob Jones"
-    assert p["user_phone"] == "+91 9123456789"
+    assert p["user_name"] == "Test User Two"
+    assert p["user_phone"] == "TEST-PHONE-01"
     assert p["user_referral"] == "GitHub"
-    assert p["user_organization"] == "Bob Labs"
+    assert p["user_organization"] == "Example Lab"
 
     # 4. Verify admin email alerts received details
     notifs = portal_db.recent_notifications(10)
     sub_notifs = [n for n in notifs if n["kind"] == "payment_submitted"]
     assert len(sub_notifs) == 2  # sent to both admins
     for n in sub_notifs:
-        assert "paying_user@company.com" in n["subject"]
+        assert "test-user-10@example.invalid" in n["subject"]
 
     # 5. Verify details show on admin dashboard
-    _, _, admin_cookie = make_session("admin1@example.com")
+    _, _, admin_cookie = make_session("test-admin-01@example.invalid")
     st, _, admin_page = _request("/admin", cookie=admin_cookie)
     assert st == "200 OK"
-    assert "Bob Jones" in admin_page
-    assert "+91 9123456789" in admin_page
+    assert "Test User Two" in admin_page
+    assert "TEST-PHONE-01" in admin_page
     assert "GitHub" in admin_page
-    assert "Bob Labs" in admin_page
-    assert "888877776666" in admin_page
+    assert "Example Lab" in admin_page
+    assert "TESTREF000010" in admin_page

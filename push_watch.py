@@ -3,12 +3,12 @@
 The classic flow waits for a LIVE app to crash and report the error. Vibe coders and hackathon teams need the opposite: the bug
 should be caught as soon as they push, fixed by the agent, and the fixed version pushed back to GitHub. This module does that:
 
-    git push â”€â”€â–º GitHub webhook (or the worker's poll, as a fallback) â”€â”€â–º push_checks queue
-             â”€â”€â–º worker downloads THAT commit â”€â”€â–º finds every stack in the repo (Python, JS/TS, Java, HTML/CSS)
-             â”€â”€â–º runs install â†’ build/type-check â†’ tests â†’ start-up check for each stack in the sandbox
-             â”€â”€â–º green: GitHub commit status "success", done
-             â”€â”€â–º red:   commit status "failure", an incident is opened, and the fix engine takes over
-                        (router â†’ model â†’ patch â†’ the SAME sandbox check must go green â†’ fix branch + PR â†’ auto-merge in Auto mode)
+    git push ──► GitHub webhook (or the worker's poll, as a fallback) ──► push_checks queue
+             ──► worker downloads THAT commit ──► finds every stack in the repo (Python, JS/TS, Java, HTML/CSS)
+             ──► runs install → build/type-check → tests → start-up check for each stack in the sandbox
+             ──► green: GitHub commit status "success", done
+             ──► red:   commit status "failure", an incident is opened, and the fix engine takes over
+                        (router → model → patch → the SAME sandbox check must go green → fix branch + PR for human review)
 
 Nothing here calls an AI model: a push check is free. Only a failing check spends tries, through the normal quota and budget guard.
 The GitHub token is decrypted in memory only; customer code runs only inside the sandbox.
@@ -79,7 +79,7 @@ def _api(project: dict) -> str:
 
 
 def webhook_url(project_id: str) -> str:
-    base = os.getenv("PORTAL_BASE_URL", "https://incident-agent-portal.onrender.com").strip().rstrip("/")
+    base = os.getenv("PORTAL_BASE_URL", "").strip().rstrip("/")
     return f"{base}/webhooks/github/{project_id}"
 
 
@@ -389,8 +389,8 @@ def _notify_owner(check: dict, summary: str, first: str, mode: str) -> None:
         return
     base = os.getenv("PORTAL_BASE_URL", "").strip().rstrip("/")
     what_next = ("The agent is writing a fix now. It will be tested in the same sandbox and pushed to a new branch with a pull request"
-                 + (" that is merged automatically once it is proven." if mode == "auto" else " for you to review.")
-                 if mode in ("pr", "auto") else "Your project is in Report mode, so the agent only explains the problem.")
+                 + " for you to review and merge." if mode in ("pr", "auto")
+                 else "Your project is in Report mode, so the agent only explains the problem.")
     notifications.notify_customer(
         email, f"Your push to {check.get('project_name') or 'your project'} broke: the agent is on it",
         f"Commit {check['sha'][:7]} ({check.get('commit_message') or 'no message'}) failed our sandbox check.\n\n"

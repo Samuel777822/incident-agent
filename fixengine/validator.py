@@ -88,7 +88,7 @@ def write_files(root: Path, new_files: dict[str, str]) -> None:
 
 
 def verification_level(*, baseline_failing, baseline_had_tests: bool, result, check_failed_before: bool = False) -> str:
-    """How much the sandbox run actually proves (used in the PR text and to block auto-merge).
+    """How much the sandbox run actually proves (used in the pull request text and review guidance).
 
     check_failed_before: the bug came from a push check, so the sandbox run that failed on the pushed commit IS the
     reproduction. If that same run (install, build, type-check, tests, site check, start-up) is green after the fix, the fix

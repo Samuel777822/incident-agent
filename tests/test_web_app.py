@@ -18,6 +18,13 @@ def web_env(tmp_path, monkeypatch):
     monkeypatch.delenv("DATABASE_URL", raising=False)
     monkeypatch.setenv("APP_ENV", "test")
     monkeypatch.setenv("SESSION_SECRET", "test-only-session-secret-at-least-32-chars")
+    monkeypatch.setenv("ADMIN_EMAILS", "admin1@example.invalid,admin2@example.invalid")
+    monkeypatch.setenv("SUPPORT_EMAIL", "support@example.invalid")
+    monkeypatch.setenv("PORTAL_BASE_URL", "https://portal.example.invalid")
+    monkeypatch.setenv("UPI_ID", "TEST_ONLY_UPI_DESTINATION")
+    monkeypatch.setenv("UPI_PAYEE_NAME", "Example Merchant")
+    for key in ("RAZORPAY_KEY_ID", "RAZORPAY_KEY_SECRET", "RAZORPAY_MONTHLY_AMOUNT_PAISE", "RAZORPAY_YEARLY_AMOUNT_PAISE"):
+        monkeypatch.delenv(key, raising=False)
     web_app.portal_db.init_db()
 
 
@@ -97,18 +104,18 @@ def test_home_page_explains_the_product_and_the_github_token(web_env):
 def test_email_signup_and_login_are_gone(web_env):
     for path in ("/signup", "/login"):
         status, headers, _ = _request(path, method="POST",
-                                      form={"csrf": "x", "email": "person@example.com", "password": "a-long-test-password"})
+                                      form={"csrf": "x", "email": "person@example.invalid", "password": "a-long-test-password"})
         assert status == "303 See Other"
         assert dict(headers)["Location"] == "/login"
         assert not _cookie_value(headers, web_app.SESSION_COOKIE)
-    assert web_app.portal_db.get_user_by_email("person@example.com") is None
+    assert web_app.portal_db.get_user_by_email("person@example.invalid") is None
     status, headers, _ = _request("/signup")
     assert status == "303 See Other" and dict(headers)["Location"] == "/login"
 
 
 def test_logout_requires_csrf_token(web_env):
     from datetime import timedelta
-    user_id = web_app.portal_db.create_user("person@example.com", "")
+    user_id = web_app.portal_db.create_user("person@example.invalid", "")
     session_id = web_app.portal_db.create_session(user_id, "csrf-token-1", (web_app._now() + timedelta(days=1)).isoformat(timespec="seconds"))
     session_cookie = web_app._signed_cookie(session_id)
 
@@ -117,7 +124,7 @@ def test_logout_requires_csrf_token(web_env):
 
 
 def test_ingest_authenticates_and_deduplicates_per_project(web_env):
-    user_id = web_app.portal_db.create_user("ingest@example.com", "hash")
+    user_id = web_app.portal_db.create_user("ingest@example.invalid", "hash")
     web_app.portal_db.admin_grant_access(user_id, 1, "trial", "test-admin")
     raw_key = "project-ingest-key-that-is-long-enough-123"
     project_id = web_app.portal_db.create_project(user_id, name="API", repo_owner="demo",
@@ -139,7 +146,7 @@ def test_ingest_authenticates_and_deduplicates_per_project(web_env):
 
 
 def test_payment_only_activates_after_captured_status(web_env, monkeypatch):
-    user_id = web_app.portal_db.create_user("payer@example.com", "hash")
+    user_id = web_app.portal_db.create_user("payer@example.invalid", "hash")
     project_id = web_app.portal_db.create_project(user_id, name="API", repo_owner="demo",
         repo_name="api", branch="main", mode="pr", token_ciphertext="cipher",
         ingest_key_hash="payment-project-key")
@@ -191,23 +198,23 @@ def test_google_oauth_not_configured_fails_closed(web_env, monkeypatch):
 
 def test_production_cookie_domain_covers_apex_and_www_hosts(web_env, monkeypatch):
     monkeypatch.setenv("APP_ENV", "production")
-    monkeypatch.setenv("GOOGLE_REDIRECT_URI", "https://agentdaemon.xyz/auth/google/callback")
-    assert web_app._app_cookie_domain() == "agentdaemon.xyz"
+    monkeypatch.setenv("GOOGLE_REDIRECT_URI", "https://example.invalid/auth/google/callback")
+    assert web_app._app_cookie_domain() == "example.invalid"
 
-    monkeypatch.setenv("GOOGLE_REDIRECT_URI", "https://www.agentdaemon.xyz/auth/google/callback")
-    assert web_app._app_cookie_domain() == "agentdaemon.xyz"
+    monkeypatch.setenv("GOOGLE_REDIRECT_URI", "https://www.example.invalid/auth/google/callback")
+    assert web_app._app_cookie_domain() == "example.invalid"
 
 
 def test_google_begin_sets_secure_parent_domain_state_cookie(web_env, monkeypatch):
     monkeypatch.setenv("APP_ENV", "production")
     monkeypatch.setenv("GOOGLE_CLIENT_ID", "client-id.apps.googleusercontent.com")
     monkeypatch.setenv("GOOGLE_CLIENT_SECRET", "test-secret")
-    monkeypatch.setenv("GOOGLE_REDIRECT_URI", "https://agentdaemon.xyz/auth/google/callback")
+    monkeypatch.setenv("GOOGLE_REDIRECT_URI", "https://example.invalid/auth/google/callback")
 
     status, headers, _ = _request("/auth/google")
     assert status == "303 See Other"
     state_cookie = next(v for k, v in headers if k.lower() == "set-cookie" and v.startswith("agent_google_state="))
-    assert "Domain=agentdaemon.xyz" in state_cookie
+    assert "Domain=example.invalid" in state_cookie
     assert "SameSite=Lax" in state_cookie
     assert "HttpOnly" in state_cookie
     assert "Secure" in state_cookie
@@ -215,18 +222,18 @@ def test_google_begin_sets_secure_parent_domain_state_cookie(web_env, monkeypatc
 
 def test_google_callback_clears_state_cookie_for_same_parent_domain(web_env, monkeypatch):
     monkeypatch.setenv("APP_ENV", "production")
-    monkeypatch.setenv("GOOGLE_REDIRECT_URI", "https://www.agentdaemon.xyz/auth/google/callback")
+    monkeypatch.setenv("GOOGLE_REDIRECT_URI", "https://www.example.invalid/auth/google/callback")
 
     status, headers, _ = _request("/auth/google/callback?error=access_denied")
     assert status == "303 See Other"
     clear_cookie = next(v for k, v in headers if k.lower() == "set-cookie" and v.startswith("agent_google_state="))
-    assert "Domain=agentdaemon.xyz" in clear_cookie
+    assert "Domain=example.invalid" in clear_cookie
     assert "Max-Age=0" in clear_cookie
 
 
 def test_google_login_url_has_openid_and_state():
     url = web_app._google_login_url("random-state-123", "client-id.apps.googleusercontent.com",
-                                    "https://incident-agent-portal.onrender.com/auth/google/callback")
+                                    "https://portal.example.invalid/auth/google/callback")
     from urllib.parse import parse_qs, urlsplit
     parsed = urlsplit(url)
     params = parse_qs(parsed.query)
@@ -235,13 +242,13 @@ def test_google_login_url_has_openid_and_state():
     assert params["state"] == ["random-state-123"]
     assert params["response_type"] == ["code"]
     assert "openid" in params["scope"][0].split()
-    assert params["redirect_uri"] == ["https://incident-agent-portal.onrender.com/auth/google/callback"]
+    assert params["redirect_uri"] == ["https://portal.example.invalid/auth/google/callback"]
 
 
 def test_google_verified_identity_requires_signed_state_cookie(web_env, monkeypatch):
     monkeypatch.setenv("GOOGLE_CLIENT_ID", "client-id.apps.googleusercontent.com")
     monkeypatch.setenv("GOOGLE_CLIENT_SECRET", "test-secret")
-    monkeypatch.setenv("GOOGLE_REDIRECT_URI", "https://incident-agent-portal.onrender.com/auth/google/callback")
+    monkeypatch.setenv("GOOGLE_REDIRECT_URI", "https://portal.example.invalid/auth/google/callback")
     _, _, body = _request("/login")
     assert "Continue with Google" in body
     state = "state-token"
@@ -252,63 +259,56 @@ def test_google_verified_identity_requires_signed_state_cookie(web_env, monkeypa
 
 
 def test_google_user_is_created_and_reused_by_stable_subject(web_env):
-    user1 = web_app.portal_db.get_or_create_google_user("google@example.com", "google-sub-123", True)
-    user2 = web_app.portal_db.get_or_create_google_user("google@example.com", "google-sub-123", True)
+    user1 = web_app.portal_db.get_or_create_google_user("google@example.invalid", "google-sub-123", True)
+    user2 = web_app.portal_db.get_or_create_google_user("google@example.invalid", "google-sub-123", True)
     assert user1["id"] == user2["id"] == "google-sub-123"
-    assert user2["email"] == "google@example.com"
+    assert user2["email"] == "google@example.invalid"
     with pytest.raises(ValueError, match="verified Google identity"):
-        web_app.portal_db.get_or_create_google_user("unverified@example.com", "google-sub-456", False)
+        web_app.portal_db.get_or_create_google_user("unverified@example.invalid", "google-sub-456", False)
 
 
 def test_google_sign_in_links_to_an_existing_account_with_the_same_email(web_env):
-    old_id = web_app.portal_db.create_user("admin2@example.com", "old-password-hash")
-    user = web_app.portal_db.get_or_create_google_user("Admin2@Example.com", "google-sub-777", True)
-    assert user["id"] == old_id and user["email"] == "admin2@example.com"
-    again = web_app.portal_db.get_or_create_google_user("admin2@example.com", "google-sub-777", True)
+    old_id = web_app.portal_db.create_user("admin2@example.invalid", "old-password-hash")
+    user = web_app.portal_db.get_or_create_google_user("Admin2@Example.invalid", "google-sub-777", True)
+    assert user["id"] == old_id and user["email"] == "admin2@example.invalid"
+    again = web_app.portal_db.get_or_create_google_user("admin2@example.invalid", "google-sub-777", True)
     assert again["id"] == old_id
 
 
-def test_about_page_and_founder_assets(web_env):
+def test_about_page_uses_team_copy_and_keeps_private_assets_unavailable(web_env):
     status, _, body = _request("/about")
     assert status == "200 OK"
-    for expected in (
-        "About Us &amp; Co-Founders",
-        "Abhay Samuel H",
-        "Co-Founder &amp; CTO",
-        "Pranav V Rao",
-        "Co-Founder &amp; Systems Architect",
-        "/assets/daemon-founder-abhay.webp",
-        "/assets/daemon-founder-pranav.webp",
-        "https://github.com/Samuel777822",
-        "https://github.com/pranavvrao1-ai",
-        "https://www.linkedin.com/in/pranav-v-rao-061040393/",
-    ):
-        assert expected in body
+    assert "About Agent Daemon" in body and "Our Team" in body
+    assert 'class="founder-card"' not in body
+    assert 'src="/assets/daemon-founder-' not in body
 
-    # Raw WSGI request for binary assets
-    from wsgiref.util import setup_testing_defaults
-    values = {}
-    setup_testing_defaults(values)
-    values.update({"QUERY_STRING": "", "PATH_INFO": "/assets/daemon-founder-abhay.webp", "REQUEST_METHOD": "GET", "REMOTE_ADDR": "127.0.0.1", "wsgi.input": io.BytesIO()})
-    captured = {}
-    def start_response(status, headers):
-        captured["status"] = status
-        captured["headers"] = headers
-    raw_abhay = b"".join(web_app.application(values, start_response))
-    assert captured["status"] == "200 OK"
-    assert any(h == ("Content-Type", "image/webp") for h in captured["headers"])
-    assert len(raw_abhay) > 1000
+    status, _, _ = _request("/assets/private-profile.webp")
+    assert status == "404 Not Found"
 
-    values["PATH_INFO"] = "/assets/daemon-founder-pranav.webp"
-    raw_pranav = b"".join(web_app.application(values, start_response))
-    assert captured["status"] == "200 OK"
-    assert any(h == ("Content-Type", "image/webp") for h in captured["headers"])
-    assert len(raw_pranav) > 1000
+
+def test_manual_upi_requires_a_private_deployment_destination(web_env, monkeypatch):
+    from datetime import timedelta
+
+    monkeypatch.delenv("UPI_ID", raising=False)
+    user_id = web_app.portal_db.create_user("unconfigured@example.invalid", "")
+    session_id = web_app.portal_db.create_session(
+        user_id, "csrf-payment-test", (web_app._now() + timedelta(days=1)).isoformat(timespec="seconds")
+    )
+    cookie = f"{web_app.SESSION_COOKIE}={web_app._signed_cookie(session_id)}"
+
+    status, _, billing = _request("/billing", cookie=cookie)
+    assert status == "200 OK"
+    assert "Payments are not configured yet" in billing
+    assert "/billing/pay?plan=monthly" not in billing
+
+    status, _, payment = _request("/billing/pay?plan=monthly", cookie=cookie)
+    assert status == "503 Service Unavailable"
+    assert "Payments unavailable" in payment
 
 
 def test_onboarding_name_prompt_flow(web_env):
     from datetime import timedelta
-    user_id = web_app.portal_db.create_user("newuser@example.com", "")
+    user_id = web_app.portal_db.create_user("newuser@example.invalid", "")
     session_id = web_app.portal_db.create_session(user_id, "csrf-token-123", (web_app._now() + timedelta(days=1)).isoformat(timespec="seconds"))
     cookie = f"{web_app.SESSION_COOKIE}={web_app._signed_cookie(session_id)}"
     csrf = "csrf-token-123"
@@ -320,14 +320,14 @@ def test_onboarding_name_prompt_flow(web_env):
     assert "Continue" in body
 
     # POST /onboarding/name to set the name
-    status, headers, _ = _request("/onboarding/name", method="POST", form={"csrf": csrf, "name": "Jane Developer"}, cookie=cookie)
+    status, headers, _ = _request("/onboarding/name", method="POST", form={"csrf": csrf, "name": "Requester Example"}, cookie=cookie)
     assert status == "303 See Other"
     assert dict(headers)["Location"] == "/dashboard"
 
     # Dashboard reflects the name
     status, _, body = _request("/dashboard", cookie=cookie)
     assert status == "200 OK"
-    assert "Jane Developer" in body
+    assert "Requester Example" in body
 
 
 def test_chat_and_visitor_endpoints(web_env):
@@ -345,7 +345,7 @@ def test_chat_and_visitor_endpoints(web_env):
     conv_id = data["conversation_id"]
 
     # 3. Sending visitor inquiry triggers reply and notifies admins
-    status, _, body = _request("/api/chat/send", method="POST", json_body={"text": "What are your pricing plans?", "contact": "visitor@example.com"})
+    status, _, body = _request("/api/chat/send", method="POST", json_body={"text": "What are your pricing plans?", "contact": "visitor@example.invalid"})
     assert status == "200 OK"
     res = json.loads(body)
     assert "reply" in res and len(res["reply"]) > 10
@@ -361,7 +361,7 @@ def test_chat_and_visitor_endpoints(web_env):
 
     # With non-admin session, returns 403 Forbidden
     from datetime import timedelta
-    u_id = web_app.portal_db.create_user("user_not_admin@example.com", "")
+    u_id = web_app.portal_db.create_user("user_not_admin@example.invalid", "")
     s_id = web_app.portal_db.create_session(u_id, "csrf-test", (web_app._now() + timedelta(days=1)).isoformat(timespec="seconds"))
     cookie_user = f"{web_app.SESSION_COOKIE}={web_app._signed_cookie(s_id)}"
     status, _, _ = _request("/api/admin/chat/reply", method="POST", json_body={"conversation_id": conv_id, "text": "Hello!"}, cookie=cookie_user)
@@ -398,8 +398,8 @@ def test_contact_us_page_and_admin_notifications(web_env):
         method="POST",
         form={
             "csrf": csrf,
-            "name": "Alex Founder",
-            "email": "alex@startup.com",
+            "name": "Teammate Example",
+            "email": "teammate@example.invalid",
             "subject": "Enterprise monitoring question",
             "message": "We have 15 microservices and want to use Agent Daemon.",
         },
@@ -407,11 +407,11 @@ def test_contact_us_page_and_admin_notifications(web_env):
     )
     assert status == "200 OK"
     assert "Thanks for reaching out!" in body_ok
-    assert "alex@startup.com" in body_ok
+    assert "teammate@example.invalid" in body_ok
 
     # Verify admin support messages list
     support_items = web_app.portal_db.admin_list_support_messages(5)
-    assert any(s["email"] == "alex@startup.com" and "Enterprise" in s["subject"] for s in support_items)
+    assert any(s["email"] == "teammate@example.invalid" and "Enterprise" in s["subject"] for s in support_items)
 
 
 
@@ -424,14 +424,14 @@ def test_help_center_page_and_navigation(web_env):
     assert 'referrerpolicy="strict-origin-when-cross-origin"' in body
     assert "https://www.youtube.com/embed/Y3neE_B2d-M" in body
     assert "Remediation Modes" in body
-    assert "Automatic Mode" in body
+    assert "Pull Request Mode" in body
     assert "Pull Request Only" in body
     assert "Report Only" in body
     assert "Troubleshooting Playbooks" in body
     assert "Offline" in body
     assert "GitHub Installation PR Fails" in body
     assert "Auto-Fix Skipped or Marked" in body
-    assert "Fix PR Opened on GitHub but Not Auto-Merging" in body
+    assert "Fix PR Opened on GitHub but Not Appearing on the Portal" in body
     assert "FastAPI" in body and "Flask" in body and "Django" in body
     assert "help-search" in body
 
@@ -476,7 +476,7 @@ def test_structured_footer_and_all_links(web_env):
 
     # 3. Verify active Company links (About Us, Contact Us)
     for path, expected_text in [
-        ("/about", "About Us &amp; Co-Founders"),
+        ("/about", "About Agent Daemon"),
         ("/contact", "Contact Our Team"),
     ]:
         st, _, b = _request(path)
@@ -544,8 +544,8 @@ def test_support_ticketing_lifecycle(web_env, monkeypatch):
         method="POST",
         form={
             "csrf": csrf,
-            "name": "Jane Developer",
-            "email": "jane@company.com",
+            "name": "Requester Example",
+            "email": "requester@example.invalid",
             "subject": "Issue with auto-fix branch",
             "message": "The PR opened has failing tests.",
         },
@@ -558,14 +558,14 @@ def test_support_ticketing_lifecycle(web_env, monkeypatch):
     # Customer gets ticket confirmation email with ticket ID
     assert len(customer_emails_sent) == 1
     to_cust, cust_subj, cust_body, kind = customer_emails_sent[0]
-    assert to_cust == "jane@company.com"
+    assert to_cust == "requester@example.invalid"
     assert "TICK-" in cust_subj
     assert "support ticket" in cust_body.lower() or "ticket reference" in cust_body.lower()
 
     # Check database status
     tickets = web_app.portal_db.admin_list_support_messages(10)
     assert len(tickets) >= 1
-    ticket = [t for t in tickets if t["email"] == "jane@company.com"][0]
+    ticket = [t for t in tickets if t["email"] == "requester@example.invalid"][0]
     assert ticket["status"] == "open"
     assert ticket["ticket_ref"].startswith("TICK-")
 
@@ -573,7 +573,7 @@ def test_support_ticketing_lifecycle(web_env, monkeypatch):
     assert stats["open"] >= 1
 
     # 2. Admin logs in and views tickets
-    user_id = web_app.portal_db.create_user("admin1@example.com", "hash")
+    user_id = web_app.portal_db.create_user("admin1@example.invalid", "hash")
     admin_csrf = "csrf-adm-" + user_id[:6]
     session_id = web_app.portal_db.create_session(user_id, admin_csrf, (web_app._now() + timedelta(days=1)).isoformat())
     admin_cookie = f"{web_app.SESSION_COOKIE}={web_app._signed_cookie(session_id)}"
@@ -593,7 +593,7 @@ def test_support_ticketing_lifecycle(web_env, monkeypatch):
             "action": "update_support_ticket",
             "ticket_id": ticket["id"],
             "status": "for_review",
-            "assigned_to": "admin1@example.com",
+            "assigned_to": "admin1@example.invalid",
             "resolution_note": "",
         },
     )
@@ -603,7 +603,7 @@ def test_support_ticketing_lifecycle(web_env, monkeypatch):
 
     updated_t = web_app.portal_db.admin_get_support_ticket(ticket["id"])
     assert updated_t["status"] == "for_review"
-    assert updated_t["assigned_to"] == "admin1@example.com"
+    assert updated_t["assigned_to"] == "admin1@example.invalid"
 
     # 4. Admin closes ticket with resolution note
     st, hdrs, _ = _request(
@@ -615,7 +615,7 @@ def test_support_ticketing_lifecycle(web_env, monkeypatch):
             "action": "update_support_ticket",
             "ticket_id": ticket["id"],
             "status": "closed",
-            "assigned_to": "admin1@example.com",
+            "assigned_to": "admin1@example.invalid",
             "resolution_note": "Fixed branch permission configuration in repo settings.",
         },
     )
@@ -625,14 +625,14 @@ def test_support_ticketing_lifecycle(web_env, monkeypatch):
     closed_t = web_app.portal_db.admin_get_support_ticket(ticket["id"])
     assert closed_t["status"] == "closed"
     assert closed_t["closed_at"] != ""
-    assert closed_t["closed_by"] == "admin1@example.com"
+    assert closed_t["closed_by"] == "admin1@example.invalid"
     assert closed_t["resolution_note"] == "Fixed branch permission configuration in repo settings."
 
     # Customer automatically receives closing resolution email
     closing_emails = [e for e in customer_emails_sent if e[3] == "ticket_closed"]
     assert len(closing_emails) == 1
     to_c, sub_c, body_c, _ = closing_emails[0]
-    assert to_c == "jane@company.com"
+    assert to_c == "requester@example.invalid"
     assert f"[Ticket #{closed_t['ticket_ref']}] Resolved:" in sub_c
     assert "Fixed branch permission configuration in repo settings." in body_c
     assert "Agent Daemon team of engineers" in body_c

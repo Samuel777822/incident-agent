@@ -16,7 +16,7 @@ log = logging.getLogger(__name__)
 
 DAEMON_KNOWLEDGE = """
 === ABOUT AGENT DAEMON ===
-Product: Agent Daemon (hosted at https://incident-agent-portal.onrender.com)
+Product: Agent Daemon
 Tagline: Push your code. The agent catches what broke, fixes it, and pushes the fix back to GitHub, before you deploy.
 Who it is for: vibe coders, students and hackathon teams who have no time to debug.
 Languages: Python, JavaScript, TypeScript (React, Next.js, Node), Java (Maven, Gradle, plain javac) and plain HTML/CSS/JS sites,
@@ -36,8 +36,8 @@ our code applies the patch and the SAME sandbox check must pass. The fix goes to
 Agent modes per project:
    - Report only: explains the problem, no code changes.
    - Pull request: opens a pull request with the fix for you to merge.
-   - Auto: merges the pull request automatically once the sandbox proves the fix and GitHub checks are green, so the fixed version is on GitHub.
-The dashboard shows live what the agent is doing (downloading, testing in the sandbox, writing a fix in a given mode, pushing, merging),
+Every pull request stays open for human review, including when sandbox and GitHub checks pass.
+The dashboard shows live what the agent is doing (downloading, testing in the sandbox, writing a fix in a given mode, opening a pull request),
 which mode is working and how many tries are left.
 
 HOW THE AGENT CHOOSES AN AI (explain it in plain words first):
@@ -88,7 +88,8 @@ DAEMON_KNOWLEDGE = (DAEMON_KNOWLEDGE
     .replace("@@TRY@@", plans.TRY_DEFINITION).replace("@@MODES@@", plans.MODE_SUMMARY).replace("@@WHY@@", plans.WHY_STRONGER)
     .replace("@@FAIL@@", plans.FAILED_FIX).replace("@@HUMAN@@", plans.HUMAN_NEEDED)
     .replace("@@SLOT@@", f"₹{plans.PROJECT_SLOT_PRICE}")
-    .replace("@@SUPPORT@@", "Support email: " + (os.getenv("SUPPORT_EMAIL", "").strip() or "contact@agentdaemon.xyz")))
+    .replace("@@SUPPORT@@", ("Support email: " + os.getenv("SUPPORT_EMAIL", "").strip())
+             if os.getenv("SUPPORT_EMAIL", "").strip() else "Contact form: /contact"))
 
 SYSTEM_PROMPT = f"""You are the friendly, helpful AI Assistant for Agent Daemon.
 You answer questions from prospective customers and users who visit the website.
@@ -97,7 +98,7 @@ KNOWLEDGE BASE:
 {DAEMON_KNOWLEDGE}
 
 CRITICAL PRIVACY DIRECTIVES (MANDATORY):
-- NEVER mention any personal names (such as Abhay, Pranav, Samuel, Rao) under ANY circumstances.
+- Never disclose private personal names or contact details.
 - NEVER disclose personal or admin email addresses. The only email address you may give out is the support email listed in the knowledge base (if one is listed).
 - When asked "Who are the founders?", "Who made this?", "Who built this?", or about the creators, ALWAYS state that Agent Daemon is created and operated by the "Agent Daemon team of engineers".
 - For contact, refer visitors to this live chat, the Contact form at /contact, or the support email if one is listed.
@@ -111,48 +112,46 @@ GUIDELINES:
 """
 
 
+def _configured_private_names() -> tuple[str, ...]:
+    """Private names may be configured outside source control; this module stores none."""
+    return tuple(name.strip() for name in os.getenv("CHATBOT_PRIVATE_NAMES", "").split(",") if name.strip())
+
+
 def sanitize_chat_text(text: str) -> str:
-    """Strictly scrubs any personal names and personal email IDs from chat text."""
+    """Scrub configured private names and non-support email addresses from chat text."""
     if not text:
         return ""
 
-    # If the message is the legacy founder introduction, replace it cleanly
-    if any(k in text.lower() for k in ("abhay", "pranav", "naveenachandra")):
-        if any(f in text.lower() for f in ("created by", "co-founder", "students", "founders")):
-            return (
-                "Agent Daemon is built and maintained by the Agent Daemon team of engineers. "
-                "Our team designed it to give developer teams 24/7 AI incident response without on-call burnout. "
-                "You can reach our team directly right here in this chat or through our contact form at /contact."
-            )
+    support_email = os.getenv("SUPPORT_EMAIL", "").strip().casefold()
+    def redact_email(match):
+        return match.group(0) if support_email and match.group(0).casefold() == support_email else "support through /contact"
+    text = re.sub(r'[\w.+-]+@[\w.-]+\.[A-Za-z]{2,}', redact_email, text)
 
-    # Strip personal email addresses
-    text = re.sub(r'[\w.+-]+@gmail\.com', 'support through /contact', text, flags=re.I)
-    text = re.sub(r'naveenachandra371@\S+', 'support through /contact', text, flags=re.I)
-    text = re.sub(r'pranavvrao1@\S+', 'support through /contact', text, flags=re.I)
+    lower = text.casefold()
+    names = _configured_private_names()
+    founder_terms = ("created by", "co-founder", "students", "founders")
+    if any(name.casefold() in lower for name in names) and any(term in lower for term in founder_terms):
+        return (
+            "Agent Daemon is built and maintained by the Agent Daemon team of engineers. "
+            "Our team designed it to give developer teams 24/7 AI incident response without on-call burnout. "
+            "You can reach our team directly right here in this chat or through our contact form at /contact."
+        )
 
-    # Strip student bios or personal university references
-    text = re.sub(r'Both are students[^\n.]*\.?', '', text, flags=re.I)
-    text = re.sub(r'Abhay studies[^\n.]*\.?', '', text, flags=re.I)
-    text = re.sub(r'Pranav studies[^\n.]*\.?', '', text, flags=re.I)
+    text = re.sub(r'\b(?:both|they) are students?[^\n.]*\.?', '', text, flags=re.I)
+    for name in sorted(names, key=len, reverse=True):
+        text = re.sub(re.escape(name), 'the Agent Daemon team', text, flags=re.I)
 
-    # Strip and replace personal names
-    text = re.sub(r'\*?\*?Abhay Samuel H\*?\*?', 'the Agent Daemon team of engineers', text, flags=re.I)
-    text = re.sub(r'\*?\*?Pranav V Rao\*?\*?', 'the Agent Daemon team of engineers', text, flags=re.I)
-    text = re.sub(r'\bAbhay\s*(?:and|&)\s*Pranav\b', 'the Agent Daemon team of engineers', text, flags=re.I)
-    text = re.sub(r'\bAbhay\b', 'the Agent Daemon team', text, flags=re.I)
-    text = re.sub(r'\bPranav\b', 'the Agent Daemon team', text, flags=re.I)
-
-    # Clean up any awkward phrasing resulting from replacements
     text = re.sub(r'(?:the Agent Daemon team of engineers\s*(?:and|,)\s*)+the Agent Daemon team of engineers', 'the Agent Daemon team of engineers', text, flags=re.I)
     return text.strip()
-
 
 def answer_visitor_query(user_text: str, history: list[dict] | None = None) -> str:
     """Answers visitor questions using Groq or falls back to built-in knowledge matching."""
     text_lower = user_text.lower().strip()
 
     # Immediate deterministic intercept for founder/team/creator inquiries to guarantee privacy
-    if any(k in text_lower for k in ("founder", "founders", "team", "who built", "who made", "who created", "who is the creator", "creator", "creators", "author", "authors", "who are you", "abhay", "pranav")):
+    founder_question = any(k in text_lower for k in ("founder", "founders", "team", "who built", "who made", "who created", "who is the creator", "creator", "creators", "author", "authors", "who are you"))
+    private_name_question = any(name.casefold() in text_lower for name in _configured_private_names())
+    if founder_question or private_name_question:
         return (
             "Agent Daemon is built and maintained by the Agent Daemon team of engineers. "
             "They designed it to give developer teams 24/7 AI incident response without on-call burnout. "
@@ -223,7 +222,7 @@ def answer_visitor_query(user_text: str, history: list[dict] | None = None) -> s
     if any(k in text_lower for k in ("how does it work", "how it works", "what is", "features", "github", "push", "deploy", "algorithm", "router")):
         return (
             "Every time you push to GitHub, Agent Daemon installs, builds, tests and starts your code in a sandbox. If something breaks, "
-            "the agent writes a fix, proves it with the same check, and pushes it back as a pull request (merged automatically in Auto mode). "
+            "the agent proposes a fix, runs the same check, and opens a pull request for you to review and merge. "
             "The agent picks an economical AI that is likely to fix the bug and moves to a stronger one only when needed. "
             "The interactive diagram is at /how-it-works."
         )

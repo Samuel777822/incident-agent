@@ -7,7 +7,7 @@ from fixengine import store
 from tests.test_web_app import _request, web_env  # noqa: F401  (reuse the portal's own request helper and fixture)
 
 
-def _login(email="person@example.com"):
+def _login(email="person@example.invalid"):
     user_id = web_app.portal_db.create_user(email, "")
     session_id = web_app.portal_db.create_session(user_id, "csrf-token-1", (web_app._now() + timedelta(days=1)).isoformat(timespec="seconds"))
     web_app.portal_db.admin_grant_access(user_id, 30, "paid", "test") if not email.startswith("admin") else None
@@ -51,7 +51,7 @@ def test_pending_decision_is_shown_and_can_be_answered(web_env):
     choice_id = store.create_choice(bug["id"], user_id, "sonnet", "You've used 3 of your 6 High-mode tries this month.", 30)
     _, _, body = _request("/usage", cookie=cookie)
     assert "Your decision" in body and "3 of your 6 High-mode tries" in body and "Send to human review" in body
-    other_id, other_cookie = _login("other@example.com")
+    other_id, other_cookie = _login("other@example.invalid")
     _request("/usage/choice", method="POST", cookie=other_cookie, form={"csrf": "csrf-token-1", "choice_id": choice_id, "choice": "review"})
     assert store.get_choice(choice_id)["status"] == "waiting"            # someone else cannot answer it
     _request("/usage/choice", method="POST", cookie=cookie, form={"csrf": "csrf-token-1", "choice_id": choice_id, "choice": "review"})
@@ -75,16 +75,16 @@ def test_bug_list_escapes_hostile_project_names(web_env):
 
 
 def test_admin_budget_page_is_admin_only(web_env):
-    _, cookie = _login("person@example.com")
+    _, cookie = _login("person@example.invalid")
     status, _, _ = _request("/admin/fix", cookie=cookie)
     assert status == "404 Not Found"
-    admin_id, admin_cookie = _login("admin1@example.com")
+    admin_id, admin_cookie = _login("admin1@example.invalid")
     status, _, body = _request("/admin/fix", cookie=admin_cookie)
     assert status == "200 OK" and "AI spending and controls" in body and "Spending protection" in body and "Mode switches" in body and "Low effort" in body
 
 
 def test_admin_can_pause_and_resume_a_mode_with_csrf(web_env):
-    admin_id, cookie = _login("admin1@example.com")
+    admin_id, cookie = _login("admin1@example.invalid")
     status, _, _ = _request("/admin/fix", method="POST", cookie=cookie, form={"action": "pause", "tier": "opus"})
     assert status == "403 Forbidden" and "opus" not in store.paused_tiers()
     _request("/admin/fix", method="POST", cookie=cookie, form={"csrf": "csrf-token-1", "action": "pause", "tier": "opus"})
@@ -99,11 +99,11 @@ def test_admin_can_pause_and_resume_a_mode_with_csrf(web_env):
 
 def test_admin_approves_a_held_request(web_env, monkeypatch):
     monkeypatch.setattr("fixengine.notify._to_admins", lambda *a, **k: None)
-    user_id, _ = _login("person@example.com")
+    user_id, _ = _login("person@example.invalid")
     hold_id = store.create_hold(user_id, "opus", 2, {"projected_fraction": 0.9})
-    admin_id, cookie = _login("admin1@example.com")
+    admin_id, cookie = _login("admin1@example.invalid")
     _, _, body = _request("/admin/fix", cookie=cookie)
-    assert "person@example.com" in body and "Approve" in body
+    assert "person@example.invalid" in body and "Approve" in body
     _request("/admin/fix", method="POST", cookie=cookie, form={"csrf": "csrf-token-1", "action": "approve_hold", "hold_id": hold_id})
     assert store.get_hold(hold_id)["status"] == "granted" and store.grants_total(user_id, "opus", "admin") == 2
 
@@ -115,11 +115,11 @@ def test_dashboard_links_to_usage(web_env):
 
 
 def test_admin_can_credit_a_paid_pack(web_env):
-    user_id, _ = _login("person@example.com")
-    admin_id, cookie = _login("admin1@example.com")
+    user_id, _ = _login("person@example.invalid")
+    admin_id, cookie = _login("admin1@example.invalid")
     _, _, body = _request("/admin/fix", method="POST", cookie=cookie,
-                          form={"csrf": "csrf-token-1", "action": "sell_pack", "email": "person@example.com", "kind": "extra"})
+                          form={"csrf": "csrf-token-1", "action": "sell_pack", "email": "person@example.invalid", "kind": "extra"})
     assert "Pack credited" in body and store.grants_total(user_id, "opus", "pack") == 3
     _, _, body = _request("/admin/fix", method="POST", cookie=cookie,
-                          form={"csrf": "csrf-token-1", "action": "sell_pack", "email": "nobody@example.com", "kind": "extra"})
+                          form={"csrf": "csrf-token-1", "action": "sell_pack", "email": "nobody@example.invalid", "kind": "extra"})
     assert "No customer" in body

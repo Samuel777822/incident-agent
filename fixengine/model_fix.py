@@ -5,7 +5,7 @@
     -> replacement from model_registry.json, double-checked against the provider's live model list (model_catalog)
     -> replace the model id everywhere it appears as a value in the code/config (never in .env secrets files)
     -> validate: the sandbox check when the sandbox is online, otherwise a parse-only check of every changed file
-    -> normal PR flow (fix branch + pull request; Auto mode merges it once GitHub checks pass)
+    -> normal PR flow (fix branch + pull request for human review)
 
 No AI model is called and no tries are spent. If the model id is not in the repository (it lives in the hosting
 dashboard's environment variables), the customer gets exact, plain-language instructions instead.
@@ -441,9 +441,7 @@ def run(claimed: dict, event: dict, *, repo_provider=None, runner=None, pr_opene
             pass
     else:
         store.block_automerge(incident_id)
-    mode = project.get("mode")
-    stage("merging" if mode == "auto" and proven else "pr_open",
-          "waiting for GitHub checks, then merging automatically" if mode == "auto" and proven else "review and merge the pull request on GitHub")
+    stage("pr_open", "review and merge the pull request on GitHub")
     try:
         notify.user_pr_opened(project["user_id"], project.get("name", ""), pr["url"], verify)
     except Exception:

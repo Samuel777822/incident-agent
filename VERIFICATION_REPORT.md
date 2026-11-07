@@ -1,6 +1,10 @@
 # Agent Daemon — Production-Readiness Audit & Empirical Verification Report
 
-- **Repository:** `https://github.com/Samuel777822/incident-agent`
+> The initial production-readiness audit below is historical evidence from a separate host and branch. Its original test
+> counts and environment describe that run only. The supplied-archive follow-up, including its final test results,
+> sanitization, and review branch, is recorded in the section at the end of this report.
+
+- **Repository:** the configured GitHub source repository
 - **Branch:** `audit/production-readiness-2026-11` (`main` untouched; no PRs auto-merged)
 - **Verification Date:** `2026-11-07`
 - **Host Environment:** Windows (`win32`), Python `3.13.14`, Node.js `v24.15.0`, OpenJDK `21.0.12.1`, Docker `29.9.2 (linux/amd64)`
@@ -156,8 +160,51 @@ All raw JSON and Markdown proofs are stored in [`verification/`](verification/):
 
 In accordance with the audit rules (never fabricate results, never print/commit secrets, report any external step blocked by missing credentials on the host):
 1. **Live Paid LLM Token Calls:** No provider API keys (`OPENROUTER_API_KEY`, `ANTHROPIC_API_KEY`, `GROQ_API_KEY`, `OPENAI_API_KEY`, `GEMINI_API_KEY`) are present in this machine's environment. OpenRouter's live public `/api/v1/models` catalogue (460 models) was queried live over HTTPS; authenticated completions and error paths (429 rate limit, 404 model-not-found live catalogue replacement, privacy-policy 400 auto-pause) were verified through the real HTTP adapter code paths using deterministic mock HTTP transports.
-2. **Pushing Branch & Opening PR on `github.com/Samuel777822/incident-agent`:** All changes are committed cleanly to local branch `audit/production-readiness-2026-11` (`main` untouched). If the host Git credential manager does not hold push credentials for `Samuel777822/incident-agent`, run:
-   ```bash
-   git push -u origin audit/production-readiness-2026-11
-   gh pr create --base main --head audit/production-readiness-2026-11 --title "Audit & repair: cross-platform sandbox, mandatory baseline scan, live adapter model replacement, and verification proofs" --body-file VERIFICATION_REPORT.md
-   ```
+2. **Branch and PR:** PR #14 was merged into `main` during this work as `dbfce6c5f94c175aa59da93844fc5798aed5687a`. I did not invoke a merge. The resulting tree did not retain the intended source changes, so this follow-up is based on that actual `main` state on `codex/reviewable-safety-java-monitor-followup`; its pull request is listed below.
+
+## Follow-up audit — supplied archive, review-only PRs, and Java monitoring
+
+This follow-up records the work performed for the supplied `incident-agent-main-monitoring-v2.zip`. It is separate from the
+production-readiness results above, which were produced in a different host environment.
+
+- **Archive parity:** At the time of comparison, the ZIP and `main` commit `037bf153e166f651993f87f54c123f3e471c89ee`
+  each contained 885 files. Per-file hashes matched exactly; there were no missing, extra, or differing files.
+- **Updated base:** `main` advanced through PR #13 to `22016ba4decb8f73112ba04042cc4fafe84ddab3`, then through the merge
+  commit for PR #14 to `dbfce6c5f94c175aa59da93844fc5798aed5687a`. PR #14 was merged externally while this work was in
+  progress; I did not call a merge action. Its resulting tree lacked the Java installer and still contained the automatic
+  merge paths, so this follow-up reapplies the intended changes on top of the actual current `main` while preserving its
+  other work.
+- **Review safety:** Automated merge calls and worker polling were removed. Legacy parameters/helpers remain only for
+  compatibility and do not merge. Installer and customer-facing text now leave pull requests open for human review.
+- **Java monitoring:** Maven/Gradle-style `src/main/java` modules with a conventional `public static void main` entry point
+  receive a same-package monitor that reports uncaught exceptions and sends 30-second heartbeats using project-scoped
+  credentials. Detection, wiring, credential scoping, and a JDK-gated compile/runtime test are covered.
+- **Fixture and documentation privacy:** Tests use reserved `.invalid` account addresses, generic test identities,
+  `TEST-PHONE` labels, `TESTREF` transaction references, and a `TEST_ONLY_UPI_DESTINATION` placeholder. The changelog and
+  deployment guide no longer repeat admin/support addresses or secret values.
+- **Chatbot privacy:** Removed hard-coded personal names, the default support address, and the deployment hostname from the
+  chatbot source. Private names/support contact can be configured outside Git; `/contact` is the default. Three regression
+  tests cover name and email scrubbing and the founder-query response.
+- **Public information and payments:** Removed personal founder names, contact details, and portrait assets from the public
+  About page. No UPI destination is hard-coded in public files; manual UPI checkout remains unavailable unless private
+  `UPI_ID` is configured. Support/admin addresses and the public portal URL are environment-configured.
+- **Test results:** On Python 3.15.0, one full run before the final test-only placeholder substitutions completed with
+  **390 passed, 5 skipped, 0 failed** in 264.54 seconds. A later full run during the follow-up reported **351 passed,
+  5 skipped, 33 failed, 6 errors** in 215.11 seconds; subprocess creation hit `OSError: [WinError 6] The handle is invalid`,
+  after which affected fix-engine checks failed downstream. That full run preceded the final explicit-marker-only test edits.
+  After all final marker substitutions, the targeted payment, UPI-configuration, Java-key, and token-sanitization checks passed
+  (**8 passed** in 2.15 seconds). A broader focused run completed **135 passed, 2 skipped, 4 failed** in 51.54 seconds;
+  its four failures were local monitor integration checks blocked when child Node/Python processes received `EACCES`
+  connecting to test servers on `127.0.0.1`. The isolated large-repository suite passed (**6 passed** in 17.51 seconds).
+  The exact final tree has no green full-suite run in this host. `compileall` and `git diff --check` passed.
+- **Local limits:** The final host has no Java JDK, Docker daemon, PostgreSQL client/server, Render CLI, or Playwright/Chromium.
+  The five skipped tests were gated on a JDK (3), Playwright/Chromium (1), and global `tsc` (1). Node.js and npm are
+  available. Java runtime, browser automation, container execution, PostgreSQL integration, Render schema validation/deploy,
+  and live provider calls are not claimed as verified by this follow-up.
+- **Credential/privacy scan:** The runtime secret scan covered 105 source files and found no credential-like runtime values.
+  Synthetic payment references and contact fixtures use explicit test markers; no live payment destination is present in source.
+- **Readiness conclusion:** **Not production-ready on this evidence.** The final full-suite attempt was not green, and live
+  Java, browser, Docker sandbox, PostgreSQL, provider-authentication, and deploy paths were unavailable in this host. The
+  branch is prepared for code review; these limitations remain for maintainers to resolve or verify in the target environment.
+- **Review:** The follow-up branch is `codex/reviewable-safety-java-monitor-followup`, based on
+  `dbfce6c5f94c175aa59da93844fc5798aed5687a`. The pull request for this branch is listed after it is opened.

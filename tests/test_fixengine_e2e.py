@@ -258,19 +258,20 @@ def test_engine_is_off_unless_enabled(monkeypatch):
     assert orchestrator.enabled()
 
 
-def test_unverified_fix_blocks_auto_merge(world):
+def test_unverified_fix_requires_human_review(world):
     w = world(scripts={"groq": ["garbage"], "haiku": [reply(H.GOOD_EDIT)]}, mode="auto")
     (w.repo / "tests" / "test_pricing.py").unlink()                      # no tests -> the sandbox can only check the build
     incident_id, outcome = w.run_once()
     assert outcome == "pr_opened" and w.incident(incident_id)["no_automerge"] == 1
     assert "NOT" in w.prs[0]["body"]
-    assert incident_id not in [r["incident_id"] for r in portal_db.list_auto_prs()]
+    assert portal_db.list_auto_prs() == []
 
 
-def test_verified_fix_in_auto_mode_stays_eligible_for_ci_gated_merge(world):
+def test_verified_fix_stays_open_for_human_review(world):
     w = world(scripts={"groq": ["garbage"], "haiku": [reply(H.GOOD_EDIT)]}, mode="auto")
     incident_id, outcome = w.run_once()
-    assert outcome == "pr_opened" and incident_id in [r["incident_id"] for r in portal_db.list_auto_prs()]
+    assert outcome == "pr_opened" and portal_db.list_auto_prs() == []
+    assert w.incident(incident_id)["status"] == "pr_opened"
 
 
 def test_reopen_after_review_requeues_the_incident(world):

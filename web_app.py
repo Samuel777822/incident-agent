@@ -617,8 +617,8 @@ def _google_oauth_settings() -> tuple[str, str, str]:
 def _app_cookie_domain() -> str:
     """Choose a production cookie domain shared by apex and www hosts.
 
-    Render may serve the same application at agentdaemon.xyz and
-    www.agentdaemon.xyz. Host-only cookies do not cross between those hosts;
+    A deployment may serve the same application at an apex domain and its
+    www host. Host-only cookies do not cross between those hosts;
     that can drop the OAuth state cookie on Google's callback and can also
     make the resulting session appear signed out. COOKIE_DOMAIN can be set
     explicitly. Otherwise derive it from GOOGLE_REDIRECT_URI and strip a
@@ -760,7 +760,7 @@ def _layout(title: str, body: str, request: Request | None = None) -> str:
         except Exception:
             pass
     footer_markup = footer_pages.render_footer_html(visitor_count=visitor_count)
-    return f"""<!doctype html><html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><meta name="description" content="Agent Daemon catches the bug when you push to GitHub, fixes it and pushes the fix back. Python, JavaScript, TypeScript, Java and HTML."><title>{_escape(title)} · {APP_NAME}</title><link rel="preconnect" href="https://fonts.googleapis.com"><link rel="preconnect" href="https://fonts.gstatic.com" crossorigin><link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Cinzel:wght@500;700&amp;family=Cinzel+Decorative:wght@700&amp;display=swap"><style>{CSS}</style></head><body><header class="wrap nav"><a class="brand" href="/"><span class="brand-mark">A</span>{APP_NAME}</a><nav class="navlinks">{links}</nav></header><main class="wrap">{body}</main>{footer_markup}<script src="/assets/home.js" defer></script><script src="/assets/chat.js" defer></script></body></html>"""
+    return f"""<!doctype html><html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><meta name="description" content="Agent Daemon catches problems on GitHub pushes and opens reviewable pull requests with proposed fixes. Python, JavaScript, TypeScript, Java and HTML."><title>{_escape(title)} · {APP_NAME}</title><link rel="preconnect" href="https://fonts.googleapis.com"><link rel="preconnect" href="https://fonts.gstatic.com" crossorigin><link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Cinzel:wght@500;700&amp;family=Cinzel+Decorative:wght@700&amp;display=swap"><style>{CSS}</style></head><body><header class="wrap nav"><a class="brand" href="/"><span class="brand-mark">A</span>{APP_NAME}</a><nav class="navlinks">{links}</nav></header><main class="wrap">{body}</main>{footer_markup}<script src="/assets/home.js" defer></script><script src="/assets/chat.js" defer></script></body></html>"""
 
 
 def _csrf(request: Request) -> str:
@@ -863,7 +863,7 @@ _INCIDENT_LABELS = {
 
 
 def _base_url() -> str:
-    return os.getenv("PORTAL_BASE_URL", "https://incident-agent-portal.onrender.com").strip().rstrip("/")
+    return os.getenv("PORTAL_BASE_URL", "").strip().rstrip("/")
 
 
 def _parse_iso(value):
@@ -989,7 +989,9 @@ def _razorpay_settings(plan: str = "yearly"):
 
 
 def _upi_uri(plan: str) -> str:
-    vpa = os.getenv("UPI_ID", "7975291636@ptsbi").strip()
+    vpa = os.getenv("UPI_ID", "").strip()
+    if not vpa:
+        raise RuntimeError("Manual UPI payments are not configured. Please contact support or try again later.")
     name = os.getenv("UPI_PAYEE_NAME", "Agent Daemon").strip()
     amount = plans.PRODUCTS[plan]["rupees"]
     parts = {"pa": vpa, "pn": name, "am": f"{amount:.2f}", "cu": "INR", "tn": f"Agent Daemon {plan}"}
@@ -1048,7 +1050,7 @@ def _github_setup_guide() -> str:
         "<p class='muted'>Agent Daemon talks to GitHub with a <b>classic</b> personal access token. "
         "Fine-grained tokens are not supported. Two things to do first:</p>"
         "<h3>1. Make your repository private</h3>"
-        "<p class='muted'>We read your source files and error logs to diagnose problems, and Auto mode only merges fixes in private repositories. "
+        "<p class='muted'>We read your source files and error logs to diagnose problems, and we only connect private repositories. "
         "A private repository keeps your code and logs away from the public.</p>"
         "<ol class='steps muted'>"
         "<li>Open your repository on <b>github.com</b> in a browser.</li>"
@@ -1066,89 +1068,27 @@ def _github_setup_guide() -> str:
         "<li>Press <b>Generate token</b> and copy it right away. GitHub shows it only once. Paste it into the connect form.</li></ol>"
         "<h3>What the agent uses each permission for</h3>"
         "<ul class='muted'>"
-        "<li><code>repo</code>: read your code, create a branch and open pull requests. Nothing is merged unless you choose Auto mode.</li>"
-        "<li><code>workflow</code>: add a small test workflow file, so Auto mode has a check that must pass before merging.</li></ul>"
+        "<li><code>repo</code>: read your code, create a branch and open pull requests for your review.</li>"
+        "<li><code>workflow</code>: add a small test workflow file to report checks on pull requests.</li></ul>"
         "<p class='muted'>Classic tokens are not limited to one repository, so keep yours secret. "
         "You can delete the token on GitHub at any time to cut our access immediately.</p></section>")
 
 
 def _page_about(request):
     body = ("""<section class="about-hero">
-<div class="eyebrow">Meet the Creators</div>
-<h1>About Us &amp; Co-Founders</h1>
-<p>Agent Daemon is created by systems builders and software engineers dedicated to giving developer teams automated, reliable on-call intelligence without the chaos of 3 AM emergencies.</p>
+<div class="eyebrow">Who We Are</div>
+<h1>About Agent Daemon</h1>
+<p>Agent Daemon is built by a small engineering team focused on giving developer teams reliable incident response without the chaos of production emergencies.</p>
 </section>
 
-<section class="founders-grid">
-  <article class="card founder-card">
-    <div class="founder-header">
-      <div class="founder-avatar-wrap">
-        <img class="founder-avatar" src="/assets/daemon-founder-abhay.webp" alt="Abhay Samuel H" width="108" height="108" loading="lazy">
-      </div>
-      <div class="founder-names">
-        <h2>Abhay Samuel H</h2>
-        <span class="founder-role">Co-Founder &amp; CTO</span>
-      </div>
-    </div>
-    <div class="founder-bio">
-      <p>Abhay is a Computer Science Engineering student at BMSCE, Bangalore, and the technical co-founder of Agent Daemon. He built the core of the product: the monitoring client that reports errors from a customer's app, the incident pipeline, the automated fix pull requests, and the customer and admin portal.</p>
-      <p>He also owns testing and quality, with more than 90 automated tests covering the flows end to end. His mission with Agent Daemon is to give small teams without a dedicated on-call engineer an AI one that spots problems, finds the cause, and proposes a fix for a human to review.</p>
-    </div>
-    <div class="founder-links">
-      <a class="founder-link" href="https://github.com/Samuel777822" target="_blank" rel="noopener">
-        <svg width="15" height="15" viewBox="0 0 16 16" fill="currentColor" aria-hidden="true"><path d="M8 0C3.58 0 0 3.58 0 8c0 3.54 2.29 6.53 5.47 7.59.4.07.55-.17.55-.38 0-.19-.01-.82-.01-1.49-2.01.37-2.53-.49-2.69-.94-.09-.23-.48-.94-.82-1.13-.28-.15-.68-.52-.01-.53.63-.01 1.08.58 1.23.82.72 1.21 1.87.87 2.33.66.07-.52.28-.87.51-1.07-1.78-.2-3.64-.89-3.64-3.95 0-.87.31-1.59.82-2.15-.08-.2-.36-1.02.08-2.12 0 0 .67-.21 2.2.82.64-.18 1.32-.27 2-.27.68 0 1.36.09 2 .27 1.53-1.04 2.2-.82 2.2-.82.44 1.1.16 1.92.08 2.12.51.56.82 1.27.82 2.15 0 3.07-1.87 3.75-3.65 3.95.29.25.54.73.54 1.48 0 1.07-.01 1.93-.01 2.2 0 .21.15.46.55.38A8.013 8.013 0 0016 8c0-4.42-3.58-8-8-8z"/></svg>
-        GitHub
-      </a>
-      <a class="founder-link" href="https://github.com/Samuel777822/incident-agent" target="_blank" rel="noopener">
-        <svg width="15" height="15" viewBox="0 0 16 16" fill="currentColor" aria-hidden="true"><path d="M2 2.5A2.5 2.5 0 014.5 0h8.75a.75.75 0 01.75.75v12.5a.75.75 0 01-.75.75h-2.5a.75.75 0 110-1.5h1.75v-2h-8a1 1 0 00-.714 1.7.75.75 0 01-1.072 1.05A2.495 2.495 0 012 11.5v-9zm10.5-1h-8a1 1 0 00-1 1v6.708A2.486 2.486 0 014.5 9h8V1.5z"/></svg>
-        Repository
-      </a>
-      <a class="founder-link" href="/contact">
-        <svg width="15" height="15" viewBox="0 0 16 16" fill="currentColor" aria-hidden="true"><path d="M1.75 2h12.5c.966 0 1.75.784 1.75 1.75v8.5A1.75 1.75 0 0114.25 14H1.75A1.75 1.75 0 010 12.25v-8.5C0 2.784.784 2 1.75 2zm0 1.5a.25.25 0 00-.25.25v.725l6.5 3.9 6.5-3.9v-.725a.25.25 0 00-.25-.25H1.75zm13 2.748l-6.236 3.742a.5.5 0 01-.528 0L1.5 6.248v5.502c0 .138.112.25.25.25h12.5a.25.25 0 00.25-.25V6.248z"/></svg>
-        Email
-      </a>
-    </div>
-  </article>
-
-  <article class="card founder-card">
-    <div class="founder-header">
-      <div class="founder-avatar-wrap">
-        <img class="founder-avatar" src="/assets/daemon-founder-pranav.webp" alt="Pranav V Rao" width="108" height="108" loading="lazy">
-      </div>
-      <div class="founder-names">
-        <h2>Pranav V Rao</h2>
-        <span class="founder-role">Co-Founder &amp; Systems Architect</span>
-      </div>
-    </div>
-    <div class="founder-bio">
-      <p>Pranav is an AI &amp; ML Engineering student and the co-founder of Agent Daemon. He plays a key role in designing the system architecture and building the backend infrastructure that powers the platform. His contributions include backend development, architecting the system with Codex, developing the uptime monitoring setup, building and integrating the autonomous worker agent, and establishing deployment and automation workflows using Render.</p>
-      <p>He also works on backend integrations, system reliability, and connecting the different components that make Agent Daemon function as a unified platform. His mission with Agent Daemon is to build reliable, AI-powered incident response infrastructure that helps smaller development teams monitor applications, investigate failures, and resolve issues more efficiently.</p>
-      <p>Beyond technology, he is a defence enthusiast with a keen interest in military technology and its real-world applications.</p>
-    </div>
-    <div class="founder-links">
-      <a class="founder-link" href="https://github.com/pranavvrao1-ai" target="_blank" rel="noopener">
-        <svg width="15" height="15" viewBox="0 0 16 16" fill="currentColor" aria-hidden="true"><path d="M8 0C3.58 0 0 3.58 0 8c0 3.54 2.29 6.53 5.47 7.59.4.07.55-.17.55-.38 0-.19-.01-.82-.01-1.49-2.01.37-2.53-.49-2.69-.94-.09-.23-.48-.94-.82-1.13-.28-.15-.68-.52-.01-.53.63-.01 1.08.58 1.23.82.72 1.21 1.87.87 2.33.66.07-.52.28-.87.51-1.07-1.78-.2-3.64-.89-3.64-3.95 0-.87.31-1.59.82-2.15-.08-.2-.36-1.02.08-2.12 0 0 .67-.21 2.2.82.64-.18 1.32-.27 2-.27.68 0 1.36.09 2 .27 1.53-1.04 2.2-.82 2.2-.82.44 1.1.16 1.92.08 2.12.51.56.82 1.27.82 2.15 0 3.07-1.87 3.75-3.65 3.95.29.25.54.73.54 1.48 0 1.07-.01 1.93-.01 2.2 0 .21.15.46.55.38A8.013 8.013 0 0016 8c0-4.42-3.58-8-8-8z"/></svg>
-        GitHub
-      </a>
-      <a class="founder-link" href="https://www.linkedin.com/in/pranav-v-rao-061040393/" target="_blank" rel="noopener">
-        <svg width="15" height="15" viewBox="0 0 16 16" fill="currentColor" aria-hidden="true"><path d="M0 1.146C0 .513.526 0 1.175 0h13.65C15.474 0 16 .513 16 1.146v13.708c0 .633-.526 1.146-1.175 1.146H1.175C.526 16 0 15.487 0 14.854V1.146zm4.943 12.248V6.169H2.542v7.225h2.401zm-1.2-8.212c.837 0 1.358-.554 1.358-1.248-.015-.709-.52-1.248-1.342-1.248-.822 0-1.359.54-1.359 1.248 0 .694.521 1.248 1.327 1.248h.016zm4.908 8.212V9.359c0-.216.016-.432.08-.586.173-.431.568-.878 1.232-.878.869 0 1.216.662 1.216 1.634v3.865h2.401V9.25c0-2.22-1.184-3.252-2.764-3.252-1.274 0-1.845.7-2.165 1.193v.025h-.016a5.54 5.54 0 01.016-.025V6.169h-2.4c.03.678 0 7.225 0 7.225h2.4z"/></svg>
-        LinkedIn
-      </a>
-      <a class="founder-link" href="https://github.com/Samuel777822/incident-agent" target="_blank" rel="noopener">
-        <svg width="15" height="15" viewBox="0 0 16 16" fill="currentColor" aria-hidden="true"><path d="M2 2.5A2.5 2.5 0 014.5 0h8.75a.75.75 0 01.75.75v12.5a.75.75 0 01-.75.75h-2.5a.75.75 0 110-1.5h1.75v-2h-8a1 1 0 00-.714 1.7.75.75 0 01-1.072 1.05A2.495 2.495 0 012 11.5v-9zm10.5-1h-8a1 1 0 00-1 1v6.708A2.486 2.486 0 014.5 9h8V1.5z"/></svg>
-        Repository
-      </a>
-      <a class="founder-link" href="/contact">
-        <svg width="15" height="15" viewBox="0 0 16 16" fill="currentColor" aria-hidden="true"><path d="M1.75 2h12.5c.966 0 1.75.784 1.75 1.75v8.5A1.75 1.75 0 0114.25 14H1.75A1.75 1.75 0 010 12.25v-8.5C0 2.784.784 2 1.75 2zm0 1.5a.25.25 0 00-.25.25v.725l6.5 3.9 6.5-3.9v-.725a.25.25 0 00-.25-.25H1.75zm13 2.748l-6.236 3.742a.5.5 0 01-.528 0L1.5 6.248v5.502c0 .138.112.25.25.25h12.5a.25.25 0 00.25-.25V6.248z"/></svg>
-        Email
-      </a>
-    </div>
-  </article>
+<section class="card mission-card">
+  <h2>Our Team</h2>
+  <p>We bring together product engineering, reliability, and incident response experience to help teams find problems early and review proposed fixes with confidence.</p>
 </section>
 
 <section class="card mission-card">
   <h3>Our Mission</h3>
-  <p>Agent Daemon was conceived to eliminate the stress of production emergencies for fast-moving engineering teams. By combining continuous telemetry analysis, intelligent diagnosis, and automated pull requests, we make reliable 24/7 on-call engineering accessible to everyone.</p>
+  <p>Agent Daemon was conceived to eliminate the stress of production emergencies for fast-moving engineering teams. By combining continuous telemetry analysis, intelligent diagnosis, and pull requests for human review, we make reliable 24/7 on-call engineering accessible to everyone.</p>
   <div class="actions" style="justify-content:center">
     <a class="button primary" href="/login">Get Started with Agent Daemon</a>
     <a class="button" href="/">How It Works</a>
@@ -1156,7 +1096,6 @@ def _page_about(request):
 </section>
 """)
     return _response(body, request)
-
 
 def _page_onboarding_name(request: Request):
     gate = _require_session(request)
@@ -1350,7 +1289,7 @@ def _page_help(request: Request) -> Response:
   <div class="video-info">
     <div>
       <h3>Full Video Walkthrough &amp; Live Demo</h3>
-      <p>Watch how Agent Daemon monitors a live Python app (Coffee Shop API), catches a real-world checkout bug deployed to Render, diagnoses the root cause, generates a verified fix PR, and auto-merges it without human intervention.</p>
+      <p>Watch how Agent Daemon monitors a live Python app (Coffee Shop API), catches a checkout bug, diagnoses the root cause, generates a fix PR, and reports its verification results for human review.</p>
     </div>
     <div style="display:flex;gap:10px;align-items:center">
       <a class="button primary" href="https://www.youtube.com/watch?v=Y3neE_B2d-M" target="_blank" rel="noopener">Watch on YouTube &#8599;</a>
@@ -1367,7 +1306,7 @@ def _page_help(request: Request) -> Response:
       <div class="chapter-item"><b>2:40 &ndash; 3:15</b> Inducing a live checkout failure &amp; deploying to Render. Error alerted immediately!</div>
       <div class="chapter-item"><b>3:15 &ndash; 3:50</b> AI diagnosis: stack trace analyzed, culprit lines traced, and safe patch generated.</div>
       <div class="chapter-item"><b>3:50 &ndash; 4:25</b> Fix pull request opened on GitHub &amp; GitHub Actions CI test suite runs.</div>
-      <div class="chapter-item"><b>4:25 &ndash; 4:55</b> Autonomous auto-merge: checks pass, PR squashes into main, Render redeploys fixed app!</div>
+      <div class="chapter-item"><b>4:25 &ndash; 4:55</b> Review the verified pull request and merge it on GitHub.</div>
       <div class="chapter-item"><b>4:55 &ndash; 5:15</b> Incident post-mortem report, cause explanation, unified diff, &amp; admin console.</div>
     </div>
   </div>
@@ -1382,7 +1321,7 @@ def _page_help(request: Request) -> Response:
     <li>We download that exact commit and find every part of the repo (Python, JavaScript/TypeScript, Java, HTML/CSS).</li>
     <li>Each part is installed, built (and type-checked), tested and started in a fresh sandbox container. Push checks are free.</li>
     <li>The commit gets a <b>Agent Daemon / push check</b> status on GitHub: ✓ or ✗.</li>
-    <li>On ✗ an incident opens and the agent writes a fix, proves it with the same check, and pushes it to <code>agent-daemon/fix-…</code> with a pull request. Auto mode merges it once proven.</li>
+    <li>On ✗ an incident opens and the agent proposes a fix, runs the same check, and opens a pull request for you to review and merge.</li>
   </ol>
   <p class="muted">No webhook (for example the token is not an admin of the repository)? The worker looks for new commits every few minutes instead. Use <b>Check latest commit now</b> on the project page any time.</p>
 </section>
@@ -1407,9 +1346,9 @@ def _page_help(request: Request) -> Response:
   
   <div class="modes-grid">
     <article class="mode-card">
-      <div style="margin-bottom:8px"><span class="badge-tag mode" style="background:#163229;color:#6fe0b0;border-color:#235c4b">Fully Autonomous</span></div>
-      <h4>Automatic Mode (<code>auto</code>)</h4>
-      <p>The complete self-healing loop shown in the demo video. When an incident occurs, Agent Daemon diagnoses the cause, writes a surgical patch, creates a branch, opens a PR, waits for your GitHub Actions CI tests to pass, and automatically squash-merges into your base branch. Requires a private repository.</p>
+      <div style="margin-bottom:8px"><span class="badge-tag mode" style="background:#163229;color:#6fe0b0;border-color:#235c4b">Human Reviewed</span></div>
+      <h4>Pull Request Mode</h4>
+      <p>Agent Daemon diagnoses the cause, prepares a patch, runs the available checks, and opens a GitHub pull request. A human reviews and merges each change.</p>
     </article>
 
     <article class="mode-card">
@@ -1464,16 +1403,16 @@ def _page_help(request: Request) -> Response:
         <ol>
           <li>Enter the repository <b>Owner / Name</b> (e.g. <code>my-org/backend-api</code>).</li>
           <li>Select your base branch (e.g. <code>main</code> or leave empty for default).</li>
-          <li>Choose your remediation mode (<code>Automatic</code>, <code>Pull request</code>, or <code>Report only</code>).</li>
+          <li>Choose Pull Request or Report Only mode.</li>
           <li>Paste your classic GitHub token and click <b>Connect project</b>.</li>
         </ol>
         <p><b>What the Zero-Touch Installer does automatically:</b></p>
         <ul>
-          <li>Opens a pull request that adds <code>incident_agent_monitor.py</code> (the lightweight client).</li>
-          <li>Inserts <code>import incident_agent_monitor</code> at the top of your app entry point (e.g. <code>app.py</code>, <code>main.py</code>, <code>wsgi.py</code>).</li>
-          <li>Creates <code>incident_agent_config.json</code> with your project's ingest URL and unique ingest key.</li>
+          <li>Opens a pull request that adds the right runtime monitor for each supported app part (Python, Java, Node.js, TypeScript and browser pages).</li>
+          <li>Wires the monitor into each detected application entry point.</li>
+          <li>Includes the project's send-only ingest key in the monitor configuration.</li>
           <li>Adds <code>.github/workflows/agent-daemon-tests.yml</code> so PRs have test validation checks.</li>
-          <li>Auto-merges the PR if repository permissions allow, or provides a direct link to merge on GitHub.</li>
+          <li>Leaves the pull request open for human review and provides a direct link to GitHub.</li>
         </ul>
       </div>
     </details>
@@ -1485,7 +1424,7 @@ def _page_help(request: Request) -> Response:
       <div class="accordion-body">
         <p>Agent Daemon treats public and private repositories differently for strict security reasons:</p>
         <ul>
-          <li><b>Private repositories:</b> Everything works: the monitor is installed for you, the first scan runs right away, and all three modes (<code>Automatic</code>, <code>Pull request</code>, <code>Report only</code>) are available.</li>
+          <li><b>Private repositories:</b> The monitor is proposed in a pull request, the first scan runs right away, and Pull Request or Report Only mode is available.</li>
           <li><b>Public repositories:</b> Nothing is installed. Anyone can read a public repository, including the connection details the monitor needs, so the project waits in <b>Waiting for private repo</b> and shows you, step by step, how to make it private. Press <b>I've made it private, install now</b> and we check with GitHub and finish the setup. If a repository becomes public later, installs and fixes pause and you get an email.</li>
         </ul>
       </div>
@@ -1546,7 +1485,7 @@ application = get_wsgi_application()</div>
       <div class="accordion-body">
         <p>Place this file in the working directory of your app (the same folder where your Python command is executed):</p>
         <div class="code-box">{
-  "ingest_url": "https://incident-agent-portal.onrender.com/ingest",
+  "ingest_url": "https://your-app-url/ingest",
   "ingest_key": "YOUR_PROJECT_INGEST_KEY"
 }</div>
         <p>The client will automatically load this config, check in every 30 seconds, and report uncaught exceptions, logged errors and failed AI/API calls (for example a retired model). Node.js apps get <code>incident-agent-monitor.cjs</code> and web pages get <code>incident-agent-monitor.js</code>, which work the same way.</p>
@@ -1571,10 +1510,10 @@ application = get_wsgi_application()</div>
         <p><b>Symptom:</b> The dashboard project badge says <code>Offline</code> or "Last check-in: Never / 3 hours ago".</p>
         <p><b>Root Causes &amp; Solutions:</b></p>
         <ol>
-          <li><b>App has not restarted since monitoring was merged:</b> Deploy or restart your application so the new <code>import incident_agent_monitor</code> line is executed.</li>
+          <li><b>App has not restarted since the monitoring pull request was merged:</b> Deploy or restart your application so the monitor starts.</li>
           <li><b>Free tier hosting is sleeping:</b> Services on Render, Railway, or Fly.io free tiers sleep after 15 minutes without web requests. Once asleep, the background heartbeat stops. Send a request to your app or configure a free pinger (e.g. UptimeRobot) hitting your app's health route every 10 minutes.</li>
           <li><b>Missing <code>incident_agent_config.json</code>:</b> Confirm that <code>incident_agent_config.json</code> is located in the working directory of your running Python process.</li>
-          <li><b>Outbound network restriction:</b> Verify that your hosting environment permits outbound HTTPS connections to <code>https://incident-agent-portal.onrender.com</code>.</li>
+          <li><b>Outbound network restriction:</b> Verify that your hosting environment permits outbound HTTPS connections to <code>https://your-app-url</code>.</li>
         </ol>
       </div>
     </details>
@@ -1615,16 +1554,16 @@ application = get_wsgi_application()</div>
 
     <details class="accordion-item">
       <summary class="accordion-summary">
-        <span><span class="badge-tag git">Issue 4</span> Fix PR Opened on GitHub but Not Auto-Merging</span>
+        <span><span class="badge-tag git">Issue 4</span> Fix PR Opened on GitHub but Not Appearing on the Portal</span>
       </summary>
       <div class="accordion-body">
         <p><b>Symptom:</b> The fix branch and PR were created on GitHub, but status remains <code>pending</code> or <code>failed</code> on the portal.</p>
         <p><b>Troubleshooting Checklist:</b></p>
         <ul>
-          <li><b>CI checks must pass:</b> Auto-merge requires at least one completed GitHub Actions check with conclusion <code>success</code>. If tests failed in CI, Agent Daemon safely halts and leaves the PR open for inspection.</li>
-          <li><b>Branch protection rules:</b> If your repository enforces required code reviews (e.g. "Require at least 1 approval before merging"), GitHub's API blocks automated merges. You can either authorize bot merges or merge manually with one click on GitHub.</li>
-          <li><b>Public repository restriction:</b> As a strict security measure, public repositories never auto-merge.</li>
-          <li><b>Merge conflicts:</b> If other commits were pushed to your base branch while CI was running, the PR will await human rebasing.</li>
+          <li><b>CI checks:</b> Agent Daemon reports sandbox and GitHub check results on the PR. Review those results before you merge.</li>
+          <li><b>Branch protection rules:</b> Follow your repository's required reviews and status checks before merging the PR on GitHub.</li>
+          <li><b>Repository privacy:</b> Agent Daemon only connects private repositories.</li>
+          <li><b>Merge conflicts:</b> Resolve conflicts or rebase the branch before merging.</li>
         </ul>
       </div>
     </details>
@@ -1640,7 +1579,7 @@ application = get_wsgi_application()</div>
           <li><b>Is the exception caught?</b> Bare <code>try ... except: pass</code> or <code>try ... except Exception as e: print(e)</code> blocks swallow errors before they reach <code>sys.excepthook</code>. Use <code>logging.exception("Failed processing")</code> to ship handled exceptions.</li>
           <li><b>Check Ingest Key:</b> If you rotated your ingest key on the dashboard, make sure to update <code>incident_agent_config.json</code> with the new key.</li>
           <li><b>Test Ingestion directly via cURL:</b> Run this in your terminal to verify network connectivity to the portal:
-            <div class="code-box">curl -X POST https://incident-agent-portal.onrender.com/ingest \
+            <div class="code-box">curl -X POST https://your-app-url/ingest \
   -H "Content-Type: application/json" \
   -H "X-Ingest-Key: YOUR_KEY" \
   -d '{"message":"Test diagnostic error","traceback":"Traceback: line 42 ZeroDivisionError","service":"test"}'</div>
@@ -1656,8 +1595,8 @@ application = get_wsgi_application()</div>
       </summary>
       <div class="accordion-body">
         <p><b>What is supported:</b> the fix engine reads and repairs Python, JavaScript, TypeScript, Java, HTML and CSS projects, and it proves every fix by running your project's own build and tests in an isolated sandbox before opening a pull request. Static HTML/CSS sites are checked for broken tags, missing files and syntax errors; because that is not a test, those pull requests say clearly that the fix is not proven by a test.</p>
-        <p><b>What is automatic:</b> the one-click monitoring installer currently adds a <b>Python</b> error reporter. For other languages, send errors to your project's ingest URL yourself with one HTTP call whenever your app catches an unhandled error:</p>
-        <div class="code-box">curl -X POST https://incident-agent-portal.onrender.com/ingest \
+        <p><b>What is automatic:</b> the monitoring installer adds a runtime monitor for supported Python, Java, Node.js, TypeScript and browser apps. Custom integrations can send errors to your project's ingest URL with one HTTP call:</p>
+        <div class="code-box">curl -X POST https://your-app-url/ingest \
   -H "Content-Type: application/json" \
   -H "X-Ingest-Key: YOUR_KEY" \
   -d '{"message":"NullPointerException in checkout","traceback":"java.lang.NullPointerException\n\tat com.shop.Inventory.getStock(Inventory.java:29)","service":"shop-api"}'</div>
@@ -1665,12 +1604,7 @@ application = get_wsgi_application()</div>
         <div class="code-box">fetch(process.env.INGEST_URL, { method: "POST",
   headers: { "Content-Type": "application/json", "X-Ingest-Key": process.env.INGEST_KEY },
   body: JSON.stringify({ message: err.message, traceback: err.stack, service: "shop-api" }) }).catch(() =&gt; {});</div>
-        <p><b>Java (11 or newer):</b></p>
-        <div class="code-box">HttpRequest req = HttpRequest.newBuilder(URI.create(System.getenv("INGEST_URL")))
-    .header("Content-Type", "application/json").header("X-Ingest-Key", System.getenv("INGEST_KEY"))
-    .POST(HttpRequest.BodyPublishers.ofString(json)).build();
-HttpClient.newHttpClient().sendAsync(req, HttpResponse.BodyHandlers.discarding());</div>
-        <p>Always send the error in a background call and ignore failures, so reporting can never break your app. Keep the ingest key in an environment variable, not in your code.</p>
+        <p>The installed monitors use a project-scoped, send-only key and report check-ins every 30 seconds. Reporting failures do not change the application's normal error behavior.</p>
       </div>
     </details>
 
@@ -1681,7 +1615,7 @@ HttpClient.newHttpClient().sendAsync(req, HttpResponse.BodyHandlers.discarding()
       <div class="accordion-body">
         <p><b>Symptom:</b> Cold starts take 30-50 seconds or background tasks take longer to trigger on free tier.</p>
         <p><b>Explanation:</b> Render's free tier spins down web instances after 15 minutes of inactivity. When a new error occurs, the instance wakes up automatically, but ingestion may take 30 seconds for the first request.</p>
-        <p><b>Tip:</b> You can set up a free uptime monitor (such as UptimeRobot, BetterStack, or cron-job.org) targeting <code>https://incident-agent-portal.onrender.com/health</code> every 10 minutes to keep the worker continuously warm.</p>
+        <p><b>Tip:</b> You can set up a free uptime monitor (such as UptimeRobot, BetterStack, or cron-job.org) targeting <code>https://your-app-url/health</code> every 10 minutes to keep the worker continuously warm.</p>
       </div>
     </details>
 
@@ -1727,11 +1661,11 @@ HttpClient.newHttpClient().sendAsync(req, HttpResponse.BodyHandlers.discarding()
 <!-- 7. Need More Help CTA -->
 <section class="card mission-card" style="margin-top:40px;text-align:center">
   <h3>Still Need Help or Have a Complex Setup?</h3>
-  <p>Our co-founders and support engineers are available to assist with custom frameworks, private VPCs, and enterprise on-call requirements.</p>
+  <p>Our engineering and support team can assist with custom frameworks, private VPCs, and enterprise on-call requirements.</p>
   <div class="actions" style="justify-content:center">
-    <a class="button primary" href="/contact">Contact Support &amp; Founders</a>
-    <a class="button" href="/about">About Co-Founders</a>
-    <a class="button" href="https://github.com/Samuel777822/incident-agent" target="_blank" rel="noopener">GitHub Project</a>
+    <a class="button primary" href="/contact">Contact Support</a>
+    <a class="button" href="/about">About the Team</a>
+    <a class="button" href="/how-it-works">How It Works</a>
   </div>
 </section>
 
@@ -1858,7 +1792,7 @@ def _render_contact_page(request: Request, flash: str = "", name: str = "", emai
         "</div>"
         "<div class='field'>"
         "<label for='email'>Your Work Email</label>"
-        f"<input id='email' name='email' type='email' placeholder='name@company.com' value='{_escape(email)}' required maxlength='120'>"
+        f"<input id='email' name='email' type='email' placeholder='name@example.invalid' value='{_escape(email)}' required maxlength='120'>"
         "</div>"
         "<div class='field'>"
         "<label for='subject'>Subject</label>"
@@ -2134,7 +2068,7 @@ def _admin_view(request):
     if trial_rows:
         attention += "<h2>Trial requests</h2>" + _table(["Customer", "Mobile / WhatsApp", "Found Via / Org", "Requested", "Decision"], trial_rows)
     if payment_rows:
-        attention += ("<h2>UPI payments to confirm</h2><p class='muted'>Open your Paytm app, find this exact reference and amount, "
+        attention += ("<h2>UPI payments to confirm</h2><p class='muted'>Check the configured payment account for this exact reference and amount, "
                       "then confirm. Confirm only money you can see.</p>" + _table(["Customer", "Mobile / WhatsApp", "Found Via / Org", "Claimed", "Reference", "Decision"], payment_rows))
     if not attention:
         attention = "<h2>Needs your attention</h2><div class='empty'>Nothing waiting. New trial requests and UPI payments show up here.</div>"
@@ -2554,7 +2488,7 @@ def _quota_by_tier(user_id: str) -> dict:
 
 
 WATCH_LABELS = {"push": "Push guard", "runtime": "Live error watch", "both": "Push guard + live errors"}
-MODE_LABELS = {"report": "Report only", "pr": "Pull request", "auto": "Auto (merges proven fixes)"}
+MODE_LABELS = {"report": "Report only", "pr": "Pull request (human review required)", "auto": "Pull request (human review required)"}
 
 
 def _live_panel_html(user_id: str) -> str:
@@ -2762,11 +2696,11 @@ def _page_new_project(request):
 <div class='field'><p class='muted'><b>What happens when you press Save:</b> we check that your repository is private, add a small error
 monitor to your code for you (Python, JavaScript, TypeScript, HTML and mixed projects), scan your code once right away, and then test every push.
 You do not need to install anything yourself.</p></div>
-<div class='field'><label>What should the agent do with a bug?</label><select name='mode'><option value='pr' selected>Pull request: push the fix to a new branch and open a PR for me</option><option value='auto'>Auto: push the fix and merge it once the sandbox proves it</option><option value='report'>Report only: explain the bug, change nothing</option></select><small>Fixes never go straight to your branch: they land on <code>agent-daemon/fix-…</code> with a pull request. Auto merges it only when the check that failed now passes and every GitHub check is green.</small></div>
+<div class='field'><label>What should the agent do with a bug?</label><select name='mode'><option value='pr' selected>Pull request: open a fix PR for me to review</option><option value='report'>Report only: explain the bug, change nothing</option></select><small>Fixes go to a new <code>agent-daemon/fix-…</code> branch and a pull request. You review and merge each pull request yourself.</small></div>
 <div class='field'><label>App URL (optional)</label><input name='app_url' type='url' placeholder='https://app.example.com'></div>
-<div class='field'><label class='checkbox'><input name='allow_install' type='checkbox' value='yes' required><span>I authorize Agent Daemon to add a push webhook and commit statuses to this repository and to add error-monitoring code through a pull request that is merged automatically when GitHub allows it.</span></label></div>
+<div class='field'><label class='checkbox'><input name='allow_install' type='checkbox' value='yes' required><span>I authorize Agent Daemon to add a push webhook and commit statuses to this repository and to propose error-monitoring code through a pull request. I will review and merge that pull request myself.</span></label></div>
 <div class='field'><label class='checkbox'><input name='allow_ai_processing' type='checkbox' value='yes' required><span>I understand that error output and the relevant source files are sent to third-party AI providers (Groq, and Anthropic Claude for the stronger modes, possibly through OpenRouter), and that my code is built and tested inside Agent Daemon's isolated sandbox.</span></label></div>
-<div class='field'><label class='checkbox'><input name='allow_remediation' type='checkbox' value='yes'><span>For Pull request or Auto mode, I authorize small code fixes as pull requests. Auto mode may merge a fix only after the sandbox proves it and all GitHub checks pass.</span></label></div>"""
+<div class='field'><label class='checkbox'><input name='allow_remediation' type='checkbox' value='yes'><span>For Pull request mode, I authorize small code fixes as pull requests. I will review and merge any fix myself.</span></label></div>"""
         note = (f"<p class='muted'>Project {slots['used'] + 1} of {slots['limit']}. Extra projects are ₹{plans.PROJECT_SLOT_PRICE} each.</p>"
                 if not _is_admin(request) else "")
         body = _github_setup_guide() + _form("Connect a project", "Connect a GitHub repository. The first check starts right away." + note, fields,
@@ -2779,13 +2713,15 @@ You do not need to install anything yourself.</p></div>
     repo_match = REPO_RE.fullmatch(request.form.get("repo", "").strip())
     token = request.form.get("github_token", "").strip()
     mode = request.form.get("mode", "report")
+    if mode == "auto":  # Old forms/clients are safely downgraded to human-reviewed pull requests.
+        mode = "pr"
     name = request.form.get("name", "").strip()
     branch = request.form.get("branch", "").strip()
     watch_mode = request.form.get("watch_mode", "both")
-    if not repo_match or not token or not name or mode not in ("report", "pr", "auto") or watch_mode not in portal_db.WATCH_MODES:
+    if not repo_match or not token or not name or mode not in ("report", "pr") or watch_mode not in portal_db.WATCH_MODES:
         return _response("<div class='alert'>Check the repository, token, project name, branch, and mode.</div>", request, "400 Bad Request")
-    if mode in ("pr", "auto") and request.form.get("allow_remediation") != "yes":
-        return _response("<div class='alert'>Authorize pull request fixes before selecting Pull request or Auto mode.</div>", request, "400 Bad Request")
+    if mode == "pr" and request.form.get("allow_remediation") != "yes":
+        return _response("<div class='alert'>Authorize pull request fixes before selecting Pull request mode.</div>", request, "400 Bad Request")
     try:
         ciphertext = _encrypt_token(token)
     except RuntimeError as exc:
@@ -2811,8 +2747,8 @@ You do not need to install anything yourself.</p></div>
     portal_db.audit(project_id, "project_connected", {"repo": f"{owner}/{repo}", "mode": mode, "watch_mode": watch_mode,
                                                      "visibility": "private" if private else "public"})
     portal_db.audit(project_id, "ai_diagnosis_consent", {"scope": "error output and relevant repository source sent to third-party AI providers (Groq, Anthropic, OpenRouter); code built and tested in the sandbox"})
-    if mode in ("pr", "auto"):
-        portal_db.audit(project_id, "remediation_consent", {"mode": mode, "auto_merge_requires_sandbox_proof_and_passing_github_checks": mode == "auto"})
+    if mode == "pr":
+        portal_db.audit(project_id, "remediation_consent", {"mode": mode, "human_review_required": True})
     if not private:
         # Public-repo gate: nothing is committed, no webhook, no scan, until the owner makes the repository private.
         portal_db.audit(project_id, "install_held_public_repo", {"repo": f"{owner}/{repo}"})
@@ -3087,10 +3023,7 @@ def _page_project(request, project_id):
         flash = "<div class='pill amber'>That commit was already checked or is in the queue.</div>"
     cards = []
     if watch in ("runtime", "both"):
-        install_card = _monitor_install_card(project, csrf)
-        if project.get("ci_workflow") == "missing" and project.get("mode") == "auto":
-            install_card = _workflow_fix_card(project_id, request) + install_card
-        cards.append(install_card)
+        cards.append(_monitor_install_card(project, csrf))
     cards.append(f"<article class='card'><h3>Update GitHub token</h3><p class='muted'>Use a classic token with the repo and workflow scopes ticked. The new token replaces the saved one and is never shown again.</p><form method='post' action='/projects/{_escape(project_id)}/github-token'><input type='hidden' name='csrf' value='{csrf}'><div class='field'><label>New GitHub token</label><input name='github_token' type='password' autocomplete='new-password' required minlength='20' maxlength='500'></div><button class='button primary' type='submit'>Validate and save token</button></form></article>")
     if watch in ("runtime", "both"):
         cards.append(f"<article class='card'><h3>Monitor key</h3><p class='muted'>The monitor uses a key that can only <b>send</b> check-ins and error reports for this project. If you think it leaked, replace it: the old key stops working and we put the new one into your code for you.</p><form method='post' action='/projects/{_escape(project_id)}/rotate-key'><input type='hidden' name='csrf' value='{csrf}'><button class='button' type='submit'>Replace key</button></form></article>")
@@ -3158,27 +3091,27 @@ def _monitor_install_card(project: dict, csrf: str) -> str:
           if project.get("install_pr_url") else "")
     label = "Reinstall monitoring" if (project.get("install_pr_url") or project.get("monitor_installed_at")) else "Install monitoring"
     return (f"<article class='card'><h3>{label}</h3><p class='muted'>Adds (or repairs) the error monitor in every part of your repository: "
-            f"Python, Node.js, TypeScript and web pages. Safe to press again.</p>{pr}"
+            f"Python, Java, Node.js, TypeScript and web pages. Safe to press again.</p>{pr}"
             f"<form method='post' action='/projects/{pid}/install'><input type='hidden' name='csrf' value='{csrf}'>"
             f"<button class='button primary' type='submit'>{label}</button></form></article>")
 
 
 def _workflow_fix_steps() -> str:
-    """Why Auto mode cannot merge without a workflow, and how the customer fixes it."""
-    return ("<p class='muted'>Auto mode merges a fix only after a GitHub check passes. This repository has no GitHub Actions workflow, "
-            "so there is no check to pass and fixes stay as open pull requests. We could not add a workflow because your GitHub token "
+    """Explain how to add optional GitHub checks to the repository."""
+    return ("<p class='muted'>This repository has no GitHub Actions workflow, so Agent Daemon cannot show GitHub check results for its pull requests. "
+            "We could not add a workflow because your GitHub token "
             "is not allowed to write workflow files. Monitoring itself is installed and working.</p>"
             "<ol class='muted'>"
             "<li>On GitHub open <b>Settings</b>, then <b>Developer settings</b>, then <b>Personal access tokens</b>, then <b>Tokens (classic)</b>, "
             "and open the token you gave us.</li>"
             "<li>Tick the <code>workflow</code> scope and save. If you make a brand new token, tick <code>repo</code> and <code>workflow</code>, "
             "then use <b>Update GitHub token</b> on this page first.</li>"
-            "<li>Come back to this project page and press <b>Install monitoring</b>. We will add the test workflow in a new pull request "
-            "and merge it.</li></ol>")
+            "<li>Come back to this project page and press <b>Install monitoring</b>. We will propose the test workflow in a pull request. "
+            "Review and merge it yourself.</li></ol>")
 
 
 def _workflow_fix_card(project_id: str, request) -> str:
-    return ("<article class='card'><h3>Auto mode needs a test workflow</h3>" + _workflow_fix_steps() +
+    return ("<article class='card'><h3>Add GitHub checks</h3>" + _workflow_fix_steps() +
             f"<form method='post' action='/projects/{_escape(project_id)}/install'><input type='hidden' name='csrf' value='{_escape(_csrf(request))}'>"
             "<button class='button primary' type='submit'>Install monitoring</button></form></article>")
 
@@ -3188,12 +3121,12 @@ def _install_monitoring(project_id: str, user_id: str, project: dict, token: str
 
     Only for PRIVATE repositories: open_monitoring_pr re-checks visibility with GitHub right before it writes anything and
     refuses with PublicRepoError otherwise (the project then waits for the owner to make it private). The connection details
-    go into the repository through the install pull request, which is merged automatically when GitHub allows it."""
+    go into the repository through an install pull request that remains open for human review."""
     try:
         result = open_monitoring_pr(
             owner=project["repo_owner"], repo=project["repo_name"], base_branch=project["branch"],
             project_id=project_id, token=token, ingest_url=_base_url() + "/ingest",
-            ingest_key=ingest_key, auto_merge=True, require_private=True)
+            ingest_key=ingest_key, auto_merge=False, require_private=True)
     except PublicRepoError as exc:
         portal_db.set_gate_state(project_id, portal_db.GATE_WAITING)
         portal_db.audit(project_id, "install_held_public_repo", {"where": "install"})
@@ -3249,16 +3182,10 @@ def _install_summary(result: dict, project_id: str) -> str:
         notes.append("We could not find your app's main file, so the monitor was added but could not be switched on automatically.")
     if result.get("workflow_added"):
         notes.append("A GitHub Actions workflow was added that checks your code and runs your tests on every pull request. "
-                     "Auto mode merges a fix only after that check passes.")
-    if result.get("merged"):
-        notes.append("The change was merged automatically. Monitoring starts the next time your app deploys and checks in every 30 seconds. "
-                     "Nothing else to configure.")
-    else:
-        notes.append(f"Merge <a href='{_escape(result['url'])}' target='_blank' rel='noopener'>this pull request</a> to turn monitoring on "
-                     "(automatic merge was not possible, often because of branch protection). Nothing else to configure.")
+                     "Review the results before merging.")
+    notes.append(f"Review and merge <a href='{_escape(result['url'])}' target='_blank' rel='noopener'>this pull request</a> to turn monitoring on. "
+                 "Agent Daemon leaves the pull request open for your approval.")
     card = "<div class='card'><h3>Monitoring setup</h3><p class='muted'>" + "</p><p class='muted'>".join(notes) + "</p></div>"
-    if not result.get("workflow_added") and not result.get("had_ci"):
-        card += "<div class='card'><h3>Auto mode needs a test workflow</h3>" + _workflow_fix_steps() + "</div>"
     return card
 
 
@@ -3436,7 +3363,7 @@ def _page_incident_board_live(request, project_id):
 
 ASSET_DIR = os.path.join(os.path.dirname(os.path.abspath(__file__)), "assets")
 ASSET_TYPES = {".webp": "image/webp", ".woff": "font/woff"}
-ASSET_FILES = {"daemon-bg.webp", "daemon-crest.webp", "daemon-gloock.woff", "daemon-sans-400.woff", "daemon-sans-700.woff", "daemon-founder-abhay.webp", "daemon-founder-pranav.webp"}
+ASSET_FILES = {"daemon-bg.webp", "daemon-crest.webp", "daemon-gloock.woff", "daemon-sans-400.woff", "daemon-sans-700.woff"}
 
 
 def _page_asset(request):
@@ -3482,6 +3409,7 @@ def _page_billing(request):
     access = _access_state(user_id)
     csrf = _escape(_csrf(request))
     gateway = _gateway_ready()
+    manual_upi = bool(os.getenv("UPI_ID", "").strip())
     banner = "<div class='pill green'>Payment received. Your access is active.</div>" if request.query.get("success") == ["1"] else ""
     if access["active"]:
         label = "Paid plan" if access["kind"] == "paid" else "Free trial"
@@ -3522,7 +3450,7 @@ def _page_billing(request):
                 f"<div class='field' style='margin-bottom:0'><label style='font-size:12px'>Your Name</label>"
                 f"<input name='name' value='{_escape(prefill_name)}' placeholder='Full name' maxlength='100'></div>"
                 f"<div class='field' style='margin-bottom:0'><label style='font-size:12px'>Mobile / WhatsApp Number</label>"
-                f"<input name='phone' type='tel' value='{_escape(prefill_phone)}' placeholder='+91 98765 43210' maxlength='30'></div>"
+                f"<input name='phone' type='tel' value='{_escape(prefill_phone)}' placeholder='Phone number' maxlength='30'></div>"
                 f"<div class='field' style='margin-bottom:0'><label style='font-size:12px'>How did you find out about us?</label>"
                 f"<select name='referral_source'><option value=''>Select an option...</option>{opts_html}</select></div>"
                 f"<div class='field' style='margin-bottom:0'><label style='font-size:12px'>Company / Project Name <small class='muted'>(optional)</small></label>"
@@ -3535,9 +3463,11 @@ def _page_billing(request):
             action = (f"<form method='post' action='/billing/order'><input type='hidden' name='csrf' value='{csrf}'>"
                       f"<input type='hidden' name='plan' value='{key}'><button class='button primary' type='submit'>Pay ₹{plan['rupees']:,}</button></form>"
                       "<p class='muted'>UPI (Paytm, PhonePe, GPay), cards or netbanking. Access starts instantly.</p>")
-        else:
+        elif manual_upi:
             action = (f"<a class='button primary' href='/billing/pay?plan={key}'>Pay ₹{plan['rupees']:,} by UPI</a>"
-                      "<p class='muted'>After you pay, wait 1 to 2 hours. We check our Paytm account and switch your access on.</p>")
+                      "<p class='muted'>After you pay, wait 1 to 2 hours for payment confirmation.</p>")
+        else:
+            action = "<p class='muted'>Payments are not configured yet. Please <a href='/contact'>contact support</a> or try again later.</p>"
         period = "month" if key == "monthly" else "year"
         per_month = (f" (about ₹{plans.YEARLY_PER_MONTH:,} a month, you save ₹{plans.YEARLY_SAVING:,} against twelve monthly payments)"
                      if key == "yearly" else "")
@@ -3556,8 +3486,10 @@ def _page_billing(request):
         slots = portal_db.project_slot_info(user_id)
         def addon(key, title, text):
             item = plans.PRODUCTS[key]
+            purchase = (f"<a class='button' href='/billing/pay?plan={key}'>Pay ₹{item['rupees']} by UPI</a>"
+                        if manual_upi else "<p class='muted'>Manual UPI is unavailable. Please <a href='/contact'>contact support</a> or try again later.</p>")
             return (f"<article class='card addon'><div class='eyebrow'>Add-on</div><h3>{_escape(title)}</h3><p class='muted'>{_escape(text)}</p>"
-                    f"<a class='button' href='/billing/pay?plan={key}'>Pay ₹{item['rupees']} by UPI</a></article>")
+                    f"{purchase}</article>")
         addons = ("<h2>Add-ons</h2><div class='grid'>"
                   + addon("project_slot", "One more project", f"One-time. You use {slots['used']} of {slots['limit']} project slot(s). The slot stays on your account.")
                   + addon("pack_high", f"{plans.PACK_HIGH_TRIES} High tries", "Added to this month, on top of your plan.")
@@ -3612,7 +3544,7 @@ def _page_manual_payment(request):
                 f"  - For: {product['label']} (INR {product['rupees']}) -> {plans.product_grant_text(plan)}\n"
                 f"  - UPI Reference (UTR): {ref}\n"
                 f"  - Submitted: {_fmt_time(payment.get('created_at'))}\n\n"
-                f"Open your Paytm app and look for a payment of INR {product['rupees']} with this reference. "
+                f"Check the configured payment account for a payment of INR {product['rupees']} with this reference. "
                 f"If you see it, confirm it here: {_base_url()}/admin"
             )
             notifications.notify_admins(
@@ -3621,10 +3553,10 @@ def _page_manual_payment(request):
             notifications.notify_customer(
                 request.session["email"], "We received your payment details",
                 f"Thanks {user_name}! You told us you paid INR {product['rupees']} for {product['label']} (reference {ref}).\n"
-                "Please wait 1 to 2 hours. We check our Paytm account and switch your access on as soon as we see the payment. "
+                "Please wait 1 to 2 hours. We verify your payment and switch your access on as soon as it is confirmed. "
                 "You will get another email when it is active.", "payment_received")
         return _response("<section class='card form-card'><h1>Payment submitted</h1>"
-                         "<p>Thanks! Please wait 1 to 2 hours. We check our Paytm account for your payment and switch on what you paid for as soon as we see it. "
+                         "<p>Thanks! Please wait 1 to 2 hours. We verify your payment and switch on what you paid for as soon as it is confirmed. "
                          "You will see the status under Plan &amp; billing and get an email.</p>"
                          "<p class='muted'>Do not pay again unless an admin asks you to.</p>"
                          "<a class='button primary' href='/billing'>Back to plan &amp; billing</a></section>", request)
@@ -3636,9 +3568,12 @@ def _page_manual_payment(request):
                          "<a class='button primary' href='/billing'>See plans</a></section>", request, "402 Payment Required")
     product = plans.PRODUCTS[plan]
     rupees = product["rupees"]
-    uri = _upi_uri(plan)
+    try:
+        uri = _upi_uri(plan)
+    except RuntimeError as exc:
+        return _response(f"<section class='card form-card'><h1>Payments unavailable</h1><p class='muted'>{_escape(exc)}</p></section>", request, "503 Service Unavailable")
     qr = _qr_data_uri(uri)
-    vpa = os.getenv("UPI_ID", "7975291636@ptsbi").strip()
+    vpa = os.getenv("UPI_ID", "").strip()
     qr_html = f"<img src='{_escape(qr)}' alt='UPI QR code for ₹{rupees}' width='260' height='260'>" if qr else "<p style='color:#222'>QR code unavailable. Use the button below.</p>"
     plain_uri = "upi://pay?" + "&".join(f"{key}={quote(value, safe='@')}" for key, value in
                                        {"pa": vpa, "pn": os.getenv("UPI_PAYEE_NAME", "Agent Daemon").strip(), "cu": "INR"}.items())
@@ -3667,10 +3602,10 @@ def _page_manual_payment(request):
             f"<div class='qr'><a href='{_escape(uri)}' aria-label='Open UPI app'>{qr_html}</a><p>{_escape(vpa)}</p>"
             f"<a class='button primary' style='margin-top:12px' href='{_escape(uri)}'>Open UPI app and pay ₹{rupees:,}</a></div>"
             f"<details><summary>Your app will not accept the amount? Scan this QR and type ₹{rupees:,} yourself.</summary><div class='qr'>{plain_html}<p>{_escape(vpa)}</p></div></details>"
-            f"<div class='alert'>Check that your UPI app shows exactly ₹{rupees:,}.00 before you pay. After you pay, enter the UPI reference number (UTR) and your contact details below and press the button. Then please wait 1 to 2 hours: we check our Paytm account for your payment and switch your access on. You will get an email.</div>"
+            f"<div class='alert'>Check that your UPI app shows exactly ₹{rupees:,}.00 before you pay. After you pay, enter the UPI reference number (UTR) and your contact details below and press the button. Then please wait 1 to 2 hours while we verify your payment. You will get an email.</div>"
             f"<form method='post' action='/billing/pay'><input type='hidden' name='csrf' value='{_escape(_csrf(request))}'><input type='hidden' name='plan' value='{plan}'>"
             f"<div class='field'><label>Your Name</label><input name='name' value='{_escape(prefill_name)}' placeholder='Full name' maxlength='100'></div>"
-            f"<div class='field'><label>Mobile / WhatsApp Number</label><input name='phone' type='tel' value='{_escape(prefill_phone)}' placeholder='+91 98765 43210' maxlength='30'></div>"
+            f"<div class='field'><label>Mobile / WhatsApp Number</label><input name='phone' type='tel' value='{_escape(prefill_phone)}' placeholder='Phone number' maxlength='30'></div>"
             f"<div class='field'><label>How did you find out about us?</label><select name='referral_source'><option value=''>Select an option...</option>{opts_html}</select></div>"
             f"<div class='field'><label>Company / Project Name <small class='muted'>(optional)</small></label><input name='organization' value='{_escape(prefill_org)}' placeholder='e.g. Acme Inc' maxlength='100'></div>"
             "<div class='field'><label>UPI reference number (UTR)</label><input name='transaction_ref' maxlength='40' required autocomplete='off' placeholder='12-digit number from your payment receipt'>"
