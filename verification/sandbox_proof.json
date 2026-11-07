@@ -1,0 +1,584 @@
+{
+  "docker": {
+    "version": "29.9.2 (linux/amd64)",
+    "images": {
+      "image_python": "fixengine-sandbox-python:1",
+      "image_node": "fixengine-sandbox-node:1",
+      "image_java": "fixengine-sandbox-java:1"
+    },
+    "image_ids": {
+      "image_python": "sha256:0089b47494c344120a4313cfb966a1670c813c796fdd0f302785a864d279c8db 196365057",
+      "image_node": "sha256:69142fcb3238ca5493cbcce90e2cd741603ffb247a71f653e9d1392db21f3f3c 389050665",
+      "image_java": "sha256:e4c2e2e52323b6147e17f3dd23bf6453d0def74b3d57bc3af3f027eb891ebd17 858462753"
+    },
+    "limits": {
+      "memory": "1g",
+      "cpus": "1",
+      "pids": 256,
+      "timeout_seconds": 120,
+      "install_timeout_seconds": 240
+    }
+  },
+  "matrix": [
+    {
+      "case": "html-css-only",
+      "detected": [
+        {
+          "label": "HTML/CSS/JS site",
+          "language": "static",
+          "workdir": "",
+          "image": "fixengine-sandbox-node:1",
+          "commands": {
+            "install": null,
+            "build": "python3 /opt/static_check.py .",
+            "test": null,
+            "smoke": "python3 -m http.server $PORT"
+          },
+          "notes": []
+        }
+      ],
+      "runner": "DockerRunner",
+      "passed": true,
+      "tests_ran": false,
+      "smoke_ran": true,
+      "failing": null,
+      "system_fault": false,
+      "error": "",
+      "seconds": 3.5,
+      "phases": [
+        {
+          "name": "build",
+          "ok": true,
+          "rc": 0,
+          "seconds": 1.3,
+          "tests": null,
+          "log_tail": "static_check: 0 errors in 9 files\n"
+        },
+        {
+          "name": "smoke",
+          "ok": true,
+          "rc": 0,
+          "seconds": 2.1,
+          "tests": null,
+          "log_tail": "SMOKE OK: HTTP 200\n"
+        }
+      ]
+    },
+    {
+      "case": "javascript-node",
+      "detected": [
+        {
+          "label": "JavaScript/TypeScript",
+          "language": "node",
+          "workdir": "",
+          "image": "fixengine-sandbox-node:1",
+          "commands": {
+            "install": null,
+            "build": null,
+            "test": "npm test --silent",
+            "smoke": "npm start"
+          },
+          "notes": []
+        }
+      ],
+      "runner": "DockerRunner",
+      "passed": true,
+      "tests_ran": true,
+      "smoke_ran": true,
+      "failing": 0,
+      "system_fault": false,
+      "error": "",
+      "seconds": 4.9,
+      "phases": [
+        {
+          "name": "test",
+          "ok": true,
+          "rc": 0,
+          "seconds": 3.3,
+          "tests": {
+            "failed": 0,
+            "discovered": 43,
+            "passed": 43
+          },
+          "log_tail": " item throws\n  ---\n  duration_ms: 1.127913\n  type: 'test'\n  ...\n# Subtest: wishlists: search and counts\nok 43 - wishlists: search and counts\n  ---\n  duration_ms: 2.087906\n  type: 'test'\n  ...\n1..43\n# tests 43\n# suites 0\n# pass 43\n# fail 0\n# cancelled 0\n# skipped 0\n# todo 0\n# duration_ms 2178.763519\n"
+        },
+        {
+          "name": "smoke",
+          "ok": true,
+          "rc": 0,
+          "seconds": 1.4,
+          "tests": null,
+          "log_tail": "SMOKE OK: HTTP 200\n"
+        }
+      ]
+    },
+    {
+      "case": "typescript",
+      "detected": [
+        {
+          "label": "TypeScript",
+          "language": "node",
+          "workdir": "",
+          "image": "fixengine-sandbox-node:1",
+          "commands": {
+            "install": "npm install --ignore-scripts --no-audit --no-fund",
+            "build": "npx --no-install tsc --noEmit",
+            "test": "npm test --silent",
+            "smoke": null
+          },
+          "notes": []
+        }
+      ],
+      "runner": "DockerRunner",
+      "passed": true,
+      "tests_ran": true,
+      "smoke_ran": false,
+      "failing": 0,
+      "system_fault": false,
+      "error": "",
+      "seconds": 13.3,
+      "phases": [
+        {
+          "name": "install",
+          "ok": true,
+          "rc": 0,
+          "seconds": 7.4,
+          "tests": null,
+          "log_tail": "\nadded 1 package in 6s\n"
+        },
+        {
+          "name": "build",
+          "ok": true,
+          "rc": 0,
+          "seconds": 3.1,
+          "tests": null,
+          "log_tail": ""
+        },
+        {
+          "name": "test",
+          "ok": true,
+          "rc": 0,
+          "seconds": 2.7,
+          "tests": {
+            "failed": 0,
+            "discovered": 34,
+            "passed": 34
+          },
+          "log_tail": " item throws\n  ---\n  duration_ms: 0.949417\n  type: 'test'\n  ...\n# Subtest: wishlists: search and counts\nok 34 - wishlists: search and counts\n  ---\n  duration_ms: 1.130318\n  type: 'test'\n  ...\n1..34\n# tests 34\n# suites 0\n# pass 34\n# fail 0\n# cancelled 0\n# skipped 0\n# todo 0\n# duration_ms 1937.817469\n"
+        }
+      ]
+    },
+    {
+      "case": "java",
+      "detected": [
+        {
+          "label": "Java",
+          "language": "java",
+          "workdir": "",
+          "image": "fixengine-sandbox-java:1",
+          "commands": {
+            "install": null,
+            "build": "find . -name '*.java' -not -path './.fx_*' > .fx_srcs.txt && mkdir -p .fx_out && javac -encoding UTF-8 -Xlint:none -d .fx_out @.fx_srcs.txt",
+            "test": "java -cp .fx_out com.shop.AllTests",
+            "smoke": null
+          },
+          "notes": []
+        }
+      ],
+      "runner": "DockerRunner",
+      "passed": true,
+      "tests_ran": true,
+      "smoke_ran": false,
+      "failing": 0,
+      "system_fault": false,
+      "error": "",
+      "seconds": 8.1,
+      "phases": [
+        {
+          "name": "build",
+          "ok": true,
+          "rc": 0,
+          "seconds": 6.8,
+          "tests": null,
+          "log_tail": "Can not write to /root/.m2/copy_reference_file.log. Wrong volume permissions? Carrying on ...\nmkdir: cannot create directory \u2018/root\u2019: Permission denied\nPicked up JAVA_TOOL_OPTIONS: -Duser.home=/tmp\n"
+        },
+        {
+          "name": "test",
+          "ok": true,
+          "rc": 0,
+          "seconds": 1.2,
+          "tests": {
+            "passed": 91,
+            "failed": 0
+          },
+          "log_tail": "Can not write to /root/.m2/copy_reference_file.log. Wrong volume permissions? Carrying on ...\n0 failed, 91 passed\nmkdir: cannot create directory \u2018/root\u2019: Permission denied\nPicked up JAVA_TOOL_OPTIONS: -Duser.home=/tmp\n"
+        }
+      ]
+    },
+    {
+      "case": "python",
+      "detected": [
+        {
+          "label": "Python",
+          "language": "python",
+          "workdir": "",
+          "image": "fixengine-sandbox-python:1",
+          "commands": {
+            "install": "pip install --no-input --disable-pip-version-check --no-cache-dir -r requirements.txt --target /work/.fx_deps",
+            "build": "python -m compileall -q .",
+            "test": "python -m pytest -q --maxfail=50 -p no:cacheprovider",
+            "smoke": null
+          },
+          "notes": []
+        }
+      ],
+      "runner": "DockerRunner",
+      "passed": true,
+      "tests_ran": true,
+      "smoke_ran": false,
+      "failing": 0,
+      "system_fault": false,
+      "error": "",
+      "seconds": 5.4,
+      "phases": [
+        {
+          "name": "install",
+          "ok": true,
+          "rc": 0,
+          "seconds": 1.6,
+          "tests": null,
+          "log_tail": ""
+        },
+        {
+          "name": "build",
+          "ok": true,
+          "rc": 0,
+          "seconds": 1.8,
+          "tests": null,
+          "log_tail": ""
+        },
+        {
+          "name": "test",
+          "ok": true,
+          "rc": 0,
+          "seconds": 1.9,
+          "tests": {
+            "passed": 40,
+            "failed": 0
+          },
+          "log_tail": "........................................                                 [100%]\n40 passed in 0.74s\n"
+        }
+      ]
+    },
+    {
+      "case": "mixed-java+js+python",
+      "detected": [
+        {
+          "label": "Python (tools)",
+          "language": "python",
+          "workdir": "tools",
+          "image": "fixengine-sandbox-python:1",
+          "commands": {
+            "install": "pip install --no-input --disable-pip-version-check --no-cache-dir -r requirements.txt --target /work/.fx_deps",
+            "build": "python -m compileall -q .",
+            "test": "python -m pytest -q --maxfail=50 -p no:cacheprovider",
+            "smoke": null
+          },
+          "notes": []
+        },
+        {
+          "label": "JavaScript/TypeScript (web)",
+          "language": "node",
+          "workdir": "web",
+          "image": "fixengine-sandbox-node:1",
+          "commands": {
+            "install": null,
+            "build": null,
+            "test": "npm test --silent",
+            "smoke": "npm start"
+          },
+          "notes": []
+        },
+        {
+          "label": "Java",
+          "language": "java",
+          "workdir": "",
+          "image": "fixengine-sandbox-java:1",
+          "commands": {
+            "install": null,
+            "build": "find . -name '*.java' -not -path './.fx_*' > .fx_srcs.txt && mkdir -p .fx_out && javac -encoding UTF-8 -Xlint:none -d .fx_out @.fx_srcs.txt",
+            "test": "java -cp .fx_out com.shop.AllTests",
+            "smoke": null
+          },
+          "notes": []
+        }
+      ],
+      "runner": "DockerRunner",
+      "passed": true,
+      "tests_ran": true,
+      "smoke_ran": true,
+      "failing": 0,
+      "system_fault": false,
+      "error": "",
+      "seconds": 14.9,
+      "phases": [
+        {
+          "name": "Python (tools): install",
+          "ok": true,
+          "rc": 0,
+          "seconds": 1.3,
+          "tests": null,
+          "log_tail": ""
+        },
+        {
+          "name": "Python (tools): build",
+          "ok": true,
+          "rc": 0,
+          "seconds": 1.2,
+          "tests": null,
+          "log_tail": ""
+        },
+        {
+          "name": "Python (tools): test",
+          "ok": true,
+          "rc": 0,
+          "seconds": 1.8,
+          "tests": {
+            "passed": 40,
+            "failed": 0
+          },
+          "log_tail": "........................................                                 [100%]\n40 passed in 0.75s\n"
+        },
+        {
+          "name": "JavaScript/TypeScript (web): test",
+          "ok": true,
+          "rc": 0,
+          "seconds": 2.4,
+          "tests": {
+            "failed": 0,
+            "discovered": 43,
+            "passed": 43
+          },
+          "log_tail": " item throws\n  ---\n  duration_ms: 0.453084\n  type: 'test'\n  ...\n# Subtest: wishlists: search and counts\nok 43 - wishlists: search and counts\n  ---\n  duration_ms: 1.672023\n  type: 'test'\n  ...\n1..43\n# tests 43\n# suites 0\n# pass 43\n# fail 0\n# cancelled 0\n# skipped 0\n# todo 0\n# duration_ms 1510.438788\n"
+        },
+        {
+          "name": "JavaScript/TypeScript (web): smoke",
+          "ok": true,
+          "rc": 0,
+          "seconds": 1.0,
+          "tests": null,
+          "log_tail": "SMOKE OK: HTTP 200\n"
+        },
+        {
+          "name": "Java: build",
+          "ok": true,
+          "rc": 0,
+          "seconds": 5.8,
+          "tests": null,
+          "log_tail": "Can not write to /root/.m2/copy_reference_file.log. Wrong volume permissions? Carrying on ...\nmkdir: cannot create directory \u2018/root\u2019: Permission denied\nPicked up JAVA_TOOL_OPTIONS: -Duser.home=/tmp\n"
+        },
+        {
+          "name": "Java: test",
+          "ok": true,
+          "rc": 0,
+          "seconds": 0.9,
+          "tests": {
+            "passed": 91,
+            "failed": 0
+          },
+          "log_tail": "Can not write to /root/.m2/copy_reference_file.log. Wrong volume permissions? Carrying on ...\n0 failed, 91 passed\nmkdir: cannot create directory \u2018/root\u2019: Permission denied\nPicked up JAVA_TOOL_OPTIONS: -Duser.home=/tmp\n"
+        }
+      ]
+    },
+    {
+      "case": "mixed-java+js (no Python)",
+      "detected": [
+        {
+          "label": "JavaScript/TypeScript (ui)",
+          "language": "node",
+          "workdir": "ui",
+          "image": "fixengine-sandbox-node:1",
+          "commands": {
+            "install": null,
+            "build": null,
+            "test": "npm test --silent",
+            "smoke": "npm start"
+          },
+          "notes": []
+        },
+        {
+          "label": "Java",
+          "language": "java",
+          "workdir": "",
+          "image": "fixengine-sandbox-java:1",
+          "commands": {
+            "install": null,
+            "build": "find . -name '*.java' -not -path './.fx_*' > .fx_srcs.txt && mkdir -p .fx_out && javac -encoding UTF-8 -Xlint:none -d .fx_out @.fx_srcs.txt",
+            "test": "java -cp .fx_out com.shop.AllTests",
+            "smoke": null
+          },
+          "notes": []
+        }
+      ],
+      "runner": "DockerRunner",
+      "passed": true,
+      "tests_ran": true,
+      "smoke_ran": true,
+      "failing": 0,
+      "system_fault": false,
+      "error": "",
+      "seconds": 8.5,
+      "phases": [
+        {
+          "name": "JavaScript/TypeScript (ui): test",
+          "ok": true,
+          "rc": 0,
+          "seconds": 1.9,
+          "tests": {
+            "failed": 0,
+            "discovered": 43,
+            "passed": 43
+          },
+          "log_tail": " item throws\n  ---\n  duration_ms: 0.459594\n  type: 'test'\n  ...\n# Subtest: wishlists: search and counts\nok 43 - wishlists: search and counts\n  ---\n  duration_ms: 1.037862\n  type: 'test'\n  ...\n1..43\n# tests 43\n# suites 0\n# pass 43\n# fail 0\n# cancelled 0\n# skipped 0\n# todo 0\n# duration_ms 1216.163278\n"
+        },
+        {
+          "name": "JavaScript/TypeScript (ui): smoke",
+          "ok": true,
+          "rc": 0,
+          "seconds": 1.0,
+          "tests": null,
+          "log_tail": "SMOKE OK: HTTP 200\n"
+        },
+        {
+          "name": "Java: build",
+          "ok": true,
+          "rc": 0,
+          "seconds": 4.5,
+          "tests": null,
+          "log_tail": "Can not write to /root/.m2/copy_reference_file.log. Wrong volume permissions? Carrying on ...\nmkdir: cannot create directory \u2018/root\u2019: Permission denied\nPicked up JAVA_TOOL_OPTIONS: -Duser.home=/tmp\n"
+        },
+        {
+          "name": "Java: test",
+          "ok": true,
+          "rc": 0,
+          "seconds": 0.9,
+          "tests": {
+            "passed": 91,
+            "failed": 0
+          },
+          "log_tail": "Can not write to /root/.m2/copy_reference_file.log. Wrong volume permissions? Carrying on ...\n0 failed, 91 passed\nmkdir: cannot create directory \u2018/root\u2019: Permission denied\nPicked up JAVA_TOOL_OPTIONS: -Duser.home=/tmp\n"
+        }
+      ]
+    }
+  ],
+  "probes": [
+    {
+      "probe": "timeout (infinite loop, 15 s limit)",
+      "expectation": "expect timed_out",
+      "passed": false,
+      "timed_out": true,
+      "rc": 124,
+      "seconds": 25.3,
+      "system_fault": false,
+      "error": "",
+      "log_tail": ""
+    },
+    {
+      "probe": "memory limit (allocate 3 GiB, 1 GiB cap)",
+      "expectation": "expect rc 137 (OOM kill)",
+      "passed": false,
+      "timed_out": false,
+      "rc": 137,
+      "seconds": 2.8,
+      "system_fault": false,
+      "error": "",
+      "log_tail": "Killed\n"
+    },
+    {
+      "probe": "network isolation (connect to 1.1.1.1:53)",
+      "expectation": "expect failure",
+      "passed": false,
+      "timed_out": false,
+      "rc": 1,
+      "seconds": 1.3,
+      "system_fault": false,
+      "error": "",
+      "log_tail": "or\n=========================== short test summary info ============================\nFAILED test_probe.py::test_net - OSError: [Errno 101] Network is unreachable\n!!!!!!!!!!!!!!!!!!!!!!!!!! stopping after 1 failures !!!!!!!!!!!!!!!!!!!!!!!!!!!\n1 failed in 0.12s\n"
+    },
+    {
+      "probe": "read-only root fs (write /etc/x)",
+      "expectation": "expect failure",
+      "passed": false,
+      "timed_out": false,
+      "rc": 1,
+      "seconds": 1.2,
+      "system_fault": false,
+      "error": "",
+      "log_tail": "======================= short test summary info ============================\nFAILED test_probe.py::test_ro - OSError: [Errno 30] Read-only file system: '/etc/x'\n!!!!!!!!!!!!!!!!!!!!!!!!!! stopping after 1 failures !!!!!!!!!!!!!!!!!!!!!!!!!!!\n1 failed in 0.05s\n"
+    },
+    {
+      "probe": "non-root user (uid must be 10001)",
+      "expectation": "expect pass",
+      "passed": true,
+      "timed_out": false,
+      "rc": 0,
+      "seconds": 1.1,
+      "system_fault": false,
+      "error": "",
+      "log_tail": ".                                                                        [100%]\n1 passed in 0.04s\n"
+    },
+    {
+      "probe": "pids limit (fork bomb, 256 cap)",
+      "expectation": "expect pass: OSError at the cap",
+      "passed": true,
+      "timed_out": false,
+      "rc": 0,
+      "seconds": 2.1,
+      "system_fault": false,
+      "error": "",
+      "log_tail": ".                                                                        [100%]\n1 passed in 0.48s\n"
+    },
+    {
+      "probe": "no host secrets in the environment",
+      "expectation": "expect pass",
+      "passed": true,
+      "timed_out": false,
+      "rc": 0,
+      "seconds": 1.3,
+      "system_fault": false,
+      "error": "",
+      "log_tail": ".                                                                        [100%]\n1 passed in 0.05s\n"
+    }
+  ],
+  "remote": {
+    "health": {
+      "ok": true
+    },
+    "signed_run_passed": true,
+    "signed_run_phases": [
+      [
+        "install",
+        true,
+        0
+      ],
+      [
+        "build",
+        true,
+        0
+      ],
+      [
+        "test",
+        true,
+        0
+      ]
+    ],
+    "signed_run_seconds": 4.5,
+    "bad_signature_http": 401,
+    "stale_timestamp_http": 401,
+    "wrong_secret_result": {
+      "system_fault": true,
+      "error": "sandbox host returned HTTP 401"
+    },
+    "note": "Service code is identical to the VPS's; this proves protocol, auth and execution, NOT the customer's real VPS/network."
+  }
+}

@@ -91,6 +91,8 @@
         {"match": "^anthropic/.*haiku", "use": "anthropic/claude-haiku-5.5"},
         {"match": "^anthropic/.*opus", "use": "anthropic/claude-opus-5.5"},
         {"match": "^anthropic/", "use": "anthropic/claude-sonnet-5.5"},
+        {"match": "^openai/gpt-oss.*20b", "use": "openai/gpt-oss-20b"},
+        {"match": "^openai/gpt-oss", "use": "openai/gpt-oss-120b"},
         {"match": "^openai/.*nano", "use": "openai/gpt-5.6-luna"},
         {"match": "^openai/.*(3\\.5|mini)", "use": "openai/gpt-5.6-terra"},
         {"match": "^openai/", "use": "openai/gpt-5.6-sol"},

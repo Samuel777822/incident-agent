@@ -2707,19 +2707,30 @@ def _slot_full_page(request, slots: dict):
     return _response(body, request, "402 Payment Required")
 
 
+def _queue_initial_scan(project_id: str, user_id: str, project: dict) -> bool:
+    """Queue the sandbox scan of the branch head right after a repository is connected (every watch mode, not only push
+    guard): clone, install, build, test and start the app, then write the baseline health report. Returns True when queued."""
+    import push_watch
+    record = {**project, "id": project_id, "user_id": user_id}
+    head = push_watch.branch_head({**record, "github_token_ciphertext": project.get("github_token_ciphertext", "")})
+    if head and head.get("sha"):
+        try:
+            _cid, queued = push_watch.enqueue(record, head["sha"], source="connect", pusher=head.get("author", ""), message=head.get("message", ""))
+            portal_db.audit(project_id, "initial_scan_queued", {"commit": head["sha"], "queued": bool(queued), "watch_mode": project.get("watch_mode") or "both"})
+            return bool(queued)
+        except ValueError:
+            return False
+    portal_db.audit(project_id, "initial_scan_queued", {"commit": "", "queued": False, "reason": "could not read the branch head from GitHub"})
+    return False
+
+
 def _start_push_watch(project_id: str, user_id: str, project: dict, token: str) -> dict:
     """Add the push webhook and queue a check of the current branch head, so the customer sees a result right away."""
     import push_watch
     record = {**project, "id": project_id, "user_id": user_id}
     hook = push_watch.install_webhook(record, token)
     portal_db.audit(project_id, "push_webhook", {"ok": hook.get("ok"), "error": hook.get("error", "")[:200]})
-    head = push_watch.branch_head({**record, "github_token_ciphertext": project.get("github_token_ciphertext", "")})
-    queued = False
-    if head and head.get("sha"):
-        try:
-            _cid, queued = push_watch.enqueue(record, head["sha"], source="connect", pusher=head.get("author", ""), message=head.get("message", ""))
-        except ValueError:
-            queued = False
+    queued = _queue_initial_scan(project_id, user_id, project)
     return {"webhook": hook, "queued": queued}
 
 
@@ -2830,6 +2841,9 @@ def _activate_project(project: dict, token: str, ingest_key: str) -> dict:
             return out
     if watch in ("push", "both"):
         out["push"] = _start_push_watch(project["id"], project["user_id"], project, token)
+    elif watch == "runtime":
+        # Runtime-only projects used to get no first scan at all: the baseline report is part of connecting, in every mode.
+        out["scan"] = _queue_initial_scan(project["id"], project["user_id"], project)
     portal_db.set_gate_state(project["id"], portal_db.GATE_ACTIVE)
     portal_db.unpark_gate_incidents(project["id"])
     return out
@@ -2841,6 +2855,9 @@ def _activation_summary(result: dict, project: dict) -> str:
         html_out += _install_summary(result["install"], project["id"])
     if result.get("push") is not None:
         html_out += _push_summary(result["push"])
+    if result.get("scan"):
+        html_out += ("<div class='card'><h3>First scan started</h3><p class='muted'>We are cloning your repository into the sandbox, "
+                     "installing, building, testing and starting it now. The baseline health report appears on the project page.</p></div>")
     return html_out
 
 

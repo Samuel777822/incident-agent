@@ -11,6 +11,7 @@ Java (Maven, Gradle, plain `javac`) and plain HTML/CSS/JS sites, including repos
 | [DEPLOY.md](DEPLOY.md) | Step by step, for beginners: Render, the sandbox server, GitHub, email, domain, first test |
 | [FIXENGINE.md](FIXENGINE.md) | The fix engine: router, quotas, sandbox, languages, budget |
 | [RUN_TESTS.md](RUN_TESTS.md) | Running the tests, the Docker images, the sandbox abuse check and the paid benchmark on your laptop |
+| [VERIFICATION_REPORT.md](VERIFICATION_REPORT.md) | Complete production-readiness audit, defects fixed, and empirical proofs (Proofs A–G) |
 | [CHANGELOG.md](CHANGELOG.md) | What changed and why |
 
 ## Two ways to catch bugs (a project can use one or both)
@@ -26,7 +27,9 @@ Java (Maven, Gradle, plain `javac`) and plain HTML/CSS/JS sites, including repos
 
 **Public-repo gate.** Nothing is ever committed to a public repository. Connecting a public repo shows simple steps to make it
 private and an "I've made it private, install now" button; visibility is re-checked before every commit Agent Daemon makes.
-Right after connecting, the existing code is scanned once (no push needed), and retired AI model ids are fixed without AI tries.
+Right after connecting (in every watch mode: `push`, `runtime` or `both`), the existing code is scanned immediately (`source=connect`),
+producing a structured `baseline_report` in `audit_log` (detected stacks, commands run, test counts discovered/passed/failed, build/startup
+results), and retired AI model ids are fixed without AI tries.
 
 The fix engine: free first look → cost-aware router (expected-cost dynamic program) picks Normal / High / Extra → the model returns a
 small patch as text → policy check → **the same sandbox check must pass** → branch `agent-daemon/fix-…` + pull request → in Auto mode
@@ -74,7 +77,7 @@ python portal_worker.py                                   # second terminal: che
 
 ```
 python -m pip install -r requirements-test.txt
-python -m pytest -q          # 378 tests, offline; Node / a JDK / Playwright make a few extra tests run
+python -m pytest -q          # 387 passed, 1 skipped, 0 failed (offline)
 python scripts/simulate_monitoring.py   # monitors -> check-ins -> error -> fix PR, locally, in ~15 seconds
 ```
 

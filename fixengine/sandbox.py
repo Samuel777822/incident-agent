@@ -403,6 +403,56 @@ def stack_summary(profile, result: "SandboxResult | None" = None) -> list[dict]:
     return rows
 
 
+def count_tests(output: str) -> dict:
+    """{discovered, passed, failed} read from a test runner's own summary line (pytest, node:test, Maven/Surefire, plain
+    'N passed'). Empty dict when the output has no recognisable summary: callers must then say 'unknown', never 'zero'."""
+    text = output or ""
+    passed = failed = discovered = None
+    m = re.search(r"(\d+) passed", text)
+    if m:
+        passed = int(m.group(1))
+    m = re.search(r"(\d+) failed", text)
+    if m:
+        failed = int(m.group(1))
+    m = re.search(r"(?:#|\u2139)\s*tests (\d+)", text)
+    if m:                                                   # node:test
+        discovered = int(m.group(1))
+        p = re.search(r"(?:#|\u2139)\s*pass (\d+)", text)
+        f = re.search(r"(?:#|\u2139)\s*fail (\d+)", text)
+        passed, failed = int(p.group(1)) if p else passed, int(f.group(1)) if f else failed
+    runs = re.findall(r"Tests run: (\d+), Failures: (\d+), Errors: (\d+)", text)
+    if runs and discovered is None:                         # Maven Surefire: the last line is the total
+        total, fails, errs = (int(x) for x in runs[-1])
+        discovered, failed, passed = total, fails + errs, total - fails - errs
+    if passed is None and failed is None and discovered is None:
+        return {}
+    passed, failed = passed or 0, failed or 0
+    return {"discovered": discovered if discovered is not None else passed + failed, "passed": passed, "failed": failed}
+
+
+def stack_report(profile, result: "SandboxResult") -> list[dict]:
+    """stack_summary plus everything a baseline health report needs: the commands that were configured, what each phase did
+    (exit code, seconds), the test counts, and which configured steps never ran because an earlier one failed."""
+    rows = stack_summary(profile, result)
+    parts = profile.parts if isinstance(profile, StackSet) else [profile]
+    for part, row in zip(parts, rows):
+        label = row["label"]
+        mine = [p for p in result.phases if p.name.startswith(label + ": ")] if isinstance(profile, StackSet) else list(result.phases)
+        short = lambda p: p.name.split(": ", 1)[-1]   # noqa: E731
+        configured = [n for n, c in (("install", part.install), ("build", part.build), ("test", part.test), ("smoke", part.smoke)) if c]
+        ran = {short(p) for p in mine}
+        test_phase = next((p for p in mine if short(p) == "test"), None)
+        row.update({
+            "commands": {"install": part.install, "build": part.build, "test": part.test, "smoke": part.smoke},
+            "phases": [{"name": short(p), "ok": p.ok, "rc": p.rc, "seconds": p.seconds} for p in mine],
+            "not_run": [n for n in configured if n not in ran],
+            "has_tests": bool(part.has_tests),
+            "tests": count_tests(test_phase.output) if test_phase else {},
+            "notes": list(part.notes)[:5],
+        })
+    return rows
+
+
 def _python_profile(root: Path, names: set[str], base: str) -> Profile:
     prof = Profile(language="python", workdir=base)
     py = [n for n in names if n.endswith(".py")]
@@ -433,7 +483,7 @@ def _python_profile(root: Path, names: set[str], base: str) -> Profile:
 def parse_failing(output: str) -> int | None:
     text = output or ""
     total, found = 0, False
-    for pat in (r"(\d+) failed", r"(\d+) errors?\b", r"Tests:\s+(\d+) failed", r"# fail (\d+)"):
+    for pat in (r"(\d+) failed", r"(\d+) errors?\b", r"Tests:\s+(\d+) failed", r"(?:#|\u2139)\s*fail (\d+)"):
         for m in re.finditer(pat, text):
             total += int(m.group(1)); found = True
     return total if found else None
@@ -461,7 +511,7 @@ def docker_run_argv(*, name: str, image: str, workdir: str, command: str, networ
 
 def _default_exec(argv, timeout, cwd=None, env=None):
     try:
-        proc = subprocess.run(argv, capture_output=True, text=True, timeout=timeout, cwd=cwd, env=env)
+        proc = subprocess.run(argv, capture_output=True, text=True, encoding="utf-8", errors="replace", timeout=timeout, cwd=cwd, env=env)
         return proc.returncode, (proc.stdout or "") + (proc.stderr or ""), False
     except subprocess.TimeoutExpired as exc:
         out = (exc.stdout.decode("utf-8", "replace") if isinstance(exc.stdout, bytes) else (exc.stdout or ""))
@@ -556,6 +606,32 @@ class LocalUnsafeRunner(_BaseRunner):
     It runs the project's commands directly on this machine with NO isolation. Use it only on the sample projects that
     ship with this repo (bench/cases) on a throw-away machine. Real customer code must go through Docker."""
 
+    @staticmethod
+    def _local_env(work: Path, extra: dict | None = None) -> dict:
+        """Build a subprocess environment that works on both POSIX and Windows.
+
+        On Windows, Python's user-site-packages live under %APPDATA% and
+        %LOCALAPPDATA%, which are absent from the minimal env we normally
+        construct.  Without them ``python -m pytest`` cannot find pytest even
+        though it is installed, causing every sandbox test run to fail with
+        "No module named pytest".  We carry those variables across so the
+        subprocess finds the same packages as the parent process.
+        """
+        keep = {k.upper() for k in (
+            "PATH", "JAVA_HOME", "LANG", "TMPDIR",
+            # Windows-specific: needed for user site-packages, Winsock, and basic OS subsystem
+            "APPDATA", "LOCALAPPDATA", "USERPROFILE",
+            "SYSTEMROOT", "COMSPEC", "PATHEXT",
+            "TMP", "TEMP", "PYTHONUSERBASE", "VIRTUAL_ENV",
+            "WINDIR", "SYSTEMDRIVE", "PROGRAMDATA", "PROGRAMFILES"
+        )}
+        env = {k: v for k, v in os.environ.items() if k.upper() in keep}
+        env["HOME"] = str(work)
+        env["PYTHONDONTWRITEBYTECODE"] = "1"
+        if extra:
+            env.update(extra)
+        return env
+
     def run(self, repo_dir: Path, profile: Profile) -> SandboxResult:
         if os.getenv("FIXENGINE_ALLOW_UNSAFE_LOCAL") != "1":
             return SandboxResult(system_fault=True, error="local_unsafe sandbox needs FIXENGINE_ALLOW_UNSAFE_LOCAL=1")
@@ -567,7 +643,7 @@ class LocalUnsafeRunner(_BaseRunner):
             shutil.copytree(repo_dir, target, ignore=shutil.ignore_patterns(".git"))
             if profile.language != "python":
                 return self._run_generic(target, work, profile)
-            env = {"PATH": os.environ.get("PATH", ""), "PYTHONPATH": str(target), "HOME": str(work), "PYTHONDONTWRITEBYTECODE": "1"}
+            env = self._local_env(work, {"PYTHONPATH": str(target)})
             plan = []
             if profile.build:
                 plan.append(("build", [sys.executable, "-m", "compileall", "-q", "."], 60))
@@ -586,16 +662,36 @@ class LocalUnsafeRunner(_BaseRunner):
 
     def _run_generic(self, target: Path, work: Path, profile: Profile) -> SandboxResult:
         sb = self.cfg["sandbox"]
-        env = {k: v for k, v in os.environ.items() if k in ("PATH", "JAVA_HOME", "LANG", "TMPDIR", "SystemRoot", "COMSPEC", "PATHEXT")}
-        env.update({"HOME": str(work), "CI": "1", "PORT": str(SMOKE_PORT)})
+        env = self._local_env(work, {"CI": "1", "PORT": str(SMOKE_PORT)})
         phases: list[PhaseResult] = []
         for name, cmd, net, timeout in phase_plan(profile, sb):
             if name == "install" and not (target / (profile.workdir or ".") / "package.json").exists() and profile.language == "node":
                 continue
-            cmd = cmd.replace("/opt/static_check.py", str(SANDBOX_DIR / "static_check.py")).replace("/opt/smoke.py", str(SANDBOX_DIR / "smoke.py"))
-            cmd = cmd.replace("python3 ", f"{shlex.quote(sys.executable)} ", 1) if cmd.startswith("python3 ") else cmd
+            win = sys.platform == "win32"
+            quote = (lambda s: f'"{s}"') if win else shlex.quote  # cmd.exe does not understand POSIX single quotes
+            cmd = cmd.replace("/opt/static_check.py", quote(str(SANDBOX_DIR / "static_check.py"))).replace("/opt/smoke.py", quote(str(SANDBOX_DIR / "smoke.py")))
+            cmd = cmd.replace("python3 ", f"{quote(sys.executable)} ", 1) if cmd.startswith("python3 ") else cmd
+            if win:
+                # cmd.exe does not expand $VAR
+                cmd = cmd.replace("$PORT", str(SMOKE_PORT))
+                # `find` and `mkdir -p` are POSIX-only: build the javac source list in Python instead.
+                if "find . -name '*.java'" in cmd:
+                    srcs = sorted(p.relative_to(target / (profile.workdir or ".")).as_posix()
+                                  for p in (target / (profile.workdir or ".")).rglob("*.java")
+                                  if not any(part.startswith(".fx_") for part in p.parts))
+                    (target / (profile.workdir or ".") / ".fx_srcs.txt").write_text(
+                        "\n".join(f'"{s}"' for s in srcs), encoding="utf-8")
+                    cmd = re.sub(r"find \. -name .*@\.fx_srcs\.txt", "if not exist .fx_out mkdir .fx_out && javac -encoding UTF-8 -Xlint:none -d .fx_out @.fx_srcs.txt", cmd)
             started = time.time()
-            rc, out, _t = self.exec_fn(["sh", "-c", cmd], timeout, str(target), env)
+            # On Windows write the command to a .bat file: passing it through `cmd /C` mangles nested quotes
+            # (list2cmdline escapes with \" which cmd.exe does not understand). On POSIX use sh -c.
+            if sys.platform == "win32":
+                bat = work / f"phase_{name}.bat"
+                bat.write_text(f"@echo off\r\ncd /d \"{target}\"\r\n{cmd}\r\nexit /b %ERRORLEVEL%\r\n", encoding="utf-8")
+                shell_argv = ["cmd", "/D", "/C", str(bat)]
+            else:
+                shell_argv = ["sh", "-c", cmd]
+            rc, out, _t = self.exec_fn(shell_argv, timeout, str(target), env)
             phases.append(PhaseResult(name, rc == 0, rc, round(time.time() - started, 1), out[-6000:]))
             if rc != 0:
                 break
