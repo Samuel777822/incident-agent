@@ -2,7 +2,7 @@
 
 One place turns the stored state of a push check or an incident into:
   * a headline ("High mode is writing a fix", "Testing the fix in the sandbox", "Pushing the fix to GitHub"),
-  * a step tracker (Caught → Reproduce → Write fix → Test fix → Push to GitHub → Merge / Your review),
+  * a step tracker (Caught → Reproduce → Write fix → Test fix → Push to GitHub → Your review),
   * the mode that is working (Low effort / Normal / High / Extra, never model names) and how many tries of it are left.
 Pure functions: everything that reaches HTML is escaped here.
 """
@@ -25,8 +25,8 @@ INCIDENT_STAGES = {
     "waiting_retry": ("Paused for a moment, retrying by itself", "amber", None, True),
     "pushing": ("Pushing the fix to GitHub", "blue", 4, True),
     "pr_open": ("Fix pushed · pull request ready for your review", "green", 5, False),
-    "merging": ("Fix proven · merging into your branch", "blue", 5, True),
-    "merged": ("Fixed · the fixed version is on GitHub", "green", 6, False),
+    "merging": ("Fix ready · waiting for your review", "green", 5, False),
+    "merged": ("Fixed · merged after human review", "green", 6, False),
     "needs_human": ("Needs a human", "red", None, False),
     "resolved": ("Resolved", "green", 6, False),
 }
@@ -89,7 +89,7 @@ def ago(value) -> str:
 def incident_steps(mode: str) -> list[str]:
     if mode == "report":
         return ["Caught", "Diagnose", "Report ready"]
-    return ["Caught", "Reproduce", "Write fix", "Test fix", "Push to GitHub", "Merge" if mode == "auto" else "Your review"]
+    return ["Caught", "Reproduce", "Write fix", "Test fix", "Push to GitHub", "Your review"]
 
 
 def incident_view(inc: dict, mode: str, quota: dict | None = None) -> dict:
@@ -129,7 +129,7 @@ def incident_view(inc: dict, mode: str, quota: dict | None = None) -> dict:
             state = "active" if busy else "done"
         else:
             state = "todo"
-        if stage == "pr_open" and i == len(labels) - 1 and mode != "auto":
+        if stage in ("pr_open", "merging") and i == len(labels) - 1:
             state = "active"
         steps.append((label, state))
     left = ""
@@ -196,7 +196,7 @@ def quota_strip(panel: list[dict]) -> str:
 
 
 def live_panel(work: dict, modes: dict, quota: dict | None) -> str:
-    """The 'Agent right now' block on the dashboard. `modes` maps project_id -> agent mode (report/pr/auto)."""
+    """The 'Agent right now' block on the dashboard. Legacy auto projects also end in a human-reviewed PR."""
     rows = []
     open_incidents = [i for i in work["incidents"] if i.get("status") not in ("resolved", "reverted")][:6]
     for inc in open_incidents:

@@ -935,7 +935,7 @@ def render_homepage_html() -> str:
             </div>
             <div style="margin-top:10px;font-size:11.5px;color:#8ce4c0;display:flex;justify-content:space-between;align-items:center">
               <span>Branch: <code>agent-daemon/fix-checkout-keyerror</code></span>
-              <span class="pill green" style="padding:2px 8px;font-size:10.5px">Auto mode: merged</span>
+              <span class="pill green" style="padding:2px 8px;font-size:10.5px">PR ready for review</span>
             </div>
           </div>
         </div>
@@ -1063,7 +1063,7 @@ def render_homepage_html() -> str:
       </div>
       <h3 style="font-size:18px;margin:0 0 10px;color:var(--text);font-family:var(--serif)">Fix pushed back</h3>
       <p style="color:var(--muted);font-size:14px;line-height:1.6;margin:0">
-        The fix lands on a new branch with a pull request. Auto mode merges it as soon as it is proven, so the fixed version is on GitHub before you deploy.
+        The fix lands on a new branch with a pull request. The sandbox and GitHub report their results, and you review the change before merging.
       </p>
     </div>
   </div>
@@ -1107,15 +1107,15 @@ def render_homepage_html() -> str:
       <span class="feature-num">04</span>
       <div class="feature-icon-box">{ICON_PR}</div>
       <h3>Fixes pushed to GitHub</h3>
-      <p>Small, proven patches on a fix branch with a pull request; merged for you in Auto mode.</p>
+      <p>Small patches on a fix branch with sandbox and GitHub results attached for your review.</p>
     </div>
 
     <!-- 05 -->
     <div class="feature-v2-card">
       <span class="feature-num">05</span>
       <div class="feature-icon-box">{ICON_SLIDERS}</div>
-      <h3>Multiple Automation Modes</h3>
-      <p>Support Report Only, Pull Request, and Auto modes. You decide the degree of autonomy granted to the agent.</p>
+      <h3>Choose a response mode</h3>
+      <p>Choose Report Only or Pull Request mode for each repository.</p>
     </div>
 
     <!-- 06 -->
@@ -1150,11 +1150,11 @@ def render_homepage_html() -> str:
         </div>
         <div class="sec-item">
           <div class="sec-item-icon">{ICON_CHECK}</div>
-          <div><b>Graduated Autonomy Modes:</b> Select between Report Only, Pull Request, or Auto mode per repository.</div>
+          <div><b>Choose the response:</b> Select Report Only or Pull Request mode for each repository.</div>
         </div>
         <div class="sec-item">
           <div class="sec-item-icon">{ICON_CHECK}</div>
-          <div><b>Proof required:</b> Auto mode merges only when the check that failed now passes in the sandbox and every GitHub check is green.</div>
+          <div><b>Proof for review:</b> The sandbox and GitHub checks report whether the failing check now passes.</div>
         </div>
         <div class="sec-item">
           <div class="sec-item-icon">{ICON_CHECK}</div>
@@ -1188,7 +1188,7 @@ def render_homepage_html() -> str:
           <span style="color:#ff8a7a;font-weight:600">Sandbox only</span>
         </div>
         <div style="display:flex;justify-content:space-between;align-items:center;padding:10px 12px;background:#13091c;border-radius:8px">
-          <span>Auto-Merge CI Safety Gate</span>
+          <span>Pull Request CI Checks</span>
           <span style="color:#6fe0b0;font-weight:600">Mandatory Green Check</span>
         </div>
       </div>
@@ -1277,9 +1277,9 @@ def render_homepage_html() -> str:
           </div>
           <span class="pill green" style="font-size:11px">{ICON_CHECK} CI Verified</span>
         </div>
-        <p style="color:#cfc5dc;font-size:14.5px;line-height:1.6">The agent generates a dedicated branch, commits the minimal safe patch, opens a GitHub PR, and waits for your review or auto-merges if Auto mode is enabled.</p>
+        <p style="color:#cfc5dc;font-size:14.5px;line-height:1.6">The agent generates a dedicated branch, commits the proposed patch, opens a GitHub PR, and waits for your review.</p>
         <div style="background:#040c08;padding:14px;border-radius:8px;border:1px solid #1a4d3b;font-family:Consolas,monospace;font-size:12.5px;color:#8ce4c0">
-          PR #42: fix(checkout): defend against missing price attribute · CI Status: 42/42 Passed · Ready for One-Click Merge
+          PR #42: fix(checkout): defend against missing price attribute · CI Status: 42/42 Passed · Ready for Human Review
         </div>
       </div>
     </div>
@@ -1299,7 +1299,7 @@ def render_homepage_html() -> str:
   <div style="display:grid;grid-template-columns:repeat(auto-fit,minmax(300px,1fr));gap:16px;margin-top:14px">
     <div style="background:#0c0614;border:1px solid #2d1830;border-radius:10px;padding:18px">
       <div style="font-weight:700;color:#ff8a7a;font-size:14px;margin-bottom:6px">1. Make your repository private</div>
-      <p class="muted" style="font-size:13px;line-height:1.5;margin:0 0 10px">We read your source files and error logs to diagnose problems, and Auto mode only merges fixes in private repositories. A private repository keeps your code and logs away from the public.</p>
+      <p class="muted" style="font-size:13px;line-height:1.5;margin:0 0 10px">We read your source files and error logs to diagnose problems. Agent Daemon connects only to private repositories so your code and logs stay away from the public.</p>
       <details>
         <summary style="cursor:pointer;color:var(--blue);font-size:12.5px;font-weight:600">Show 5 quick steps ▾</summary>
         <ol class="steps muted" style="font-size:12.5px;line-height:1.5;margin:8px 0 0;padding-left:18px">
@@ -1329,8 +1329,8 @@ def render_homepage_html() -> str:
       <div style="margin-top:10px;padding-top:8px;border-top:1px solid #281432;font-size:11.5px;color:var(--muted)">
         <b>What the agent uses each permission for:</b>
         <ul style="margin:4px 0 0;padding-left:16px">
-          <li><code>repo</code>: read your code, create a branch and open pull requests. Nothing is merged unless you choose Auto mode.</li>
-          <li><code>workflow</code>: add a small test workflow file, so Auto mode has a check that must pass before merging.</li>
+          <li><code>repo</code>: read your code, create a branch and open pull requests for your review.</li>
+          <li><code>workflow</code>: add a small test workflow file to report checks on pull requests.</li>
         </ul>
       </div>
     </div>

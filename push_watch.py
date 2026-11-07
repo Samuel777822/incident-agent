@@ -8,7 +8,7 @@ should be caught as soon as they push, fixed by the agent, and the fixed version
              ──► runs install → build/type-check → tests → start-up check for each stack in the sandbox
              ──► green: GitHub commit status "success", done
              ──► red:   commit status "failure", an incident is opened, and the fix engine takes over
-                        (router → model → patch → the SAME sandbox check must go green → fix branch + PR → auto-merge in Auto mode)
+                        (router → model → patch → the SAME sandbox check must go green → fix branch + PR for human review)
 
 Nothing here calls an AI model: a push check is free. Only a failing check spends tries, through the normal quota and budget guard.
 The GitHub token is decrypted in memory only; customer code runs only inside the sandbox.
@@ -365,8 +365,8 @@ def _notify_owner(check: dict, summary: str, first: str, mode: str) -> None:
         return
     base = os.getenv("PORTAL_BASE_URL", "").strip().rstrip("/")
     what_next = ("The agent is writing a fix now. It will be tested in the same sandbox and pushed to a new branch with a pull request"
-                 + (" that is merged automatically once it is proven." if mode == "auto" else " for you to review.")
-                 if mode in ("pr", "auto") else "Your project is in Report mode, so the agent only explains the problem.")
+                 + " for you to review and merge." if mode in ("pr", "auto")
+                 else "Your project is in Report mode, so the agent only explains the problem.")
     notifications.notify_customer(
         email, f"Your push to {check.get('project_name') or 'your project'} broke: the agent is on it",
         f"Commit {check['sha'][:7]} ({check.get('commit_message') or 'no message'}) failed our sandbox check.\n\n"

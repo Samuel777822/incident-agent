@@ -424,14 +424,14 @@ def test_help_center_page_and_navigation(web_env):
     assert 'referrerpolicy="strict-origin-when-cross-origin"' in body
     assert "https://www.youtube.com/embed/Y3neE_B2d-M" in body
     assert "Remediation Modes" in body
-    assert "Automatic Mode" in body
+    assert "Pull Request Mode" in body
     assert "Pull Request Only" in body
     assert "Report Only" in body
     assert "Troubleshooting Playbooks" in body
     assert "Offline" in body
     assert "GitHub Installation PR Fails" in body
     assert "Auto-Fix Skipped or Marked" in body
-    assert "Fix PR Opened on GitHub but Not Auto-Merging" in body
+    assert "Fix PR Opened on GitHub but Not Appearing on the Portal" in body
     assert "FastAPI" in body and "Flask" in body and "Django" in body
     assert "help-search" in body
 

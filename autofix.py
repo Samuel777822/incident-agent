@@ -103,7 +103,7 @@ def attempt_autofix(incident, diagnosis, repo_folder, repo_cfg, files_text):
     # Save the reviewable diff before publishing the branch/PR.
     save_fix(incident_id, branch_name, patch["file_path"], fixed_content, None, diff)
 
-    allow_auto_merge = mode == "auto"
+    allow_auto_merge = False
 
     # 9. Commit, push, open PR
     try:
@@ -119,14 +119,15 @@ def attempt_autofix(incident, diagnosis, repo_folder, repo_cfg, files_text):
         f"- **Incident:** #{incident_id}\n"
         f"- **Root cause:** {diagnosis.get('root_cause')}\n"
         f"- **Fix:** {patch.get('explanation')}\n"
-        "- **Validation:** customer GitHub Actions checks are required before auto-merge.\n"
+        "- **Validation:** review the sandbox results and customer GitHub checks before merging.\n"
+        "- **Human review:** Agent Daemon never merges pull requests automatically.\n"
     )
 
     def record_ci(status, url, number):
         update_incident_pr(incident_id, url, number, status)
         update_fix_ci_result(incident_id, status)
 
-    print(f"[Auto-Fix] Opening PR (auto_merge={allow_auto_merge})...")
+    print("[Auto-Fix] Opening PR for human review...")
     try:
         pr_url, merged = open_and_maybe_merge_pr(
             repo_folder=repo_folder,

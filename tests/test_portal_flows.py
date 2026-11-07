@@ -475,7 +475,7 @@ def _fake_github(monkeypatch, entry_source, private=True, mergeable=True, missin
     return mi, calls
 
 
-def test_installer_patches_entry_file_embeds_key_and_merges(monkeypatch):
+def test_installer_patches_entry_file_embeds_key_and_leaves_pr_for_human_review(monkeypatch):
     mi, calls = _fake_github(monkeypatch, '"""Shop."""\nfrom __future__ import annotations\nimport flask\n')
     result = mi.open_monitoring_pr(owner="demo", repo="shop", base_branch="main", project_id="11111111-2222-3333-4444-555555555555",
                                    token="t", ingest_url="https://portal/ingest", ingest_key="secret-key")
@@ -487,7 +487,8 @@ def test_installer_patches_entry_file_embeds_key_and_merges(monkeypatch):
                                                                "ingest_key": "secret-key", "project_id": "11111111-2222-3333-4444-555555555555",
                                                                "component": "python:."}
     assert files["app.py"].split("\n")[:4] == ['"""Shop."""', "from __future__ import annotations", mi.IMPORT_LINE, "import flask"]
-    assert result["merged"] and result["patched_file"] == "app.py" and result["embedded_key"] and calls["merged"]
+    assert result["merged"] is False and result["patched_file"] == "app.py" and result["embedded_key"]
+    assert calls["merged"] is False
 
 
 def test_installer_never_embeds_a_key_when_not_given_and_survives_no_entry_file(monkeypatch):
@@ -580,7 +581,7 @@ def test_wrong_branch_is_replaced_by_the_repository_default(monkeypatch):
     mi, calls = _fake_github(monkeypatch, "import flask\n", missing_branches=("main",), default_branch="master")
     result = mi.open_monitoring_pr(owner="demo", repo="shop", base_branch="main", project_id="11111111-2222-3333-4444-555555555555",
                                    token="t", ingest_url="https://portal/ingest", ingest_key="k")
-    assert result["base_branch"] == "master" and result["merged"]
+    assert result["base_branch"] == "master" and result["merged"] is False
     assert any(u.endswith("/git/ref/heads/master") for u in calls["urls"])
 
 
@@ -608,7 +609,7 @@ def fernet_env(monkeypatch):
 
 
 def _connect_form(**extra):
-    form = {"repo": "demo/shop", "github_token": "github_pat_example", "name": "shop", "branch": "", "mode": "auto",
+    form = {"repo": "demo/shop", "github_token": "github_pat_example", "name": "shop", "branch": "", "mode": "pr",
             "allow_install": "yes", "allow_ai_processing": "yes", "allow_remediation": "yes"}
     form.update(extra)
     return form
@@ -624,17 +625,17 @@ def test_connecting_a_project_needs_no_work_from_the_customer(web_env, fernet_en
     def fake_open(**kw):
         received.update(kw)
         return {"url": "https://github.com/demo/shop/pull/1", "number": 1, "branch": "agent-daemon/install-x",
-                "base_branch": "master", "merged": True, "patched_file": "app.py", "embedded_key": True}
+                "base_branch": "master", "merged": False, "patched_file": "app.py", "embedded_key": True}
 
     monkeypatch.setattr(web_app, "open_monitoring_pr", fake_open)
-    status, _, body = _request("/projects/new", method="POST", cookie=cookie, form={"csrf": csrf, **_connect_form()})
+    status, _, body = _request("/projects/new", method="POST", cookie=cookie, form={"csrf": csrf, **_connect_form(mode="auto")})
     assert status == "201 Created"
-    assert "Nothing else to configure" in body
+    assert "leaves the pull request open for your approval" in body
     assert "INCIDENT_AGENT_INGEST_KEY" not in body and "hosting environment" not in body  # no chores for the customer
     assert received["ingest_key"] and received["base_branch"] == "master"                  # key travels inside the install PR
     project = portal_db.list_projects(user_id)[0]
     assert project["branch"] == "master"
-    assert project["mode"] == "auto" and project["gate_state"] == "active"   # private repository: installed right away
+    assert project["mode"] == "pr" and project["gate_state"] == "active"   # private repository: connected; PR needs review
     assert received["require_private"] is True                               # the installer re-checks before writing
 
 
@@ -673,7 +674,7 @@ def test_retrying_install_repairs_a_project_saved_with_the_wrong_branch(web_env,
 
     monkeypatch.setattr(web_app, "open_monitoring_pr", fake_open)
     status, _, body = _request(f"/projects/{project_id}/install", method="POST", cookie=cookie, form={"csrf": csrf})
-    assert status == "200 OK" and "Nothing else to configure" in body
+    assert status == "200 OK" and "leaves the pull request open for your approval" in body
     assert seen["ingest_key"] == "q" * 40
     project = portal_db.get_project(project_id, user_id)
     assert project["branch"] == "master" and project["install_pr_url"].endswith("/pull/2")

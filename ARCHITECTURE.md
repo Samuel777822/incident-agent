@@ -24,7 +24,7 @@ Agent Daemon has **two entry points and one fix engine**. The interactive versio
                 → SAME sandbox check on patched code → pass? ─ no ─► back to router with the new error / stronger diagnosis
                                                          └ yes ─► branch agent-daemon/fix-… + PR, title ends with [agent-daemon]
                                                                   proven? set ✓ status on the fix commit
-                                                                  Auto mode: worker squash-merges when all checks are green
+                                                                  Human review before any merge
             stopped (caps, quota, give-up cheaper) → human-review report + email
 ```
 
@@ -52,7 +52,7 @@ are green. The model may edit files of any of these languages in one fix.
 ## Live stages (what the dashboard shows)
 
 `incidents.stage` / `stage_detail` / `stage_tier` are written by the engine at each step:
-`queued → downloading → reproducing → thinking (mode) → testing_fix → pushing → pr_open | merging → merged`, plus
+`queued → downloading → reproducing → thinking (mode) → testing_fix → pushing → pr_open → merged after human review`, plus
 `waiting_user`, `waiting_retry`, `needs_human`, `resolved`. Push checks have their own stages
 (`queued, downloading, detecting, testing, waiting_sandbox, waiting_retry, passed, failed, skipped, error`).
 `live_status.py` turns them into a headline, a step tracker, the working mode and "N tries left". The dashboard and project page
@@ -60,11 +60,11 @@ refresh by themselves (`/dashboard/live`, `/projects/<id>/incidents/live`) every
 
 ## Verification levels
 
-| Level | Meaning | Auto-merge? |
+| Level | Meaning | Merge behavior |
 | --- | --- | --- |
-| `tests_fixed` | tests failed before, pass now | yes |
-| `check_fixed` (v3) | the push check failed on the pushed commit and the identical check passes after the fix | yes |
-| `tests_pass_not_reproduced`, `smoke_only`, `build_only` | not proven | no, PR only |
+| `tests_fixed` | tests failed before, pass now | verified pull request; human review required |
+| `check_fixed` (v3) | the push check failed on the pushed commit and the identical check passes after the fix | verified pull request; human review required |
+| `tests_pass_not_reproduced`, `smoke_only`, `build_only` | not proven | labelled in the pull request; human review required |
 
 ## The router (cost function)
 
@@ -110,8 +110,8 @@ The diagrams on `/how-it-works` (everyone) and `/admin/architecture` (admins, pl
 | Step | Code | What happens |
 | --- | --- | --- |
 | Connect | `web_app._page_new_project` | Repo + classic token. The repo record from GitHub says whether it is private. |
-| Public-repo gate | `monitoring_installer.is_private`, `repo_guard.ensure_private` | Public: project saved with `gate_state=waiting_private`; no commit, no webhook, no scan. `/projects/<id>/make-private` shows the steps; `/projects/<id>/recheck-visibility` asks GitHub again. Every later commit path (monitor install, fix PR, auto-merge) calls `ensure_private` first; the worker re-checks every ~10 minutes and pauses + revokes the key when a repo turns public. |
-| Install | `monitoring_installer.detect_targets` / `plan_install` / `open_monitoring_pr` | File list via one tree API call; one monitor per part: `incident_agent_monitor.py` (Python), `incident-agent-monitor.cjs` (Node, `node -r` or one `require`), `incident-agent-monitor.js` (web pages, first `<script>`), Next.js `instrumentation(-client).js`. One PR, auto-merged when possible. Only the project-scoped `adi_…` key is written. |
+| Public-repo gate | `monitoring_installer.is_private`, `repo_guard.ensure_private` | Public: project saved with `gate_state=waiting_private`; no commit, no webhook, no scan. `/projects/<id>/make-private` shows the steps; `/projects/<id>/recheck-visibility` asks GitHub again. Every commit path checks visibility first; the worker re-checks every ~10 minutes and pauses + revokes the key when a repo turns public. |
+| Install | `monitoring_installer.detect_targets` / `plan_install` / `open_monitoring_pr` | File list via one tree API call; one monitor per part: Python, Java, Node.js, browser pages and Next.js. One PR remains open for human review. Only the project-scoped `adi_…` key is written. |
 | Check-in | `monitors/*`, `agent_monitor_client.py`, `POST /heartbeat` | Every 30 s: project id, status, timestamp, monitor kind, component. CORS-enabled; browsers send `text/plain` JSON with the key in the body (no preflight). Stored per monitor in `monitor_heartbeats`. |
 | Status | `portal_db.monitor_state` | `waiting_private`, `not_installed`, `waiting_first`, `never_checked_in`, `online`, `offline`, `idle_browser` (browser-only sites with no visitors are not "offline"). `portal_worker.monitor_sweep` emails the owner once. |
 | Detect | `POST /ingest` | Crashes, unhandled rejections, console errors, failed API calls (5xx anywhere, 4xx from AI providers, any "model not found" answer) with the provider's message. A retired-model error from several monitors becomes ONE incident (`AI model unavailable: <id>`). |

@@ -27,6 +27,8 @@ from test_web_app import _request, web_env  # noqa: F401  (web_env is a fixture)
 
 ROOT = Path(__file__).resolve().parent.parent
 NODE = shutil.which("node")
+JAVA = shutil.which("java")
+JAVAC = shutil.which("javac")
 
 
 # ------------------------------------------------------------------------------------------------ helpers
@@ -208,6 +210,8 @@ def test_worker_emails_the_owner_once_when_a_server_monitor_goes_quiet(web_env, 
 
 # ================================================================================================ Phase 2: install for every language
 CASES = {
+    "java": ({"pom.xml": "<project></project>", "src/main/java/example/App.java":
+              "package example;\npublic class App {\n    public static void main(String[] args) {}\n}\n"}, ["java"]),
     "python-flask": ({"requirements.txt": "flask", "app.py": "from flask import Flask\napp = Flask(__name__)\n"}, ["python"]),
     "fastapi-package": ({"requirements.txt": "fastapi", "app/__init__.py": "", "app/main.py": "from fastapi import FastAPI\napp = FastAPI()\n"},
                         ["python"]),
@@ -244,6 +248,12 @@ def test_auto_install_picks_the_right_monitor_for_each_part(name):
         entry = [r["file"] for r in results if r["kind"] == "python"][0]
         assert "import incident_agent_monitor" in planned[entry]
         assert any(p.endswith(mi.PY_FILE) for p in planned) and any(p.endswith(mi.PY_CONFIG) for p in planned)
+    if "java" in kinds:
+        entry = [r["file"] for r in results if r["kind"] == "java"][0]
+        assert "AgentDaemonMonitor.start()" in planned[entry]
+        assert "uncaught exception handler" in planned["src/main/java/example/AgentDaemonMonitor.java"]
+        assert "scheduleAtFixedRate(AgentDaemonMonitor::heartbeat, 0, 30" in planned["src/main/java/example/AgentDaemonMonitor.java"]
+        assert "adi_" not in planned["src/main/java/example/AgentDaemonMonitor.java"]
     if "node" in kinds and name != "nextjs":
         assert any(p.endswith(mi.NODE_FILE) for p in planned) and any(p.endswith(mi.NODE_CONFIG) for p in planned)
         wired = [r for r in results if r["kind"] == "node"][0]["file"]
@@ -266,6 +276,21 @@ def test_mixed_repo_gets_one_monitor_per_part_in_the_right_place():
     assert '%BASE_URL%incident-agent-monitor.js' in planned["frontend/index.html"]
     cfg = json.loads(planned["backend/incident_agent_config.json"])
     assert cfg["project_id"] == "p1" and cfg["heartbeat_url"] == "https://portal/heartbeat" and cfg["component"] == "python:backend"
+
+
+def test_java_monitor_uses_project_scoped_credentials_and_wires_a_nested_module():
+    files = {"service/src/main/java/com/example/Main.java":
+             "package com.example;\npublic class Main { public static void main(String... args) {} }\n"}
+    targets = mi.detect_targets(list(files), files.get)
+    assert targets == [{"kind": "java", "base": "service", "framework": "java",
+                        "entry": "service/src/main/java/com/example/Main.java", "label": "Java app"}]
+    planned, results = mi.plan_install(targets, files.get, ingest_url="https://portal/ingest", ingest_key="adi_project_key_123456789012345",
+                                        project_id="project-1")
+    assert results[0]["wired"] is True
+    assert "package com.example;" in planned["service/src/main/java/com/example/AgentDaemonMonitor.java"]
+    assert '"adi_project_key_123456789012345"' in planned["service/src/main/java/com/example/AgentDaemonMonitor.java"]
+    assert "AgentDaemonMonitor.start()" in planned["service/src/main/java/com/example/Main.java"]
+    assert "project-1" in planned["service/src/main/java/com/example/AgentDaemonMonitor.java"]
 
 
 def test_nested_python_entry_uses_the_guarded_import_that_never_breaks_the_app(tmp_path):
@@ -381,6 +406,38 @@ def test_node_monitor_heartbeats_and_reports_fetch_console_and_crashes(web_env, 
     assert "checkout exploded" in messages                                            # unhandled rejection / crash
 
 
+@pytest.mark.skipif(not (JAVA and JAVAC), reason="A JDK is not installed")
+def test_java_monitor_compiles_checks_in_and_reports_uncaught_exception(web_env, tmp_path):
+    user_id, *_ = active_user()
+    key = "java-live-key-" + "j" * 30
+    project_id = new_project(user_id, key)
+    files = {"pom.xml": "<project></project>", "src/main/java/example/App.java":
+             "package example;\npublic class App {\n    public static void main(String[] args) { throw new IllegalStateException(\"java-monitor-boom\"); }\n}\n"}
+    targets = mi.detect_targets(list(files), files.get)
+    with portal_server() as portal:
+        planned, results = mi.plan_install(targets, files.get, ingest_url=f"{portal}/ingest", ingest_key=key, project_id=project_id)
+        assert results[0]["wired"] is True, results
+        for rel, source in {**files, **planned}.items():
+            path = tmp_path / rel
+            path.parent.mkdir(parents=True, exist_ok=True)
+            path.write_text(source, encoding="utf-8")
+        compiled = subprocess.run([JAVAC, "-encoding", "UTF-8", "-d", str(tmp_path),
+                                   str(tmp_path / "src/main/java/example/App.java"),
+                                   str(tmp_path / "src/main/java/example/AgentDaemonMonitor.java")],
+                                  capture_output=True, text=True, timeout=30)
+        assert compiled.returncode == 0, compiled.stderr
+        result = subprocess.run([JAVA, "-cp", str(tmp_path), "example.App"], cwd=tmp_path,
+                                capture_output=True, text=True, timeout=30)
+        assert result.returncode != 0 and "java-monitor-boom" in result.stderr, result.stderr
+        deadline = time.monotonic() + 3
+        while time.monotonic() < deadline and not portal_db.list_monitor_heartbeats(project_id):
+            time.sleep(0.05)
+    beats = portal_db.list_monitor_heartbeats(project_id)
+    assert beats and beats[0]["monitor"] == "java" and beats[0]["component"] == "java:."
+    events = _events(project_id)
+    assert events and any("java-monitor-boom" in event["message"] for event in events), events
+
+
 def _chromium():
     try:
         from playwright.sync_api import sync_playwright
@@ -423,7 +480,7 @@ def test_browser_monitor_in_a_real_browser_checks_in_and_reports_the_chatbot_err
 
 # ================================================================================================ Phase 3: the public-repo gate
 def _connect_form(csrf, **extra):
-    form = {"csrf": csrf, "repo": "demo/chatbot", "github_token": "ghp_" + "x" * 30, "name": "chatbot", "branch": "", "mode": "auto",
+    form = {"csrf": csrf, "repo": "demo/chatbot", "github_token": "ghp_" + "x" * 30, "name": "chatbot", "branch": "", "mode": "pr",
             "allow_install": "yes", "allow_ai_processing": "yes", "allow_remediation": "yes"}
     form.update(extra)
     return form

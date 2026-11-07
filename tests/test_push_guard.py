@@ -300,7 +300,7 @@ def test_engine_fixes_a_broken_push_proves_it_and_marks_the_fix_commit(tmp_path,
     assert outcome == "pr_opened" and w.prs
     assert w.prs[0]["title"].endswith("[agent-daemon]")                                    # marked, so its own merge never loops
     assert "Tests that failed before the fix now pass" in w.prs[0]["body"]
-    assert marked == [("f" * 40, "success")]                                                # Auto mode sees a passing check
+    assert marked == [("f" * 40, "success")]                                                # The push guard records a passing check
     row = portal_db.get_incident_row(inc)
     assert row["stage"] == "merging" and row["stage_tier"] == "haiku"
 
@@ -350,7 +350,7 @@ def test_dashboard_shows_mode_stage_and_tries_left(web_env):
     st, _, frag = _request("/dashboard/live", cookie=cookie)
     assert st == "200 OK" and "High mode is writing a fix" in frag and "<html" not in frag
     for stage, text in (("testing_fix", "Testing the fix in the sandbox"), ("pushing", "Pushing the fix to GitHub"),
-                        ("merging", "merging into your branch"), ("merged", "the fixed version is on GitHub")):
+                        ("merging", "Fix ready · waiting for your review"), ("merged", "Fixed · merged after human review")):
         portal_db.set_incident_stage(inc, stage, "", "sonnet")
         assert text in _request("/dashboard/live", cookie=cookie)[2]
 

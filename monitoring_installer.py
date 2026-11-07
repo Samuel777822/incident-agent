@@ -1,12 +1,13 @@
 """Install Agent Daemon monitoring into a customer's repository, for every language in it, with no manual steps.
 
-How it works (the same pattern as the push guard: one commit on a branch, one pull request, merged when GitHub allows):
+How it works (the same pattern as the push guard: one commit on a branch, one pull request for human review):
   1. Safety gate: the repository must be PRIVATE. A public repository gets nothing committed (PublicRepoError), because the
      monitor's connection details would be readable by anyone.
-  2. Detect every part of the repo from its file list: Python (Flask, FastAPI, Django, plain), Node (Express, Next.js server,
+  2. Detect every part of the repo from its file list: Python (Flask, FastAPI, Django, plain), Java (main entry points), Node (Express, Next.js server,
      plain Node, TypeScript), browser front-ends (plain HTML/JS, React with Vite or Create React App, Next.js client) and
      mixed repos (each part gets its own monitor).
   3. Commit the right monitor file(s) next to each part and wire them in: one import line in the Python entry file,
+     a Java uncaught-exception handler and heartbeat,
      `node -r` in the start script (or one require line), a <script> tag as the first script of each HTML page,
      instrumentation files for Next.js.
   4. Every monitor checks in every 30 seconds and reports errors to /ingest with a project-scoped key that can only
@@ -110,6 +111,7 @@ MONITOR_DIR = Path(__file__).with_name("monitors")
 PY_FILE, PY_CONFIG = "incident_agent_monitor.py", "incident_agent_config.json"
 NODE_FILE, NODE_CONFIG = "incident-agent-monitor.cjs", "incident-agent-config.json"
 BROWSER_FILE = "incident-agent-monitor.js"
+JAVA_FILE = "AgentDaemonMonitor.java"
 MARKER = "incident-agent-monitor"
 ENTRY_CANDIDATES = ("app.py", "main.py", "wsgi.py", "server.py", "run.py", "application.py", "manage.py", "index.py")
 IMPORT_LINE = "import incident_agent_monitor  # noqa: F401  (Agent Daemon error monitoring)"
@@ -140,6 +142,18 @@ def browser_source(config: dict) -> str:
     text = (MONITOR_DIR / "browser_monitor.js").read_text(encoding="utf-8")
     start, end = text.index("/*__AGENT_DAEMON_CONFIG__*/"), text.index("/*__END__*/") + len("/*__END__*/")
     return text[:start] + json.dumps(config, separators=(", ", ": ")) + text[end:]
+
+
+def java_source(*, package: str, ingest_url: str, heartbeat_url: str, ingest_key: str,
+                project_id: str, component: str) -> str:
+    """Build the Java monitor with this project's send-only ingest credentials."""
+    text = (MONITOR_DIR / "AgentDaemonMonitor.java.template").read_text(encoding="utf-8")
+    package_line = f"package {package};\n\n" if package else ""
+    text = text.replace("__PACKAGE__", package_line)
+    for name, value in {"INGEST_URL": ingest_url, "HEARTBEAT_URL": heartbeat_url, "INGEST_KEY": ingest_key,
+                        "PROJECT_ID": project_id, "COMPONENT": component}.items():
+        text = text.replace(f"__{name}__", json.dumps(value, ensure_ascii=True))
+    return text
 
 
 def _insert_import(source: str, line: str = IMPORT_LINE):
@@ -252,15 +266,51 @@ def _node_start_entry(pkg: dict) -> tuple[str, str]:
     return "", ""
 
 
+def _java_main_entry(base: str, names: set[str], read) -> str:
+    """Find a conventional Java application entry point under a Maven or Gradle module."""
+    prefix = base + "/" if base else ""
+    pattern = re.compile(r"\bpublic\s+static\s+void\s+main\s*\(\s*String\s*(?:\[\s*\]|\.\.\.)\s*[\w$]+\s*\)")
+    for path in sorted(n for n in names if n.startswith(prefix + "src/main/java/") and n.endswith(".java")):
+        if pattern.search(read(path) or ""):
+            return path
+    return ""
+
+
+def _insert_java_monitor(source: str) -> str | None:
+    """Add the monitor start block to the Java class with the application's main method."""
+    if "AgentDaemonMonitor.start()" in source:
+        return source
+    main = re.search(r"\bpublic\s+static\s+void\s+main\s*\(\s*String\s*(?:\[\s*\]|\.\.\.)\s*[\w$]+\s*\)", source)
+    if not main:
+        return None
+    class_match = re.search(r"\bclass\s+[\w$]+[^{}]*\{", source[:main.start()])
+    if not class_match:
+        return None
+    open_brace = class_match.end() - 1
+    return source[:open_brace + 1] + "\n    static { AgentDaemonMonitor.start(); } // Agent Daemon error monitoring\n" + source[open_brace + 1:]
+
+
 def detect_targets(paths, read) -> list[dict]:
     """Every part of the repository that needs its own monitor.
 
     paths: every file path in the repo (posix, relative). read(path) -> text or None.
-    Each target: {kind: python|node|browser, base, framework, entry, label}."""
+    Each target: {kind: java|python|node|browser, base, framework, entry, label}."""
     names = {p for p in paths if _visible(p)}
     targets: list[dict] = []
     handled_html: set[str] = set()
     spa_bases: set[str] = set()
+
+    # --- Java applications (one monitor for each conventional Maven/Gradle module)
+    java_bases = set()
+    for path in names:
+        absolute = "/" + path
+        marker = "/src/main/java/"
+        if path.endswith(".java") and marker in absolute:
+            java_bases.add(absolute.split(marker, 1)[0].lstrip("/"))
+    for base in sorted(java_bases):
+        entry = _java_main_entry(base, names, read)
+        if entry:
+            targets.append({"kind": "java", "base": base, "framework": "java", "entry": entry, "label": "Java app"})
 
     # --- Node / JavaScript / TypeScript projects (every package.json)
     for pkg_path in sorted(n for n in names if n.endswith("package.json") and n.count("/") <= 3):
@@ -361,7 +411,25 @@ def plan_install(targets: list[dict], read, *, ingest_url: str, ingest_key: str,
     for t in targets:
         label, base = t["label"], t["base"]
         component = f"{t['kind']}:{base or '.'}"
-        if t["kind"] == "python":
+        if t["kind"] == "java":
+            entry = t["entry"]
+            source = current(entry) or ""
+            patched = _insert_java_monitor(source)
+            if patched is None:
+                results.append({"label": label, "kind": "java", "wired": False, "file": entry,
+                                "note": f"{entry} does not have a supported public static void main entry point, so Java monitoring was not enabled."})
+                continue
+            package_match = re.search(r"(?m)^\s*package\s+([\w.]+)\s*;", source)
+            package = package_match.group(1) if package_match else ""
+            folder = posixpath.dirname(entry)
+            files[_join(folder, JAVA_FILE)] = java_source(
+                package=package, ingest_url=ingest_url, heartbeat_url=heartbeat_url, ingest_key=ingest_key,
+                project_id=project_id, component=component)
+            if patched != source:
+                files[entry] = patched
+            results.append({"label": label, "kind": "java", "wired": True, "file": entry,
+                            "how": f"uncaught exception handler and 30-second heartbeat in {entry}"})
+        elif t["kind"] == "python":
             entry = t["entry"]
             folder = posixpath.dirname(entry) if entry else base
             files[_join(folder, PY_FILE)] = _client_source()
@@ -633,19 +701,22 @@ def _setup_guide(project_id: str, patched_file, embedded: bool, workflow: bool =
         lines.append("- Set `INCIDENT_AGENT_INGEST_URL` and `INCIDENT_AGENT_INGEST_KEY` in your host's environment (shown on your Agent Daemon project page).")
     if workflow:
         lines.append(f"- `{WORKFLOW_PATH}` runs a syntax check, your build and your tests (pytest / npm test) on every pull request. "
-                     "Agent Daemon's Auto mode merges a fix only after this check passes.")
+                     "Review and merge Agent Daemon pull requests yourself after checking the results.")
     elif had_ci:
-        lines.append("- Your repository already has GitHub Actions workflows, so none was added. Auto mode relies on them.")
+        lines.append("- Your repository already has GitHub Actions workflows, so none was added. Review their results before merging any pull request.")
     else:
         lines.append("- No GitHub Actions workflow could be added (the token needs the Workflows read and write permission). "
-                     "Without a passing check, Auto mode will not merge fixes.")
+                     "No automated merge is performed; review the change and its validation yourself.")
     lines += ["", f"Project: `{project_id}`", ""]
     return "\n".join(lines)
 
 
 def open_monitoring_pr(*, owner: str, repo: str, base_branch: str, project_id: str, token: str,
-                       ingest_url: str = "", ingest_key: str = "", auto_merge: bool = True, require_private: bool = True):
-    """Open (and try to merge) a PR that installs monitoring for every part of the repository with no manual steps.
+                       ingest_url: str = "", ingest_key: str = "", auto_merge: bool = False, require_private: bool = True):
+    """Open a reviewable PR that installs monitoring for every part of the repository.
+
+    ``auto_merge`` is retained for compatibility with older callers and is intentionally ignored. A human must review and
+    merge every pull request.
 
     require_private (default): refuse with PublicRepoError, before anything is written, when GitHub does not say the
     repository is private. The ingest key is only ever written into private repositories.
@@ -729,9 +800,9 @@ def open_monitoring_pr(*, owner: str, repo: str, base_branch: str, project_id: s
         return {"url": "", "number": 0, "branch": "", "base_branch": base_branch, "merged": False,
                 "patched_file": patched_file, "entry_file": entry_name, "embedded_key": embedded,
                 "workflow_added": False, "had_ci": had_ci, "unchanged": True, **summary}
-    body = ("Adds Agent Daemon error monitoring for every part of this repository. Merging this pull request is the only step "
+    body = ("Adds Agent Daemon error monitoring for every part of this repository. Review and merge this pull request "
             "needed: monitoring starts the next time your app deploys and checks in every 30 seconds. If your repository had no "
-            "GitHub Actions workflow, one is added so Auto mode has a passing check to wait for.\n\nSee INCIDENT_AGENT_SETUP.md for what changed.")
+            "GitHub Actions workflow, one is added to help validate future changes. Agent Daemon never merges pull requests automatically.\n\nSee INCIDENT_AGENT_SETUP.md for what changed.")
     try:
         pr = _request(api + "/pulls", token, "POST", {
             "title": "Add Agent Daemon error monitoring", "head": branch, "base": base_branch, "body": body})
@@ -743,15 +814,6 @@ def open_monitoring_pr(*, owner: str, repo: str, base_branch: str, project_id: s
         if not existing:
             raise
         pr = existing[0]
-    merged = False
-    if auto_merge:
-        for attempt in range(3):
-            try:
-                _request(f"{api}/pulls/{pr['number']}/merge", token, "PUT", {"merge_method": "squash"})
-                merged = True
-                break
-            except GitHubInstallError:
-                time.sleep(1.5)
-    return {"url": pr["html_url"], "number": pr["number"], "branch": branch, "base_branch": base_branch, "merged": merged,
+    return {"url": pr["html_url"], "number": pr["number"], "branch": branch, "base_branch": base_branch, "merged": False,
             "patched_file": patched_file, "entry_file": entry_name, "embedded_key": embedded,
             "workflow_added": workflow_added, "had_ci": had_ci, **summary}

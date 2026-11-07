@@ -29,8 +29,8 @@ No prices, model ids, quotas, budgets, protections, routing maths or database ta
 
 **New architecture (the old one is kept).**
 * Push guard: GitHub webhook on connect (`/webhooks/github/<project>`, HMAC-signed) plus a poller fallback; every push is tested in the
-  sandbox; commit statuses on GitHub; failures open a `push` incident handled by the fix engine; fixes are pushed back as a PR and merged
-  in Auto mode once proven (`check_fixed` level). Already-green heads are resolved with no tries spent. Fix-loop protection via `[agent-daemon]`.
+  sandbox; commit statuses on GitHub; failures open a `push` incident handled by the fix engine; fixes are proposed as pull requests
+  for human review. Already-green heads are resolved with no tries spent. Fix-loop protection via `[agent-daemon]`.
 * Mixed-language repos: every stack (Python, JS/TS, Java, static HTML) is detected and tested on its own (`detect_profiles`, `run_profile`).
 * Live dashboard: tries left per mode, "Agent right now" with stage, working mode and tries left; push checks per project with stack chips.
 * Projects: 1 included, ₹30 per extra project (UPI flow, admin confirms; admins can also grant a slot). Packs are now bought by UPI too.

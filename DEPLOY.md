@@ -172,8 +172,9 @@ Existing projects: press **Reconnect webhook** on each project page so GitHub us
      dashboard until then.
    * **Private:** we continue immediately.
 3. **Monitor install, every language.** We read the repository's file list and add the right monitor to each part in one pull
-   request that is merged automatically when GitHub allows it:
+   request for human review:
    * Python (Flask, FastAPI, Django, plain): `incident_agent_monitor.py` + one import line in the entry file.
+   * Java main entry points: a dependency-free uncaught-exception handler and a 30-second heartbeat monitor.
    * Node.js (Express, Fastify, NestJS, plain, compiled TypeScript): `incident-agent-monitor.cjs`, loaded by `node -r` in the
      start script (or one `require` line). Next.js: `instrumentation.js` (server) and `instrumentation-client.js` (browser).
    * Web pages (plain HTML/JS, React with Vite or Create React App, Flask templates): `incident-agent-monitor.js` as the first
@@ -185,24 +186,23 @@ Existing projects: press **Reconnect webhook** on each project page so GitHub us
 4. **First scan right away.** The latest commit is checked at once (no push needed), including a scan for retired AI model ids.
    Anything it finds goes through the same fix pipeline. After that, every push is checked as before.
 5. **Never silent.** The project page shows "Last check-in at …", or **Never checked in** / **Monitor offline** with steps to
-   fix it, and the owner gets one email. If a repository later becomes public, all commits (installs, fixes, merges) pause, the
+   fix it, and the owner gets one email. If a repository later becomes public, Agent Daemon's repository writes pause, the
    old key is revoked, and the owner is emailed the steps again.
 
 ## Step 6. First real test (15 minutes)
 
 1. Make a throw-away **private** GitHub repo with a tiny app and a test, e.g. `app.py` + `test_app.py`, plus a `frontend/` with a
    `package.json` to see a mixed repo.
-2. Create a classic token with `repo` and `workflow`. Connect the repo on `/projects/new` and choose **Auto**.
+2. Create a classic token with `repo` and `workflow`. Connect the repo on `/projects/new` and choose **Pull Request** mode.
 3. The page lists every part it found ("Flask app ✅", "Front-end (Vite) ✅") and says "Push guard is on". On GitHub → repo →
-   *Settings* → *Webhooks* you see the webhook with a green tick (ping), and the merged pull request "Add Agent Daemon error monitoring".
+   *Settings* → *Webhooks* you see the webhook with a green tick (ping), and a pull request "Add Agent Daemon error monitoring" waiting for review.
 4. Within a minute the project page shows the first check (your latest commit) and GitHub shows a ✓ next to the commit.
    Deploy the app; within 30 seconds the project page says **Live** and "Last check-in at …".
 5. Optional, the incident from November: put `model: "gpt-3.5-turbo"` in a chatbot call and push. The scan opens an incident,
    and a pull request "fix: switch retired AI model gpt-3.5-turbo to …" appears without using any AI tries.
 6. Optional, the gate: connect a **public** repo and check that nothing is committed and the "make it private" screen appears.
 7. Break a test and push. Watch the dashboard: *Push check: broken* → *Reproducing* → *Normal mode is writing a fix* → *Testing the fix*
-   → *Pushing the fix to GitHub* → *Fix proven · merging* → *Fixed · the fixed version is on GitHub*. Your `main` branch now has a merge
-   commit "Merge Agent Daemon fix #N [agent-daemon]" and the next push check is green.
+   → *Pushing the fix to GitHub* → *Pull request ready for review*. Review the proposed fix on GitHub and merge it yourself; the next push check runs on the merged commit.
 8. Try a second project: you get the ₹30 page. Pay with UPI, confirm it on `/admin` ("I received ₹30 · add 1 project slot").
 
 ## Existing customers
@@ -223,10 +223,10 @@ than one project before, nothing is removed, they just cannot add another withou
 | "No webhook: checked every few minutes" | the token is not an admin of the repo or lacks `repo`; fix the token, press **Reconnect webhook** |
 | GitHub webhook deliveries show 401 | the webhook secret changed: press **Reconnect webhook** |
 | Checks never start | the worker is not running (`/admin` → System shows "Worker not seen"); free plan: `PORTAL_RUN_WORKER=1` |
-| A fix stays as a PR in Auto mode | it was not proven (no failing check reproduced it) or a GitHub check is red. That is on purpose |
+| A fix stays as a PR | every proposed fix stays open for human review, even when its checks pass |
 | "That commit was already checked" | each commit is checked once; push a new commit |
 | **Waiting for private repo** | the repository is public. The customer follows the steps on the project page and presses **I've made it private, install now** |
-| **Never checked in** | the monitoring PR is not merged, or the app was not re-deployed since. Merge it, re-deploy, open the app once. Still nothing: **Reinstall monitoring** |
+| **Never checked in** | the monitoring PR is still open, or the app was not re-deployed since. Review and merge it, re-deploy, open the app once. Still nothing: **Reinstall monitoring** |
 | **Monitor offline** | the app is down or asleep (free hosting), or was deployed without the monitor files. The app log shows lines starting with `[agent-daemon]` that say why |
 | A monitor prints `check-in failed (HTTP 401)` | the project key was replaced: press **Reinstall monitoring** (it commits the current key) |
 | Render log: `Agent Daemon cannot start; fix these environment variables` | set the variables it lists (step 2) |

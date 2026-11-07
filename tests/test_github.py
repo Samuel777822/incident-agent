@@ -113,7 +113,7 @@ def test_ci_requires_all_checks_to_succeed(monkeypatch):
         assert get_ci_status("https://api.github.com/repos/o/r", "token", "abc") == "failed"
 
 
-def test_auto_merge_waits_for_green_customer_ci(monkeypatch, tmp_path):
+def test_legacy_auto_merge_flag_never_merges_even_when_customer_ci_is_green(monkeypatch, tmp_path):
     monkeypatch.setenv("GITHUB_TOKEN", "mock_token")
     monkeypatch.setenv("AGENT_CI_WAIT_SECONDS", "0")
     mock_pr = {"html_url": "https://github.com/pranavrao1-ai/cofee-shop/pull/9",
@@ -142,11 +142,11 @@ def test_auto_merge_waits_for_green_customer_ci(monkeypatch, tmp_path):
         )
 
     assert url == mock_pr["html_url"]
-    assert merged is True
-    assert calls[-1][0].endswith("/pulls/9/merge")
+    assert merged is False
+    assert not any(url.endswith("/merge") for url, _ in calls)
 
 
-def test_auto_merge_never_merges_without_customer_ci(monkeypatch, tmp_path):
+def test_legacy_auto_merge_flag_never_merges_without_customer_ci(monkeypatch, tmp_path):
     monkeypatch.setenv("GITHUB_TOKEN", "mock_token")
     monkeypatch.setenv("AGENT_CI_WAIT_SECONDS", "0")
     monkeypatch.setenv("AGENT_CI_DISCOVERY_SECONDS", "0")

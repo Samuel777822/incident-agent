@@ -1048,7 +1048,7 @@ def _github_setup_guide() -> str:
         "<p class='muted'>Agent Daemon talks to GitHub with a <b>classic</b> personal access token. "
         "Fine-grained tokens are not supported. Two things to do first:</p>"
         "<h3>1. Make your repository private</h3>"
-        "<p class='muted'>We read your source files and error logs to diagnose problems, and Auto mode only merges fixes in private repositories. "
+        "<p class='muted'>We read your source files and error logs to diagnose problems, and we only connect private repositories. "
         "A private repository keeps your code and logs away from the public.</p>"
         "<ol class='steps muted'>"
         "<li>Open your repository on <b>github.com</b> in a browser.</li>"
@@ -1066,8 +1066,8 @@ def _github_setup_guide() -> str:
         "<li>Press <b>Generate token</b> and copy it right away. GitHub shows it only once. Paste it into the connect form.</li></ol>"
         "<h3>What the agent uses each permission for</h3>"
         "<ul class='muted'>"
-        "<li><code>repo</code>: read your code, create a branch and open pull requests. Nothing is merged unless you choose Auto mode.</li>"
-        "<li><code>workflow</code>: add a small test workflow file, so Auto mode has a check that must pass before merging.</li></ul>"
+        "<li><code>repo</code>: read your code, create a branch and open pull requests for your review.</li>"
+        "<li><code>workflow</code>: add a small test workflow file to report checks on pull requests.</li></ul>"
         "<p class='muted'>Classic tokens are not limited to one repository, so keep yours secret. "
         "You can delete the token on GitHub at any time to cut our access immediately.</p></section>")
 
@@ -1350,7 +1350,7 @@ def _page_help(request: Request) -> Response:
   <div class="video-info">
     <div>
       <h3>Full Video Walkthrough &amp; Live Demo</h3>
-      <p>Watch how Agent Daemon monitors a live Python app (Coffee Shop API), catches a real-world checkout bug deployed to Render, diagnoses the root cause, generates a verified fix PR, and auto-merges it without human intervention.</p>
+      <p>Watch how Agent Daemon monitors a live Python app (Coffee Shop API), catches a checkout bug, diagnoses the root cause, generates a fix PR, and reports its verification results for human review.</p>
     </div>
     <div style="display:flex;gap:10px;align-items:center">
       <a class="button primary" href="https://www.youtube.com/watch?v=Y3neE_B2d-M" target="_blank" rel="noopener">Watch on YouTube &#8599;</a>
@@ -1367,7 +1367,7 @@ def _page_help(request: Request) -> Response:
       <div class="chapter-item"><b>2:40 &ndash; 3:15</b> Inducing a live checkout failure &amp; deploying to Render. Error alerted immediately!</div>
       <div class="chapter-item"><b>3:15 &ndash; 3:50</b> AI diagnosis: stack trace analyzed, culprit lines traced, and safe patch generated.</div>
       <div class="chapter-item"><b>3:50 &ndash; 4:25</b> Fix pull request opened on GitHub &amp; GitHub Actions CI test suite runs.</div>
-      <div class="chapter-item"><b>4:25 &ndash; 4:55</b> Autonomous auto-merge: checks pass, PR squashes into main, Render redeploys fixed app!</div>
+      <div class="chapter-item"><b>4:25 &ndash; 4:55</b> Review the verified pull request and merge it on GitHub.</div>
       <div class="chapter-item"><b>4:55 &ndash; 5:15</b> Incident post-mortem report, cause explanation, unified diff, &amp; admin console.</div>
     </div>
   </div>
@@ -1382,7 +1382,7 @@ def _page_help(request: Request) -> Response:
     <li>We download that exact commit and find every part of the repo (Python, JavaScript/TypeScript, Java, HTML/CSS).</li>
     <li>Each part is installed, built (and type-checked), tested and started in a fresh sandbox container. Push checks are free.</li>
     <li>The commit gets a <b>Agent Daemon / push check</b> status on GitHub: ✓ or ✗.</li>
-    <li>On ✗ an incident opens and the agent writes a fix, proves it with the same check, and pushes it to <code>agent-daemon/fix-…</code> with a pull request. Auto mode merges it once proven.</li>
+    <li>On ✗ an incident opens and the agent proposes a fix, runs the same check, and opens a pull request for you to review and merge.</li>
   </ol>
   <p class="muted">No webhook (for example the token is not an admin of the repository)? The worker looks for new commits every few minutes instead. Use <b>Check latest commit now</b> on the project page any time.</p>
 </section>
@@ -1407,9 +1407,9 @@ def _page_help(request: Request) -> Response:
   
   <div class="modes-grid">
     <article class="mode-card">
-      <div style="margin-bottom:8px"><span class="badge-tag mode" style="background:#163229;color:#6fe0b0;border-color:#235c4b">Fully Autonomous</span></div>
-      <h4>Automatic Mode (<code>auto</code>)</h4>
-      <p>The complete self-healing loop shown in the demo video. When an incident occurs, Agent Daemon diagnoses the cause, writes a surgical patch, creates a branch, opens a PR, waits for your GitHub Actions CI tests to pass, and automatically squash-merges into your base branch. Requires a private repository.</p>
+      <div style="margin-bottom:8px"><span class="badge-tag mode" style="background:#163229;color:#6fe0b0;border-color:#235c4b">Human Reviewed</span></div>
+      <h4>Pull Request Mode</h4>
+      <p>Agent Daemon diagnoses the cause, prepares a patch, runs the available checks, and opens a GitHub pull request. A human reviews and merges each change.</p>
     </article>
 
     <article class="mode-card">
@@ -1464,16 +1464,16 @@ def _page_help(request: Request) -> Response:
         <ol>
           <li>Enter the repository <b>Owner / Name</b> (e.g. <code>my-org/backend-api</code>).</li>
           <li>Select your base branch (e.g. <code>main</code> or leave empty for default).</li>
-          <li>Choose your remediation mode (<code>Automatic</code>, <code>Pull request</code>, or <code>Report only</code>).</li>
+          <li>Choose Pull Request or Report Only mode.</li>
           <li>Paste your classic GitHub token and click <b>Connect project</b>.</li>
         </ol>
         <p><b>What the Zero-Touch Installer does automatically:</b></p>
         <ul>
-          <li>Opens a pull request that adds <code>incident_agent_monitor.py</code> (the lightweight client).</li>
-          <li>Inserts <code>import incident_agent_monitor</code> at the top of your app entry point (e.g. <code>app.py</code>, <code>main.py</code>, <code>wsgi.py</code>).</li>
-          <li>Creates <code>incident_agent_config.json</code> with your project's ingest URL and unique ingest key.</li>
+          <li>Opens a pull request that adds the right runtime monitor for each supported app part (Python, Java, Node.js, TypeScript and browser pages).</li>
+          <li>Wires the monitor into each detected application entry point.</li>
+          <li>Includes the project's send-only ingest key in the monitor configuration.</li>
           <li>Adds <code>.github/workflows/agent-daemon-tests.yml</code> so PRs have test validation checks.</li>
-          <li>Auto-merges the PR if repository permissions allow, or provides a direct link to merge on GitHub.</li>
+          <li>Leaves the pull request open for human review and provides a direct link to GitHub.</li>
         </ul>
       </div>
     </details>
@@ -1485,7 +1485,7 @@ def _page_help(request: Request) -> Response:
       <div class="accordion-body">
         <p>Agent Daemon treats public and private repositories differently for strict security reasons:</p>
         <ul>
-          <li><b>Private repositories:</b> Everything works: the monitor is installed for you, the first scan runs right away, and all three modes (<code>Automatic</code>, <code>Pull request</code>, <code>Report only</code>) are available.</li>
+          <li><b>Private repositories:</b> The monitor is proposed in a pull request, the first scan runs right away, and Pull Request or Report Only mode is available.</li>
           <li><b>Public repositories:</b> Nothing is installed. Anyone can read a public repository, including the connection details the monitor needs, so the project waits in <b>Waiting for private repo</b> and shows you, step by step, how to make it private. Press <b>I've made it private, install now</b> and we check with GitHub and finish the setup. If a repository becomes public later, installs and fixes pause and you get an email.</li>
         </ul>
       </div>
@@ -1571,7 +1571,7 @@ application = get_wsgi_application()</div>
         <p><b>Symptom:</b> The dashboard project badge says <code>Offline</code> or "Last check-in: Never / 3 hours ago".</p>
         <p><b>Root Causes &amp; Solutions:</b></p>
         <ol>
-          <li><b>App has not restarted since monitoring was merged:</b> Deploy or restart your application so the new <code>import incident_agent_monitor</code> line is executed.</li>
+          <li><b>App has not restarted since the monitoring pull request was merged:</b> Deploy or restart your application so the monitor starts.</li>
           <li><b>Free tier hosting is sleeping:</b> Services on Render, Railway, or Fly.io free tiers sleep after 15 minutes without web requests. Once asleep, the background heartbeat stops. Send a request to your app or configure a free pinger (e.g. UptimeRobot) hitting your app's health route every 10 minutes.</li>
           <li><b>Missing <code>incident_agent_config.json</code>:</b> Confirm that <code>incident_agent_config.json</code> is located in the working directory of your running Python process.</li>
           <li><b>Outbound network restriction:</b> Verify that your hosting environment permits outbound HTTPS connections to <code>https://incident-agent-portal.onrender.com</code>.</li>
@@ -1615,16 +1615,16 @@ application = get_wsgi_application()</div>
 
     <details class="accordion-item">
       <summary class="accordion-summary">
-        <span><span class="badge-tag git">Issue 4</span> Fix PR Opened on GitHub but Not Auto-Merging</span>
+        <span><span class="badge-tag git">Issue 4</span> Fix PR Opened on GitHub but Not Appearing on the Portal</span>
       </summary>
       <div class="accordion-body">
         <p><b>Symptom:</b> The fix branch and PR were created on GitHub, but status remains <code>pending</code> or <code>failed</code> on the portal.</p>
         <p><b>Troubleshooting Checklist:</b></p>
         <ul>
-          <li><b>CI checks must pass:</b> Auto-merge requires at least one completed GitHub Actions check with conclusion <code>success</code>. If tests failed in CI, Agent Daemon safely halts and leaves the PR open for inspection.</li>
-          <li><b>Branch protection rules:</b> If your repository enforces required code reviews (e.g. "Require at least 1 approval before merging"), GitHub's API blocks automated merges. You can either authorize bot merges or merge manually with one click on GitHub.</li>
-          <li><b>Public repository restriction:</b> As a strict security measure, public repositories never auto-merge.</li>
-          <li><b>Merge conflicts:</b> If other commits were pushed to your base branch while CI was running, the PR will await human rebasing.</li>
+          <li><b>CI checks:</b> Agent Daemon reports sandbox and GitHub check results on the PR. Review those results before you merge.</li>
+          <li><b>Branch protection rules:</b> Follow your repository's required reviews and status checks before merging the PR on GitHub.</li>
+          <li><b>Repository privacy:</b> Agent Daemon only connects private repositories.</li>
+          <li><b>Merge conflicts:</b> Resolve conflicts or rebase the branch before merging.</li>
         </ul>
       </div>
     </details>
@@ -1656,7 +1656,7 @@ application = get_wsgi_application()</div>
       </summary>
       <div class="accordion-body">
         <p><b>What is supported:</b> the fix engine reads and repairs Python, JavaScript, TypeScript, Java, HTML and CSS projects, and it proves every fix by running your project's own build and tests in an isolated sandbox before opening a pull request. Static HTML/CSS sites are checked for broken tags, missing files and syntax errors; because that is not a test, those pull requests say clearly that the fix is not proven by a test.</p>
-        <p><b>What is automatic:</b> the one-click monitoring installer currently adds a <b>Python</b> error reporter. For other languages, send errors to your project's ingest URL yourself with one HTTP call whenever your app catches an unhandled error:</p>
+        <p><b>What is automatic:</b> the monitoring installer adds a runtime monitor for supported Python, Java, Node.js, TypeScript and browser apps. Custom integrations can send errors to your project's ingest URL with one HTTP call:</p>
         <div class="code-box">curl -X POST https://incident-agent-portal.onrender.com/ingest \
   -H "Content-Type: application/json" \
   -H "X-Ingest-Key: YOUR_KEY" \
@@ -1665,12 +1665,7 @@ application = get_wsgi_application()</div>
         <div class="code-box">fetch(process.env.INGEST_URL, { method: "POST",
   headers: { "Content-Type": "application/json", "X-Ingest-Key": process.env.INGEST_KEY },
   body: JSON.stringify({ message: err.message, traceback: err.stack, service: "shop-api" }) }).catch(() =&gt; {});</div>
-        <p><b>Java (11 or newer):</b></p>
-        <div class="code-box">HttpRequest req = HttpRequest.newBuilder(URI.create(System.getenv("INGEST_URL")))
-    .header("Content-Type", "application/json").header("X-Ingest-Key", System.getenv("INGEST_KEY"))
-    .POST(HttpRequest.BodyPublishers.ofString(json)).build();
-HttpClient.newHttpClient().sendAsync(req, HttpResponse.BodyHandlers.discarding());</div>
-        <p>Always send the error in a background call and ignore failures, so reporting can never break your app. Keep the ingest key in an environment variable, not in your code.</p>
+        <p>The installed monitors use a project-scoped, send-only key and report check-ins every 30 seconds. Reporting failures do not change the application's normal error behavior.</p>
       </div>
     </details>
 
@@ -2554,7 +2549,7 @@ def _quota_by_tier(user_id: str) -> dict:
 
 
 WATCH_LABELS = {"push": "Push guard", "runtime": "Live error watch", "both": "Push guard + live errors"}
-MODE_LABELS = {"report": "Report only", "pr": "Pull request", "auto": "Auto (merges proven fixes)"}
+MODE_LABELS = {"report": "Report only", "pr": "Pull request (human review required)", "auto": "Pull request (human review required)"}
 
 
 def _live_panel_html(user_id: str) -> str:
@@ -2751,11 +2746,11 @@ def _page_new_project(request):
 <div class='field'><p class='muted'><b>What happens when you press Save:</b> we check that your repository is private, add a small error
 monitor to your code for you (Python, JavaScript, TypeScript, HTML and mixed projects), scan your code once right away, and then test every push.
 You do not need to install anything yourself.</p></div>
-<div class='field'><label>What should the agent do with a bug?</label><select name='mode'><option value='pr' selected>Pull request: push the fix to a new branch and open a PR for me</option><option value='auto'>Auto: push the fix and merge it once the sandbox proves it</option><option value='report'>Report only: explain the bug, change nothing</option></select><small>Fixes never go straight to your branch: they land on <code>agent-daemon/fix-…</code> with a pull request. Auto merges it only when the check that failed now passes and every GitHub check is green.</small></div>
+<div class='field'><label>What should the agent do with a bug?</label><select name='mode'><option value='pr' selected>Pull request: open a fix PR for me to review</option><option value='report'>Report only: explain the bug, change nothing</option></select><small>Fixes go to a new <code>agent-daemon/fix-…</code> branch and a pull request. You review and merge each pull request yourself.</small></div>
 <div class='field'><label>App URL (optional)</label><input name='app_url' type='url' placeholder='https://app.example.com'></div>
-<div class='field'><label class='checkbox'><input name='allow_install' type='checkbox' value='yes' required><span>I authorize Agent Daemon to add a push webhook and commit statuses to this repository and to add error-monitoring code through a pull request that is merged automatically when GitHub allows it.</span></label></div>
+<div class='field'><label class='checkbox'><input name='allow_install' type='checkbox' value='yes' required><span>I authorize Agent Daemon to add a push webhook and commit statuses to this repository and to propose error-monitoring code through a pull request. I will review and merge that pull request myself.</span></label></div>
 <div class='field'><label class='checkbox'><input name='allow_ai_processing' type='checkbox' value='yes' required><span>I understand that error output and the relevant source files are sent to third-party AI providers (Groq, and Anthropic Claude for the stronger modes, possibly through OpenRouter), and that my code is built and tested inside Agent Daemon's isolated sandbox.</span></label></div>
-<div class='field'><label class='checkbox'><input name='allow_remediation' type='checkbox' value='yes'><span>For Pull request or Auto mode, I authorize small code fixes as pull requests. Auto mode may merge a fix only after the sandbox proves it and all GitHub checks pass.</span></label></div>"""
+<div class='field'><label class='checkbox'><input name='allow_remediation' type='checkbox' value='yes'><span>For Pull request mode, I authorize small code fixes as pull requests. I will review and merge any fix myself.</span></label></div>"""
         note = (f"<p class='muted'>Project {slots['used'] + 1} of {slots['limit']}. Extra projects are ₹{plans.PROJECT_SLOT_PRICE} each.</p>"
                 if not _is_admin(request) else "")
         body = _github_setup_guide() + _form("Connect a project", "Connect a GitHub repository. The first check starts right away." + note, fields,
@@ -2768,13 +2763,15 @@ You do not need to install anything yourself.</p></div>
     repo_match = REPO_RE.fullmatch(request.form.get("repo", "").strip())
     token = request.form.get("github_token", "").strip()
     mode = request.form.get("mode", "report")
+    if mode == "auto":  # Old forms/clients are safely downgraded to human-reviewed pull requests.
+        mode = "pr"
     name = request.form.get("name", "").strip()
     branch = request.form.get("branch", "").strip()
     watch_mode = request.form.get("watch_mode", "both")
-    if not repo_match or not token or not name or mode not in ("report", "pr", "auto") or watch_mode not in portal_db.WATCH_MODES:
+    if not repo_match or not token or not name or mode not in ("report", "pr") or watch_mode not in portal_db.WATCH_MODES:
         return _response("<div class='alert'>Check the repository, token, project name, branch, and mode.</div>", request, "400 Bad Request")
-    if mode in ("pr", "auto") and request.form.get("allow_remediation") != "yes":
-        return _response("<div class='alert'>Authorize pull request fixes before selecting Pull request or Auto mode.</div>", request, "400 Bad Request")
+    if mode == "pr" and request.form.get("allow_remediation") != "yes":
+        return _response("<div class='alert'>Authorize pull request fixes before selecting Pull request mode.</div>", request, "400 Bad Request")
     try:
         ciphertext = _encrypt_token(token)
     except RuntimeError as exc:
@@ -2800,8 +2797,8 @@ You do not need to install anything yourself.</p></div>
     portal_db.audit(project_id, "project_connected", {"repo": f"{owner}/{repo}", "mode": mode, "watch_mode": watch_mode,
                                                      "visibility": "private" if private else "public"})
     portal_db.audit(project_id, "ai_diagnosis_consent", {"scope": "error output and relevant repository source sent to third-party AI providers (Groq, Anthropic, OpenRouter); code built and tested in the sandbox"})
-    if mode in ("pr", "auto"):
-        portal_db.audit(project_id, "remediation_consent", {"mode": mode, "auto_merge_requires_sandbox_proof_and_passing_github_checks": mode == "auto"})
+    if mode == "pr":
+        portal_db.audit(project_id, "remediation_consent", {"mode": mode, "human_review_required": True})
     if not private:
         # Public-repo gate: nothing is committed, no webhook, no scan, until the owner makes the repository private.
         portal_db.audit(project_id, "install_held_public_repo", {"repo": f"{owner}/{repo}"})
@@ -3070,10 +3067,7 @@ def _page_project(request, project_id):
         flash = "<div class='pill amber'>That commit was already checked or is in the queue.</div>"
     cards = []
     if watch in ("runtime", "both"):
-        install_card = _monitor_install_card(project, csrf)
-        if project.get("ci_workflow") == "missing" and project.get("mode") == "auto":
-            install_card = _workflow_fix_card(project_id, request) + install_card
-        cards.append(install_card)
+        cards.append(_monitor_install_card(project, csrf))
     cards.append(f"<article class='card'><h3>Update GitHub token</h3><p class='muted'>Use a classic token with the repo and workflow scopes ticked. The new token replaces the saved one and is never shown again.</p><form method='post' action='/projects/{_escape(project_id)}/github-token'><input type='hidden' name='csrf' value='{csrf}'><div class='field'><label>New GitHub token</label><input name='github_token' type='password' autocomplete='new-password' required minlength='20' maxlength='500'></div><button class='button primary' type='submit'>Validate and save token</button></form></article>")
     if watch in ("runtime", "both"):
         cards.append(f"<article class='card'><h3>Monitor key</h3><p class='muted'>The monitor uses a key that can only <b>send</b> check-ins and error reports for this project. If you think it leaked, replace it: the old key stops working and we put the new one into your code for you.</p><form method='post' action='/projects/{_escape(project_id)}/rotate-key'><input type='hidden' name='csrf' value='{csrf}'><button class='button' type='submit'>Replace key</button></form></article>")
@@ -3141,27 +3135,27 @@ def _monitor_install_card(project: dict, csrf: str) -> str:
           if project.get("install_pr_url") else "")
     label = "Reinstall monitoring" if (project.get("install_pr_url") or project.get("monitor_installed_at")) else "Install monitoring"
     return (f"<article class='card'><h3>{label}</h3><p class='muted'>Adds (or repairs) the error monitor in every part of your repository: "
-            f"Python, Node.js, TypeScript and web pages. Safe to press again.</p>{pr}"
+            f"Python, Java, Node.js, TypeScript and web pages. Safe to press again.</p>{pr}"
             f"<form method='post' action='/projects/{pid}/install'><input type='hidden' name='csrf' value='{csrf}'>"
             f"<button class='button primary' type='submit'>{label}</button></form></article>")
 
 
 def _workflow_fix_steps() -> str:
-    """Why Auto mode cannot merge without a workflow, and how the customer fixes it."""
-    return ("<p class='muted'>Auto mode merges a fix only after a GitHub check passes. This repository has no GitHub Actions workflow, "
-            "so there is no check to pass and fixes stay as open pull requests. We could not add a workflow because your GitHub token "
+    """Explain how to add optional GitHub checks to the repository."""
+    return ("<p class='muted'>This repository has no GitHub Actions workflow, so Agent Daemon cannot show GitHub check results for its pull requests. "
+            "We could not add a workflow because your GitHub token "
             "is not allowed to write workflow files. Monitoring itself is installed and working.</p>"
             "<ol class='muted'>"
             "<li>On GitHub open <b>Settings</b>, then <b>Developer settings</b>, then <b>Personal access tokens</b>, then <b>Tokens (classic)</b>, "
             "and open the token you gave us.</li>"
             "<li>Tick the <code>workflow</code> scope and save. If you make a brand new token, tick <code>repo</code> and <code>workflow</code>, "
             "then use <b>Update GitHub token</b> on this page first.</li>"
-            "<li>Come back to this project page and press <b>Install monitoring</b>. We will add the test workflow in a new pull request "
-            "and merge it.</li></ol>")
+            "<li>Come back to this project page and press <b>Install monitoring</b>. We will propose the test workflow in a pull request. "
+            "Review and merge it yourself.</li></ol>")
 
 
 def _workflow_fix_card(project_id: str, request) -> str:
-    return ("<article class='card'><h3>Auto mode needs a test workflow</h3>" + _workflow_fix_steps() +
+    return ("<article class='card'><h3>Add GitHub checks</h3>" + _workflow_fix_steps() +
             f"<form method='post' action='/projects/{_escape(project_id)}/install'><input type='hidden' name='csrf' value='{_escape(_csrf(request))}'>"
             "<button class='button primary' type='submit'>Install monitoring</button></form></article>")
 
@@ -3171,12 +3165,12 @@ def _install_monitoring(project_id: str, user_id: str, project: dict, token: str
 
     Only for PRIVATE repositories: open_monitoring_pr re-checks visibility with GitHub right before it writes anything and
     refuses with PublicRepoError otherwise (the project then waits for the owner to make it private). The connection details
-    go into the repository through the install pull request, which is merged automatically when GitHub allows it."""
+    go into the repository through an install pull request that remains open for human review."""
     try:
         result = open_monitoring_pr(
             owner=project["repo_owner"], repo=project["repo_name"], base_branch=project["branch"],
             project_id=project_id, token=token, ingest_url=_base_url() + "/ingest",
-            ingest_key=ingest_key, auto_merge=True, require_private=True)
+            ingest_key=ingest_key, auto_merge=False, require_private=True)
     except PublicRepoError as exc:
         portal_db.set_gate_state(project_id, portal_db.GATE_WAITING)
         portal_db.audit(project_id, "install_held_public_repo", {"where": "install"})
@@ -3232,16 +3226,10 @@ def _install_summary(result: dict, project_id: str) -> str:
         notes.append("We could not find your app's main file, so the monitor was added but could not be switched on automatically.")
     if result.get("workflow_added"):
         notes.append("A GitHub Actions workflow was added that checks your code and runs your tests on every pull request. "
-                     "Auto mode merges a fix only after that check passes.")
-    if result.get("merged"):
-        notes.append("The change was merged automatically. Monitoring starts the next time your app deploys and checks in every 30 seconds. "
-                     "Nothing else to configure.")
-    else:
-        notes.append(f"Merge <a href='{_escape(result['url'])}' target='_blank' rel='noopener'>this pull request</a> to turn monitoring on "
-                     "(automatic merge was not possible, often because of branch protection). Nothing else to configure.")
+                     "Review the results before merging.")
+    notes.append(f"Review and merge <a href='{_escape(result['url'])}' target='_blank' rel='noopener'>this pull request</a> to turn monitoring on. "
+                 "Agent Daemon leaves the pull request open for your approval.")
     card = "<div class='card'><h3>Monitoring setup</h3><p class='muted'>" + "</p><p class='muted'>".join(notes) + "</p></div>"
-    if not result.get("workflow_added") and not result.get("had_ci"):
-        card += "<div class='card'><h3>Auto mode needs a test workflow</h3>" + _workflow_fix_steps() + "</div>"
     return card
 
 

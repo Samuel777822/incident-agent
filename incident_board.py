@@ -2,7 +2,7 @@
 
 One place that knows how to show an incident:
   * a step tracker (Detected > Diagnosed > Fix PR > Checks > Merged) built from the real incident state,
-  * a clear headline status ("Fixed · auto-merged", "Checks failed · needs review", ...),
+  * a clear headline status ("PR ready · your review", "Checks failed · needs review", ...),
   * the report as a dropdown, split into readable sections,
   * a fragment the browser re-fetches every few seconds, so nobody has to refresh.
 
@@ -84,8 +84,7 @@ def stage_for(incident: dict, mode: str) -> dict:
     status = str(incident.get("status") or "")
     ci = str(incident.get("ci_status") or "unknown")
     pr_url = _safe_pr_url(incident.get("pr_url"))
-    auto = mode == "auto"
-    final = "Auto-merge" if auto else "Your review"
+    final = "Your review"
     steps = [("Detected", "done")]
     active = False
 
@@ -107,18 +106,15 @@ def stage_for(incident: dict, mode: str) -> dict:
             steps += [("Checks failed", "fail"), (final, "todo")]
             headline, tone = "Checks failed · needs review", "red"
         elif ci == "success":
-            steps += [("Checks passed", "done"), (final, "active" if auto else "todo")]
-            if auto:
-                headline, tone, active = "Checks passed · merging…", "blue", True
-            else:
-                headline, tone = "Checks passed · ready for you to merge", "blue"
+            steps += [("Checks passed", "done"), (final, "active")]
+            headline, tone = "Checks passed · ready for your review", "blue"
         else:
             steps += [("Checks running", "active"), (final, "todo")]
             headline, tone, active = "Fix PR opened · checks running", "blue", True
     elif status == "resolved":
         if pr_url:
             steps += [("Diagnosed", "done"), ("Fix PR opened", "done"), ("Checks passed", "done"), ("Merged", "done")]
-            headline = "Fixed · auto-merged" if auto else "Fixed · merged"
+            headline = "Fixed · merged after human review"
         else:
             steps += [("Diagnosed", "done"), ("Resolved", "done")]
             headline = "Resolved"

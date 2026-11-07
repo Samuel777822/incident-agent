@@ -19,8 +19,8 @@ Java (Maven, Gradle, plain `javac`) and plain HTML/CSS/JS sites, including repos
    downloaded into a fresh sandbox; every project inside the repo is installed, built (and type-checked), tested and started.
    The commit gets an `Agent Daemon / push check` status on GitHub. If it is red, an incident opens and the fix engine starts.
    If the webhook cannot be added, the worker polls the branch every few minutes instead.
-2. **Live error watch.** A small monitor inside the running app, installed automatically for every part of the repo (Python,
-   Node.js/TypeScript, web pages; mixed repos get one per part). It checks in every 30 seconds and reports crashes, unhandled
+2. **Live error watch.** A small monitor inside the running app, installed automatically for every detected part of the repo (Python,
+   Java main entry points, Node.js/TypeScript, browser pages; mixed repos get one per part). It checks in every 30 seconds and reports crashes, unhandled
    promise rejections, console errors and failed API calls (e.g. a retired AI model) to `/ingest`; the project page always shows
    "Last check-in at …", "Never checked in" or "Monitor offline".
 
@@ -29,8 +29,8 @@ private and an "I've made it private, install now" button; visibility is re-chec
 Right after connecting, the existing code is scanned once (no push needed), and retired AI model ids are fixed without AI tries.
 
 The fix engine: free first look → cost-aware router (expected-cost dynamic program) picks Normal / High / Extra → the model returns a
-small patch as text → policy check → **the same sandbox check must pass** → branch `agent-daemon/fix-…` + pull request → in Auto mode
-it is merged once proven, so the fixed version is on GitHub. Everything is shown live on the dashboard.
+small patch as text → policy check → **the same sandbox check must pass** → branch `agent-daemon/fix-…` + pull request for human
+review. Everything is shown live on the dashboard.
 
 ## Pages
 

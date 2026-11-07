@@ -669,7 +669,7 @@ def set_project_connected(project_id: str) -> None:
 
 
 def record_install_pr(project_id: str, user_id: str, pr_url: str, ci_workflow: str = "") -> bool:
-    """ci_workflow: 'added', 'existing' or 'missing' (no test workflow could be added, so Auto mode cannot merge)."""
+    """ci_workflow: 'added', 'existing' or 'missing'; describes the checks available on pull requests."""
     conn = get_connection()
     try:
         cur = _execute(conn, "UPDATE projects SET status='install_pr_open',install_pr_url=?,ci_workflow=? WHERE id=? AND user_id=?",
@@ -949,18 +949,8 @@ def mark_remediation_needs_human(incident_id: str, project_id: str, reason: str)
 
 
 def list_auto_prs(limit: int = 20):
-    """List auto-mode PRs that still need a CI check or merge attempt."""
-    conn = get_connection()
-    try:
-        rows = _execute(conn, """SELECT i.id AS incident_id,i.project_id,i.pr_number,i.ci_status,
-                    p.repo_owner,p.repo_name,p.github_token_ciphertext
-          FROM incidents i JOIN projects p ON p.id=i.project_id
-          WHERE p.mode='auto' AND p.paused=0 AND i.status='pr_opened' AND i.no_automerge=0
-            AND i.pr_number IS NOT NULL AND i.ci_status IN ('pending','unknown','unavailable','success','no_checks')
-          ORDER BY i.created_at ASC LIMIT ?""", (max(1,min(int(limit),100)),)).fetchall()
-        return [dict(row) for row in rows]
-    finally:
-        conn.close()
+    """Compatibility shim: automated merge candidates are disabled; pull requests require human review."""
+    return []
 
 
 def update_portal_pr_status(incident_id: str, ci_status: str, *, merged: bool = False) -> None:

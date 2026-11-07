@@ -36,8 +36,8 @@ our code applies the patch and the SAME sandbox check must pass. The fix goes to
 Agent modes per project:
    - Report only: explains the problem, no code changes.
    - Pull request: opens a pull request with the fix for you to merge.
-   - Auto: merges the pull request automatically once the sandbox proves the fix and GitHub checks are green, so the fixed version is on GitHub.
-The dashboard shows live what the agent is doing (downloading, testing in the sandbox, writing a fix in a given mode, pushing, merging),
+Every pull request stays open for human review, including when sandbox and GitHub checks pass.
+The dashboard shows live what the agent is doing (downloading, testing in the sandbox, writing a fix in a given mode, opening a pull request),
 which mode is working and how many tries are left.
 
 HOW THE AGENT CHOOSES AN AI (explain it in plain words first):
@@ -223,7 +223,7 @@ def answer_visitor_query(user_text: str, history: list[dict] | None = None) -> s
     if any(k in text_lower for k in ("how does it work", "how it works", "what is", "features", "github", "push", "deploy", "algorithm", "router")):
         return (
             "Every time you push to GitHub, Agent Daemon installs, builds, tests and starts your code in a sandbox. If something breaks, "
-            "the agent writes a fix, proves it with the same check, and pushes it back as a pull request (merged automatically in Auto mode). "
+            "the agent proposes a fix, runs the same check, and opens a pull request for you to review and merge. "
             "The agent picks an economical AI that is likely to fix the bug and moves to a stronger one only when needed. "
             "The interactive diagram is at /how-it-works."
         )
