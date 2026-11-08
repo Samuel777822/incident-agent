@@ -186,6 +186,14 @@ def _engine():
     return _ENGINE
 
 
+def store_bug_exists(incident_id: str) -> bool:
+    try:
+        from fixengine import store as _fxstore
+        return _fxstore.get_bug_by_incident(incident_id) is not None
+    except Exception:
+        return False
+
+
 def _try_model_fix(incident: dict, event: dict) -> bool:
     """Retired / unknown AI model: fixed deterministically (no AI tries). True when the incident was handled here."""
     from fixengine import model_fix
@@ -198,7 +206,15 @@ def _try_model_fix(incident: dict, event: dict) -> bool:
     except Exception:
         runner = None
     try:
-        outcome = model_fix.run(incident, event, runner=runner)
+        if store_bug_exists(incident["incident_id"]):
+            return False              # a later round after a red GitHub run: the AI engine continues with what failed
+        starter = None
+        eng = _engine()
+        if eng is not None:
+            from fixengine import orchestrator as _orc
+            if _orc.direct_push_enabled():
+                starter = eng.start_proof_for_files
+        outcome = model_fix.run(incident, event, runner=runner, proof_starter=starter)
     except Exception as exc:
         LOG.exception("Model fix crashed on incident %s", incident["incident_id"])
         portal_db.fail_diagnosis(incident["incident_id"], incident["project_id"], exc.__class__.__name__)
@@ -284,7 +300,7 @@ def process_one() -> bool:
                     and result.get("safe_to_auto_fix") is True):
                 portal_db.mark_remediation_needs_human(
                     incident_id, project_id,
-                    "The issue did not meet the strict high-confidence, small Python code-fix safety checks.")
+                    "The old single-file fixer was not confident enough to change your code on its own. Set FIXENGINE_ENABLED=1 so the full fix engine (any language, sandbox and GitHub tests) handles it.")
                 return True
             try:
                 work_item = {**incident, "message": event.get("message", ""),
@@ -323,6 +339,8 @@ def main() -> None:
     poll_seconds = max(1, int(os.getenv("WORKER_POLL_SECONDS", "5")))
     LOG.info("Portal incident worker started")
     next_merge_poll = 0.0
+    next_proof_poll = 0.0
+    next_site_probe = 0.0
     next_push_poll = 0.0
     next_monitor_sweep = 0.0
     next_visibility_sweep = 0.0
@@ -352,6 +370,20 @@ def main() -> None:
             except Exception:
                 LOG.exception("Auto-merge check failed")
             next_merge_poll = now + max(15, int(os.getenv("AUTO_MERGE_POLL_SECONDS", "30")))
+        if now >= next_proof_poll and not _STOP:
+            try:
+                if _engine() is not None:
+                    _engine().process_proofs()      # fixes waiting for GitHub's tests: green -> push, red -> back to the model
+            except Exception:
+                LOG.exception("GitHub proof check failed")
+            next_proof_poll = now + max(10, int(os.getenv("PROOF_POLL_SECONDS", "20")))
+        if now >= next_site_probe and not _STOP:
+            try:
+                import site_probe
+                site_probe.sweep()                   # the real every-30-seconds check: is the customer's site answering?
+            except Exception:
+                LOG.exception("Site probe sweep failed")
+            next_site_probe = now + max(10, int(os.getenv("SITE_PROBE_SECONDS", "30")))
         if now >= next_push_poll and not _STOP:
             try:
                 queued = push_watch.poll_once()

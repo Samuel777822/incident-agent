@@ -1,3 +1,45 @@
+# CHANGES: v3 "Prove it, then push" (release of 8 November 2026)
+
+Why: the v2 monitor still missed website errors (a failing outside API, a dead button, a retired OpenRouter free model), a plain
+HTML/JS site could not check in every 30 seconds, JavaScript repos got "Python" errors, and every fix ended in a pull request.
+
+## What changed
+
+| Area | Before | Now |
+| --- | --- | --- |
+| Fix pipeline (Auto mode) | sandbox test, then a pull request | sandbox test, then **GitHub tests on a test branch**. Red: the GitHub error goes back to the AI model, new sandbox run, try again (**3 rounds**). Green: the tested commit is **pushed straight to your branch, no pull request**. After 3 red rounds a pull request is opened and the dashboard says **Needs human review**. A protected branch falls back to pull request + auto-merge. A branch that moved while testing is re-tested once. (`fixengine/orchestrator.py`, `fixengine/git_ops.py`) |
+| Retired free model | scanner knew only a hand-written list; OpenRouter list was empty; replacement could be a paid model | every model id in the code is checked against **OpenRouter's live list**; a free model is replaced by a **free** one (ranked by family, newest, context), confirmed with one real test call; a paid model is never chosen for a free one. "No endpoints found for ..." is recognised. (`fixengine/model_fix.py`, `model_catalog.py`) |
+| Fix prompt | written for Python crashes; forbade fallbacks; gave up on outside services | rewritten for web problems (failed requests, dead buttons, pages that never fill, retired models, owner reports); up to 5 files / 120 lines; receives live-site evidence and the failed patch. (`fixengine/prompts.py`, `triage.py`, `validator.py`) |
+| Browser monitor | AI-host and 5xx errors only | **v3**: any 4xx/5xx or network failure from any site, slow calls, **dead clicks** (a button clicked twice, nothing happens), **error text** appearing on the page. No screen recording, no keystrokes, no form values. (`monitors/browser_monitor.js`) |
+| Every 30 seconds | only while a visitor had the page open | the worker checks the **site address** every 30 s (`site_probe.py`), finds it from the GitHub repo's website field if not set, refuses private/internal addresses, opens an incident after 2 bad answers, never for host outages. Dashboard shows "Site check". |
+| Proof for UI fixes | build, tests, start-up | optional **browser journeys** (a headless browser opens pages and clicks buttons, no network) for static sites. Skipped automatically when the image is not built. (`fixengine/journeys.py`, `sandbox/journey_runner.py`, `sandbox/Dockerfile.browser`) |
+| "Tell the agent what's broken" | none | box on the project page; the agent downloads the code, investigates, fixes, tests, pushes. Rate limited to 5 per hour per project. Announced with a "New" banner on the dashboard and project page. |
+| Installer | put a Node `require(...)` line into browser files named app.js / index.js / server.js; guessed "Python only" when GitHub's file list failed; installed through a pull request that could stay unmerged | files loaded by `<script src>` are never treated as Node; **serverless functions** (`api/`, `netlify/functions`) are monitored; no Python guess (it stops and says so); monitoring is **committed directly** (pull request only on protected branches) |
+| "Python" wording | shown for every language | removed from the legacy fixer and fallbacks |
+| UI | plain step lists | arrow-connected flow on every incident, a "How Agent Daemon looks after your site" diagram, a live loop display (`GitHub test failed (round 2 of 3) · sending what failed back to the AI model`), and **auto-refresh every 5 seconds** |
+
+## Instructions users see (copy audit)
+
+Every place that told users "fixes never go straight to your branch" or "every fix is a pull request" was rewritten to match Auto mode (connect form and its consent boxes, token explanation, FAQ, homepage, architecture pages, diagrams, install messages). The FAQ line that said the installer "currently adds a Python error reporter" is gone. Pull request mode still opens pull requests and never touches the branch.
+
+## New settings (all optional; defaults are right)
+
+`AGENT_DIRECT_PUSH=1` (set `0` to go back to pull requests) · `FIX_GITHUB_ROUNDS=3` · `FIX_GITHUB_WAIT_SECONDS=1200` ·
+`FIX_GITHUB_NO_CHECKS_GRACE=150` · `PROOF_POLL_SECONDS=20` · `SITE_PROBE_SECONDS=30` · `FIX_JOURNEYS_ENABLED=1`.
+`OPENROUTER_API_KEY` is also used for the one test call that confirms a replacement free model answers.
+
+## Known limits (honest)
+
+* "Every error" cannot be promised. Dead-click detection can give a false alarm; browser journeys cannot log in; journeys run with no
+  network, so a journey that needs a live outside API cannot prove that part (GitHub tests and your report cover it).
+* GitHub tests only run on the test branch if your workflow has a `push` trigger (the one we add does). Without any GitHub test the
+  fix is pushed only when the sandbox proved it; otherwise it goes to human review.
+* Not run in the build environment (no Docker, no network, no real GitHub): the Docker browser phase, the live GitHub calls in
+  `git_ops.py`, the real OpenRouter test call. Everything around them was tested with fakes. See RELEASE_CHECKLIST.md.
+
+
+---
+
 # CHANGES: Monitoring v2 (release of 7 November 2026)
 
 Why: a customer connected an HTML + JavaScript chatbot whose AI model had been retired. The monitor "connected" but never checked

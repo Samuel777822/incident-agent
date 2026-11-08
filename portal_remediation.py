@@ -66,7 +66,7 @@ def submit_fix_pr(project: dict, incident: dict, diagnosis: dict,
     except repo_guard.GitHubInstallError as exc:
         raise RemediationError(str(exc)[:200]) from None
     if not source_files:
-        raise RemediationError("No eligible Python files were available for a safe patch")
+        raise RemediationError("No source file was available for a safe patch")
 
     with tempfile.TemporaryDirectory(prefix="incident-agent-") as tmp:
         root = Path(tmp).resolve()

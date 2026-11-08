@@ -23,6 +23,8 @@ import tempfile
 from functools import lru_cache
 from pathlib import Path, PurePosixPath
 
+import httpx
+
 from . import model_catalog
 
 REGISTRY_PATH = Path(__file__).resolve().parent.parent / "model_registry.json"
@@ -31,12 +33,12 @@ TEXT_EXT = (".py", ".js", ".jsx", ".ts", ".tsx", ".mjs", ".cjs", ".vue", ".svelt
 SKIP_PARTS = {"node_modules", ".git", "venv", ".venv", "dist", "build", ".next", "out", "__pycache__", "coverage", "vendor"}
 SKIP_NAMES = {"package-lock.json", "yarn.lock", "pnpm-lock.yaml", "poetry.lock", "Pipfile.lock", "incident_agent_monitor.py",
               "incident-agent-monitor.cjs", "incident-agent-monitor.js", "incident-agent-monitor.browser.js"}
-ERROR_HINT = re.compile(r"model_not_found|model_decommissioned|invalid_model|unknown[_ ]model|not_found_error|"
+ERROR_HINT = re.compile(r"no endpoints found|no allowed providers are available|model_not_found|model_decommissioned|invalid_model|unknown[_ ]model|not_found_error|"
                         r"model[^\n]{0,160}?(not[ _]found|does not exist|decommissioned|deprecated|no longer (supported|available)|"
                         r"retired|has been (shut down|removed)|is not supported|is not a valid model|not available)|"
                         r"(not a valid|invalid|unknown|unsupported) model", re.I)
 CANDIDATE = re.compile(r"[`'\"]((?:models/)?[A-Za-z0-9][\w.:/-]{2,80})[`'\"]|\bmodel[\s:=\"'`]+((?:models/)?[A-Za-z0-9][\w.:/-]{2,80})|"
-                       r"\bmodels/([\w.-]{3,80})", re.I)
+                       r"\bmodels/([\w.-]{3,80})|\b(?:endpoints found for|endpoints for)\s+([\w.:/-]{3,100})", re.I)
 MODEL_CONTEXT = re.compile(r"model|engine|llm|deployment", re.I)
 
 
@@ -67,6 +69,8 @@ def provider_for(model_id: str, host: str = "", text: str = "") -> str:
             if h in (text or "").lower():
                 return name
     mid = (model_id or "").lower()
+    if re.search(r":(free|nitro|floor|online|extended|thinking|beta)$", mid):
+        return "openrouter"                      # these suffixes exist only on OpenRouter
     if "/" in mid and not mid.startswith("models/"):
         if mid.startswith(("meta-llama/", "moonshotai/", "openai/gpt-oss", "qwen/")) and "openrouter" not in (text or "").lower():
             return "groq"
@@ -129,22 +133,93 @@ def _family_pick(provider: str, old: str, listing: list[dict]) -> str:
     return ""
 
 
+NOT_CHAT = re.compile(r"embed|image|audio|tts|whisper|moderation|guard|rerank|vision-only|diffusion|video|ocr", re.I)
+
+
+def was_free(old: str, provider: str, listing) -> bool:
+    if old.endswith(":free"):
+        return True
+    return any(m["id"] == old and m.get("free") for m in (listing or []))
+
+
+def rank_free_candidates(old: str, listing: list[dict], limit: int = 6) -> list[str]:
+    """Free OpenRouter chat models, best first: same family as the old one, then newest; at least as much context when known."""
+    fam = re.split(r"[/\-:]", old.split("/", 1)[-1].lower())[0] if old else ""
+    vendor = old.split("/", 1)[0].lower() if "/" in old else ""
+    old_ctx = next((m.get("context", 0) for m in listing if m["id"] == old), 0)
+    pool = [m for m in listing if m.get("free") and m["id"] != old and not NOT_CHAT.search(m["id"] + " " + m.get("name", ""))
+            and (not m.get("modality") or m["modality"].endswith("->text") and "text" in m["modality"].split("->")[0])
+            and m.get("context", 0) >= max(8000, min(old_ctx, 32000))]
+
+    def score(m):
+        mid = m["id"].lower()
+        return (1 if vendor and mid.startswith(vendor + "/") else 0, 1 if fam and fam in mid else 0, 1 if "instruct" in mid or "chat" in mid else 0,
+                m.get("created") or 0, m.get("context") or 0)
+    return [m["id"] for m in sorted(pool, key=score, reverse=True)[:limit]]
+
+
+def probe_openrouter(model: str) -> bool | None:
+    """One tiny real request with OUR key: True = it answers, False = the model is gone/unusable, None = could not tell
+    (no key, offline, rate limit). Free models are rate limited, so None must never be read as 'bad'."""
+    key = os.getenv("OPENROUTER_API_KEY", "").strip()
+    if not key:
+        return None
+    try:
+        with httpx.Client(timeout=httpx.Timeout(25, connect=8)) as client:
+            resp = client.post("https://openrouter.ai/api/v1/chat/completions", headers={"Authorization": "Bearer " + key},
+                               json={"model": model, "max_tokens": 8, "messages": [{"role": "user", "content": "Reply with the word OK."}]})
+    except httpx.HTTPError:
+        return None
+    if resp.status_code == 200:
+        return True
+    if resp.status_code in (400, 404):
+        return False
+    return None
+
+
+PROBE = probe_openrouter           # tests replace this
+
+
 def choose_replacement(old: str, provider: str) -> dict:
-    """{new, verified, note}. verified=True when the provider's live list shows the new model and (if it can tell) not the old."""
+    """{new, verified, note, was_free}. verified=True when the provider's live list shows the new model and (if it can tell) not the old.
+    A model that was free is replaced by a FREE model (OpenRouter's live list says which are free, and one real call confirms it answers)."""
     prov = registry()["providers"].get(provider) or {}
-    new = next((r["use"] for r in prov.get("replacements", []) if re.search(r["match"], old, re.I)), "")
     listing = model_catalog.models(provider)
+    free_before = provider == "openrouter" and was_free(old, provider, listing)
+    new = next((r["use"] for r in prov.get("replacements", []) if re.search(r["match"], old, re.I)), "")
+    if free_before:
+        if listing is None:
+            return {"new": "", "verified": False, "old_live": None, "was_free": True,
+                    "note": "The old model was free but OpenRouter's live list could not be read, so no free replacement could be chosen safely."}
+        live = {m["id"] for m in listing}
+        old_live = old in live
+        tested, untested = [], []
+        for cand in rank_free_candidates(old, listing):
+            answer = PROBE(cand)
+            if answer is True:
+                return {"new": cand, "verified": True, "old_live": old_live, "was_free": True,
+                        "note": f"{old} was a free model, so the replacement is free too. It is on OpenRouter's live list and answered a real test call."}
+            if answer is None:
+                untested.append(cand)
+            else:
+                tested.append(cand)
+        if untested:
+            return {"new": untested[0], "verified": True, "old_live": old_live, "was_free": True,
+                    "note": f"{old} was a free model, so the replacement is free too (on OpenRouter's live list; the test call could not be made right now)."}
+        return {"new": "", "verified": False, "old_live": old_live, "was_free": True,
+                "note": f"{old} was a free model and OpenRouter currently lists no free chat model that answers. A paid model was NOT chosen on your behalf."}
     if listing is None:
-        return {"new": new, "verified": False, "old_live": None,
+        return {"new": new, "verified": False, "old_live": None, "was_free": False,
                 "note": "The provider's live model list could not be read, so the replacement is the documented one."}
     live = {m["id"] for m in listing}
     old_live = old in live or old.removeprefix("models/") in live
     if new in live:
-        return {"new": new, "verified": True, "old_live": old_live, "note": "Checked against the provider's live model list."}
+        return {"new": new, "verified": True, "old_live": old_live, "was_free": False, "note": "Checked against the provider's live model list."}
     picked = _family_pick(provider, old, listing)
     if picked:
-        return {"new": picked, "verified": True, "old_live": old_live, "note": "Newest model of the same family on the provider's live list."}
-    return {"new": new, "verified": False, "old_live": old_live,
+        return {"new": picked, "verified": True, "old_live": old_live, "was_free": False,
+                "note": "Newest model of the same family on the provider's live list."}
+    return {"new": new, "verified": False, "old_live": old_live, "was_free": False,
             "note": f"{new} was not on the provider's live list; please check the model name before merging."}
 
 
@@ -172,9 +247,19 @@ def env_mentions(files: dict[str, str], model_id: str) -> list[str]:
     return [p for p, t in files.items() if PurePosixPath(p).name.startswith(".env") and model_id in t]
 
 
-def scan_files(files: dict[str, str]) -> list[dict]:
-    """Retired model ids written in the code (first scan and every push). [{model, provider, confidence, files}]"""
+def _live_vendors(listing) -> set[str]:
+    return {m["id"].split("/", 1)[0] for m in (listing or []) if "/" in m["id"]}
+
+
+def scan_files(files: dict[str, str], *, live: bool = True) -> list[dict]:
+    """Retired model ids written in the code (first scan and every push). [{model, provider, confidence, files}]
+
+    Two sources: the hand-written registry of retired ids, and (v3) the provider's LIVE list: an OpenRouter-style id that
+    the live list no longer contains is retired, whatever the registry knows. Only OpenRouter's list needs no key."""
     hits: dict[str, dict] = {}
+    listing = model_catalog.models("openrouter") if live else None
+    live_ids = {m["id"] for m in listing} if listing else set()
+    vendors = _live_vendors(listing)
     literal = re.compile(r"[\"'`]((?:models/)?[A-Za-z0-9][\w.:/-]{1,80})[\"'`]|(?<=[=:]\s)((?:models/)?[A-Za-z0-9][\w.:/-]{1,80})\s*$|"
                          r"(?<==)((?:models/)?[A-Za-z0-9][\w.:/-]{1,80})\s*$", re.M)
     for path, text in files.items():
@@ -189,6 +274,9 @@ def scan_files(files: dict[str, str]) -> list[dict]:
                 if not prov:
                     continue
                 conf = is_retired(cand.removeprefix("models/"), prov, line=line) or is_retired(cand, prov, line=line)
+                if not conf and live_ids and prov == "openrouter" and cand not in live_ids and cand.split("/", 1)[0] in vendors \
+                        and (cand.endswith(":free") or "openrouter" in text.lower()):
+                    conf = "live"            # not on OpenRouter's list any more
                 if not conf:
                     continue
                 entry = hits.setdefault(cand, {"model": cand, "provider": prov, "confidence": conf, "files": []})
@@ -315,7 +403,7 @@ def read_repo(root: Path, limit_bytes: int = 4_000_000) -> dict[str, str]:
     return files
 
 
-def run(claimed: dict, event: dict, *, repo_provider=None, runner=None, pr_opener=None, status_setter=None) -> str | None:
+def run(claimed: dict, event: dict, *, repo_provider=None, runner=None, pr_opener=None, status_setter=None, proof_starter=None) -> str | None:
     """Handle one incident if it is a retired-model problem. Returns the outcome, or None when it is not one (the normal
     fix engine then takes it). Every outcome is recorded on the incident: error, diagnosis, fix, PR link, status."""
     import portal_db
@@ -360,6 +448,10 @@ def run(claimed: dict, event: dict, *, repo_provider=None, runner=None, pr_opene
     if from_scan and is_retired(old, provider, line="model") != "certain" and choice.get("old_live") is None:
         return needs_human(f"{old} may be retired soon or already", f"Your code uses the AI model `{old}`, which the provider has "
                            f"retired or announced for retirement. We could not confirm it right now. Recommended replacement: `{new}`.")
+    if not new and choice.get("was_free"):
+        return needs_human(f"{old} was a free model and is no longer available",
+                           f"Your app uses the free AI model `{old}`, which is gone. {choice.get('note', '')}\n\nPick a free model on openrouter.ai/models "
+                           "(filter: Free) or add a little credit to your OpenRouter account, then tell the agent in the report box.")
     if not new:
         return needs_human(f"{old} is no longer available", f"Your app uses the AI model `{old}`, which the provider no longer serves. "
                            "We do not know a safe replacement for it yet; pick a current model on the provider's website.")
@@ -386,6 +478,7 @@ def run(claimed: dict, event: dict, *, repo_provider=None, runner=None, pr_opene
             stage("diagnosed", f"report mode: change {old} to {new}")
             return "diagnosed"
         stage("testing_fix", "checking the change: " + ("sandbox" if runner else "parse check"))
+        sandbox_passed = False
         if runner is not None:
             work = Path(tempfile.mkdtemp(prefix="fx-model-"))
             try:
@@ -400,6 +493,7 @@ def run(claimed: dict, event: dict, *, repo_provider=None, runner=None, pr_opene
                     runner = None
                 elif after.passed:
                     ok, validation = True, "The sandbox check (install, build, tests, start-up) passes with the new model name."
+                    sandbox_passed = True
                 else:
                     before = sandbox.run_profile(runner, root, profile)
                     ok = not before.passed
@@ -412,6 +506,12 @@ def run(claimed: dict, event: dict, *, repo_provider=None, runner=None, pr_opene
             validation = "Every changed file still parses (" + "; ".join(notes[:6]) + "). The test sandbox was not used."
         if not ok:
             return needs_human(diagnosis, diagnosis + "\n\n" + validation)
+    if (project.get("mode") or claimed.get("mode")) == "auto" and proof_starter is not None and choice.get("verified"):
+        # v3: sandbox -> GitHub tests -> direct push (the same proof loop the AI fixes use). No pull request.
+        return proof_starter(claimed, project, new_files=new_files, diff=diff, diagnosis=diagnosis,
+                             level="check_fixed" if sandbox_passed else "parse_only",
+                             verified_text=(validation + " " + choice.get("note", "")).strip(),
+                             evidence={"kind": "retired_model", "model": old, "replacement": new, "was_free": bool(choice.get("was_free"))})
     title, body = pr_text(old, new, provider, places, choice, validation, "" if from_scan else message)
     stage("pushing", "fix branch + pull request")
     try:

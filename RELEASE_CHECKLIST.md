@@ -1,3 +1,24 @@
+# Release checklist: v3 "Prove it, then push"
+
+Status words: **Passed** (checked) · **Could Not Verify** (needs something the build environment did not have; reason given).
+
+Environment used for checking: Python 3.13, Node.js 22, SQLite. No pytest, no internet, no Docker, no real GitHub, no AI keys, no `segno`.
+
+| Check | Result |
+| --- | --- |
+| New tests `tests/test_v3.py` (proof loop with the real engine and database, free-model logic, installer, prompts, triage, journeys, site probe, UI pieces) | **30 passed** |
+| New tests `tests/test_v3_web.py` (report box, flow diagram, banner, 5-second refresh, csrf, ownership, rate limit) | **4 passed** |
+| `tests/browser_monitor_harness.js` (v3 browser monitor against a fake DOM: failed request on any host, retired model, noise ignored, network failure, dead click, error text, normal link) | **9 of 9 passed** (run by `tests/test_v3_browser_monitor.py`) |
+| Existing tests | pytest could not be installed here, so they were run with a small stand-in runner on BOTH the original v2 code and v3: **identical pass/fail lists, nothing that passed before fails now** (222 pass on both; the rest fail identically on both for reasons of the stand-in runner, no `segno`, no Docker/Java, no real pytest inside the sandbox). `tests/test_portal_flows.py::_fake_github` now returns a file list because the installer no longer guesses "Python only". `tests/conftest.py` sets `AGENT_DIRECT_PUSH=0`, `MODEL_CATALOG_OFFLINE=1`, `FIX_JOURNEYS_ENABLED=0` for the OLD tests (they expect pull requests); the v3 tests switch direct push on themselves. **Please run the full `python -m pytest -q` on your laptop.** |
+| `python -m compileall` and `node --check monitors/browser_monitor.js` | Passed |
+| Real GitHub calls in `fixengine/git_ops.py` (test branch, check logs, fast-forward, PR) | **Could Not Verify**: no network. Tested through a fake with the same method names; the HTTP shapes follow GitHub's REST API. |
+| Docker browser journey phase (`sandbox/Dockerfile.browser`, `sandbox/journey_runner.py`) | **Could Not Verify**: no Docker or Chromium here. It is skipped automatically if the image is missing. Check the Playwright base image tag when you build. |
+| Real OpenRouter test call for the replacement free model | **Could Not Verify**: no key or network. Tested with a stand-in; with no key the live list alone decides. |
+
+First things to try after deploying: (1) connect the Bible app repo and open the project page: the flow diagram, the "Site check" line and the report box should show; (2) type "Isaiah chapter 1 does not load" in the report box and watch the arrows on the incident; (3) break a test on purpose in a copy of a repo to watch "GitHub test failed (round 1 of 3)" go back to the AI.
+
+---
+
 # Release checklist: Monitoring v2
 
 Status words: **Passed** (checked, nothing to change) · **Fixed** (checked, a problem was found and fixed) ·

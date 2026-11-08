@@ -106,9 +106,9 @@ PUSH_FLOW = [
     ("verdict", "Green or red?", "Green: the commit gets a ✓ on GitHub and you can deploy. Red: the commit gets a ✗ and the agent starts fixing it.", "commit status"),
     ("router", "Choose an AI", "The agent compares the available AI modes and picks an economical one that is likely to fix this bug. It starts with free attempts and moves to a stronger AI only when it needs to.", "economical choice"),
     ("model", "AI writes a small patch", "The model only reads the relevant files and the error, and only returns text. It cannot run anything or touch GitHub.", "text in, text out"),
-    ("policy", "Safety rules", "Our code checks the patch: at most 3 files and 40 lines, never tests, CI files, build configs, dependencies or secrets.", "policy gate"),
+    ("policy", "Safety rules", "Our code checks the patch: at most 5 files and 120 lines, never tests, CI files, build configs, dependencies or secrets.", "policy gate"),
     ("retest", "Same check, patched code", "The patched repo goes through the exact check that failed. Not green? Nothing is pushed: the agent tries again with what it learned, possibly with a stronger AI.", "proof"),
-    ("pushfix", "Push the fix to GitHub", "A new branch <code>agent-daemon/fix-…</code> with a pull request into your branch. Auto mode merges it once proven; otherwise you review it.", "PR · auto-merge"),
+    ("pushfix", "Push the fix to GitHub", "A test branch <code>agent-daemon/fix-…</code>. Your GitHub tests run on it; failures go back to the AI (3 rounds). Auto mode then pushes the fix to your branch; Pull request mode opens a pull request for you.", "tests · push"),
 ]
 LIVE_FLOW = [
     ("app", "Your live app crashes", "A real user hits a bug in the deployed app.", "production"),
@@ -116,7 +116,7 @@ LIVE_FLOW = [
     ("group", "Grouped into an incident", "Repeats of the same error become one incident with a count, so you are not spammed.", "dedupe"),
     ("repro", "Reproduce in the sandbox", "We download your branch and run the same install → build → tests → start-up check to see what fails today.", "baseline"),
     ("router2", "Choose an AI, fix, re-test", "Exactly the same fix loop as the push guard: economical AI first, safety rules, proof in the sandbox.", "shared engine"),
-    ("pushfix2", "Fix pushed back", "Branch + pull request, merged automatically in Auto mode when proven. The next deploy carries the fix.", "PR · auto-merge"),
+    ("pushfix2", "Fix pushed back", "Auto mode pushes it to your branch once the sandbox and your GitHub tests pass; Pull request mode opens a pull request. The next deploy carries the fix.", "tests · push"),
 ]
 STAGES = [
     ("Caught · waiting in line", "A push broke or a live error came in. The job is in the queue."),
@@ -125,8 +125,8 @@ STAGES = [
     ("Normal / High / Extra mode is writing a fix", "The AI model of that mode is working on a patch. The pill shows how many tries of it you have left."),
     ("Testing the fix in the sandbox", "The patched code is going through the same check."),
     ("Waiting for your decision", "You reached a warning point. Open Usage to choose: let the agent decide, pick a mode, or send it to human review."),
-    ("Pushing the fix to GitHub", "Creating the fix branch and the pull request."),
-    ("Fix proven · merging", "Auto mode: the fix commit has a green status; it is being merged into your branch."),
+    ("Pushing the fix to GitHub", "Sending the fix to a test branch on GitHub."),
+    ("Fix proven · merging", "Auto mode: GitHub is testing the fix; when it is green it is pushed to your branch. If it fails, the error goes back to the AI."),
     ("Fixed · the fixed version is on GitHub", "Done. Your branch now has the fix."),
     ("Fix pushed · pull request ready", "Pull request mode: review and merge it on GitHub."),
     ("Needs a human", "The agent stopped (caps, quota, or it could not prove a fix). A report explains what it tried."),
@@ -293,7 +293,7 @@ Tap any box to read what happens there, or press play to follow a bug from conne
 <section class='section'><div class='eyebrow'>Safety</div><h2>What the agent can and cannot do</h2><div class='grid'>
 <article class='card'><h3>Your code runs only in the sandbox</h3><p class='muted'>Fresh container per run, non-root, read-only system, memory/CPU/time limits, no secrets, and no network while tests run.</p></article>
 <article class='card'><h3>Models only write text</h3><p class='muted'>They never get tools, never run commands and never see your keys. Our code applies the patch after the safety rules.</p></article>
-<article class='card'><h3>Never straight to your branch</h3><p class='muted'>Every fix is a branch and a pull request. Auto mode merges only what the sandbox proved and GitHub checks passed.</p></article>
+<article class='card'><h3>Proven before it reaches your branch</h3><p class='muted'>Every fix is tested on a branch first. Auto mode pushes to your branch only what the sandbox proved and your GitHub tests passed. After 3 failed rounds a human reviews a pull request.</p></article>
 <article class='card'><h3>No surprise bills</h3><p class='muted'>Monthly tries per mode, per-bug caps and a global budget with a kill switch. Push checks themselves are free.</p></article>
 </div></section>
 <section class='card mission-card' style='text-align:center'><h3>Try it on your repo</h3><p class='muted'>Connect a repository and your next push is tested automatically.</p>

@@ -30,6 +30,7 @@ from wsgiref.simple_server import WSGIServer, make_server
 import httpx
 
 import incident_board
+import ui_flow
 import notifications
 import plans
 import chatbot
@@ -506,6 +507,8 @@ main.wrap{overflow-x:clip}
   .live-top .pill{white-space:normal}.meters{grid-template-columns:1fr 1fr}.price-card{padding:18px}
   .actions form,.actions .button{max-width:100%}}
 """
+CSS += ui_flow.FLOW_CSS
+
 
 
 def _escape(value) -> str:
@@ -1048,7 +1051,7 @@ def _github_setup_guide() -> str:
         "<p class='muted'>Agent Daemon talks to GitHub with a <b>classic</b> personal access token. "
         "Fine-grained tokens are not supported. Two things to do first:</p>"
         "<h3>1. Make your repository private</h3>"
-        "<p class='muted'>We read your source files and error logs to diagnose problems, and Auto mode only merges fixes in private repositories. "
+        "<p class='muted'>We read your source files and error logs to diagnose problems, and Auto mode only pushes fixes to private repositories. "
         "A private repository keeps your code and logs away from the public.</p>"
         "<ol class='steps muted'>"
         "<li>Open your repository on <b>github.com</b> in a browser.</li>"
@@ -1066,8 +1069,8 @@ def _github_setup_guide() -> str:
         "<li>Press <b>Generate token</b> and copy it right away. GitHub shows it only once. Paste it into the connect form.</li></ol>"
         "<h3>What the agent uses each permission for</h3>"
         "<ul class='muted'>"
-        "<li><code>repo</code>: read your code, create a branch and open pull requests. Nothing is merged unless you choose Auto mode.</li>"
-        "<li><code>workflow</code>: add a small test workflow file, so Auto mode has a check that must pass before merging.</li></ul>"
+        "<li><code>repo</code>: read your code, create a test branch for each fix and read your GitHub test results. In Pull request mode it opens a pull request for you. In Auto mode it pushes a fix to your branch, only after our sandbox and your GitHub tests pass.</li>"
+        "<li><code>workflow</code>: add a small test workflow file, so Auto mode has a GitHub check that must pass before a fix is pushed.</li></ul>"
         "<p class='muted'>Classic tokens are not limited to one repository, so keep yours secret. "
         "You can delete the token on GitHub at any time to cut our access immediately.</p></section>")
 
@@ -1382,7 +1385,7 @@ def _page_help(request: Request) -> Response:
     <li>We download that exact commit and find every part of the repo (Python, JavaScript/TypeScript, Java, HTML/CSS).</li>
     <li>Each part is installed, built (and type-checked), tested and started in a fresh sandbox container. Push checks are free.</li>
     <li>The commit gets a <b>Agent Daemon / push check</b> status on GitHub: ✓ or ✗.</li>
-    <li>On ✗ an incident opens and the agent writes a fix, proves it with the same check, and pushes it to <code>agent-daemon/fix-…</code> with a pull request. Auto mode merges it once proven.</li>
+    <li>On ✗ an incident opens and the agent writes a fix, proves it with the same check, and sends it to a test branch <code>agent-daemon/fix-…</code>. Your GitHub tests run on that branch. If they fail, the error goes back to the AI (up to 3 rounds). Pull request mode then opens a pull request for you. Auto mode pushes the fix straight to your branch once the sandbox and your GitHub tests pass, and opens a pull request for you to review after 3 failed rounds.</li>
   </ol>
   <p class="muted">No webhook (for example the token is not an admin of the repository)? The worker looks for new commits every few minutes instead. Use <b>Check latest commit now</b> on the project page any time.</p>
 </section>
@@ -1409,7 +1412,7 @@ def _page_help(request: Request) -> Response:
     <article class="mode-card">
       <div style="margin-bottom:8px"><span class="badge-tag mode" style="background:#163229;color:#6fe0b0;border-color:#235c4b">Fully Autonomous</span></div>
       <h4>Automatic Mode (<code>auto</code>)</h4>
-      <p>The complete self-healing loop shown in the demo video. When an incident occurs, Agent Daemon diagnoses the cause, writes a surgical patch, creates a branch, opens a PR, waits for your GitHub Actions CI tests to pass, and automatically squash-merges into your base branch. Requires a private repository.</p>
+      <p>The complete self-healing loop shown in the demo video. When an incident occurs, Agent Daemon diagnoses the cause, writes a surgical patch and tests it in the sandbox. It then runs your GitHub tests on a fix branch. If they fail, the exact error goes back to the AI model and it tries again (up to 3 rounds). When the sandbox and your GitHub tests pass, the fix is pushed straight to your branch, with no pull request. After 3 failed rounds it opens a pull request marked <b>Needs human review</b>. If your branch is protected, it opens the pull request and merges it when GitHub allows. Your GitHub tests run on the fix branch only if your workflow runs on <code>push</code> (the one we add does). Requires a private repository.</p>
     </article>
 
     <article class="mode-card">
@@ -1445,7 +1448,7 @@ def _page_help(request: Request) -> Response:
           <li>Set Note to <code>Agent Daemon</code> and choose an expiration duration (e.g. 90 days or no expiration).</li>
           <li>Check exactly two permission scopes:
             <ul>
-              <li><code>repo</code> &mdash; Full control of private repositories (to read source evidence, create fix branches, and open pull requests).</li>
+              <li><code>repo</code> &mdash; Full control of private repositories (to read source evidence, create fix branches, read test results, and push fixes or open pull requests).</li>
               <li><code>workflow</code> &mdash; Update GitHub Action workflows (used to install automated test validation).</li>
             </ul>
           </li>
@@ -1469,11 +1472,11 @@ def _page_help(request: Request) -> Response:
         </ol>
         <p><b>What the Zero-Touch Installer does automatically:</b></p>
         <ul>
-          <li>Opens a pull request that adds <code>incident_agent_monitor.py</code> (the lightweight client).</li>
+          <li>Commits the monitor straight to your branch (the lightweight client; Python, Node.js, serverless functions and web pages each get the right one).</li>
           <li>Inserts <code>import incident_agent_monitor</code> at the top of your app entry point (e.g. <code>app.py</code>, <code>main.py</code>, <code>wsgi.py</code>).</li>
           <li>Creates <code>incident_agent_config.json</code> with your project's ingest URL and unique ingest key.</li>
           <li>Adds <code>.github/workflows/agent-daemon-tests.yml</code> so PRs have test validation checks.</li>
-          <li>Auto-merges the PR if repository permissions allow, or provides a direct link to merge on GitHub.</li>
+          <li>If your branch is protected and a direct commit is not allowed, opens a pull request, merges it when GitHub allows, or gives you a link to merge it.</li>
         </ul>
       </div>
     </details>
@@ -1621,10 +1624,10 @@ application = get_wsgi_application()</div>
         <p><b>Symptom:</b> The fix branch and PR were created on GitHub, but status remains <code>pending</code> or <code>failed</code> on the portal.</p>
         <p><b>Troubleshooting Checklist:</b></p>
         <ul>
-          <li><b>CI checks must pass:</b> Auto-merge requires at least one completed GitHub Actions check with conclusion <code>success</code>. If tests failed in CI, Agent Daemon safely halts and leaves the PR open for inspection.</li>
-          <li><b>Branch protection rules:</b> If your repository enforces required code reviews (e.g. "Require at least 1 approval before merging"), GitHub's API blocks automated merges. You can either authorize bot merges or merge manually with one click on GitHub.</li>
-          <li><b>Public repository restriction:</b> As a strict security measure, public repositories never auto-merge.</li>
-          <li><b>Merge conflicts:</b> If other commits were pushed to your base branch while CI was running, the PR will await human rebasing.</li>
+          <li><b>CI checks must pass:</b> A fix is pushed only when your GitHub Actions check finishes with <code>success</code> on the fix branch (or, when your repository has no GitHub check, only when the sandbox proved the fix). If the check fails, the error goes back to the AI for another try; after 3 failed rounds Agent Daemon stops and opens a pull request marked <b>Needs human review</b>.</li>
+          <li><b>Branch protection rules:</b> If your repository enforces required code reviews (e.g. "Require at least 1 approval before merging"), GitHub blocks direct pushes. Agent Daemon then opens a pull request and merges it when GitHub allows; otherwise you merge it with one click on GitHub.</li>
+          <li><b>Public repository restriction:</b> As a strict security measure, public repositories never get automatic pushes or merges.</li>
+          <li><b>Merge conflicts:</b> If other commits were pushed to your base branch while the tests were running, the agent re-tests once on the newest code; if that happens twice, it opens a pull request for you.</li>
         </ul>
       </div>
     </details>
@@ -1655,8 +1658,8 @@ application = get_wsgi_application()</div>
         <span><span class="badge-tag setup">Other languages</span> Using Agent Daemon with Java, JavaScript, TypeScript or a static site</span>
       </summary>
       <div class="accordion-body">
-        <p><b>What is supported:</b> the fix engine reads and repairs Python, JavaScript, TypeScript, Java, HTML and CSS projects, and it proves every fix by running your project's own build and tests in an isolated sandbox before opening a pull request. Static HTML/CSS sites are checked for broken tags, missing files and syntax errors; because that is not a test, those pull requests say clearly that the fix is not proven by a test.</p>
-        <p><b>What is automatic:</b> the one-click monitoring installer currently adds a <b>Python</b> error reporter. For other languages, send errors to your project's ingest URL yourself with one HTTP call whenever your app catches an unhandled error:</p>
+        <p><b>What is supported:</b> the fix engine reads and repairs Python, JavaScript, TypeScript, Java, HTML and CSS projects, and it proves every fix by running your project's own build and tests in an isolated sandbox, and then your GitHub tests, before anything is pushed. Static HTML/CSS sites are checked for broken tags, missing files and syntax errors; because that is not a test, those fixes say clearly that they are not proven by a test.</p>
+        <p><b>What is automatic:</b> the one-click installer finds every part of your repository (Python, Node.js, serverless functions such as <code>api/</code> and Netlify functions, and plain HTML/JS pages) and adds the right monitor to each, committed straight to your branch (a pull request only if your branch is protected). There is nothing for you to install. For anything else, for example a Java server, send errors to your project's ingest URL yourself with one HTTP call whenever your app catches an unhandled error:</p>
         <div class="code-box">curl -X POST https://incident-agent-portal.onrender.com/ingest \
   -H "Content-Type: application/json" \
   -H "X-Ingest-Key: YOUR_KEY" \
@@ -2554,7 +2557,7 @@ def _quota_by_tier(user_id: str) -> dict:
 
 
 WATCH_LABELS = {"push": "Push guard", "runtime": "Live error watch", "both": "Push guard + live errors"}
-MODE_LABELS = {"report": "Report only", "pr": "Pull request", "auto": "Auto (merges proven fixes)"}
+MODE_LABELS = {"report": "Report only", "pr": "Pull request", "auto": "Auto (pushes proven fixes)"}
 
 
 def _live_panel_html(user_id: str) -> str:
@@ -2668,7 +2671,7 @@ def _page_dashboard(request):
     signed_label = f"Signed in as <b>{_escape(name_val)}</b> ({_escape(request.session['email'])}) · <a href='/onboarding/name'>Edit name</a>" if name_val else f"Signed in as {_escape(request.session['email'])} · <a href='/onboarding/name'>Add your name</a>"
     body = (f"<section class='section'><div class='row page-head'><div><div class='eyebrow'>Workspace</div><h1>Your projects</h1>"
             f"<p class='muted'>{signed_label}</p></div><div class='actions'>{actions}</div></div>{banner}{meters}{live}"
-            f"<h2>Projects</h2>{slot_note}<div class='grid'>{listing}</div>{incident_board._STYLE}</section>")
+            f"{ui_flow.new_feature_banner_html()}<h2>Projects</h2>{slot_note}<div class='grid'>{listing}</div>{incident_board._STYLE}</section>")
     return _response(body, request)
 
 
@@ -2707,30 +2710,19 @@ def _slot_full_page(request, slots: dict):
     return _response(body, request, "402 Payment Required")
 
 
-def _queue_initial_scan(project_id: str, user_id: str, project: dict) -> bool:
-    """Queue the sandbox scan of the branch head right after a repository is connected (every watch mode, not only push
-    guard): clone, install, build, test and start the app, then write the baseline health report. Returns True when queued."""
-    import push_watch
-    record = {**project, "id": project_id, "user_id": user_id}
-    head = push_watch.branch_head({**record, "github_token_ciphertext": project.get("github_token_ciphertext", "")})
-    if head and head.get("sha"):
-        try:
-            _cid, queued = push_watch.enqueue(record, head["sha"], source="connect", pusher=head.get("author", ""), message=head.get("message", ""))
-            portal_db.audit(project_id, "initial_scan_queued", {"commit": head["sha"], "queued": bool(queued), "watch_mode": project.get("watch_mode") or "both"})
-            return bool(queued)
-        except ValueError:
-            return False
-    portal_db.audit(project_id, "initial_scan_queued", {"commit": "", "queued": False, "reason": "could not read the branch head from GitHub"})
-    return False
-
-
 def _start_push_watch(project_id: str, user_id: str, project: dict, token: str) -> dict:
     """Add the push webhook and queue a check of the current branch head, so the customer sees a result right away."""
     import push_watch
     record = {**project, "id": project_id, "user_id": user_id}
     hook = push_watch.install_webhook(record, token)
     portal_db.audit(project_id, "push_webhook", {"ok": hook.get("ok"), "error": hook.get("error", "")[:200]})
-    queued = _queue_initial_scan(project_id, user_id, project)
+    head = push_watch.branch_head({**record, "github_token_ciphertext": project.get("github_token_ciphertext", "")})
+    queued = False
+    if head and head.get("sha"):
+        try:
+            _cid, queued = push_watch.enqueue(record, head["sha"], source="connect", pusher=head.get("author", ""), message=head.get("message", ""))
+        except ValueError:
+            queued = False
     return {"webhook": hook, "queued": queued}
 
 
@@ -2762,11 +2754,11 @@ def _page_new_project(request):
 <div class='field'><p class='muted'><b>What happens when you press Save:</b> we check that your repository is private, add a small error
 monitor to your code for you (Python, JavaScript, TypeScript, HTML and mixed projects), scan your code once right away, and then test every push.
 You do not need to install anything yourself.</p></div>
-<div class='field'><label>What should the agent do with a bug?</label><select name='mode'><option value='pr' selected>Pull request: push the fix to a new branch and open a PR for me</option><option value='auto'>Auto: push the fix and merge it once the sandbox proves it</option><option value='report'>Report only: explain the bug, change nothing</option></select><small>Fixes never go straight to your branch: they land on <code>agent-daemon/fix-…</code> with a pull request. Auto merges it only when the check that failed now passes and every GitHub check is green.</small></div>
+<div class='field'><label>What should the agent do with a bug?</label><select name='mode'><option value='pr' selected>Pull request: push the fix to a new branch and open a PR for me</option><option value='auto'>Auto: push the fix to my branch once the sandbox and my GitHub tests pass (no pull request)</option><option value='report'>Report only: explain the bug, change nothing</option></select><small>Pull request mode never touches your branch: the fix lands on <code>agent-daemon/fix-…</code> with a pull request. Auto mode tests the fix on that branch and pushes it to your branch only when the sandbox and every GitHub check pass. If it still fails after 3 tries, Auto mode opens a pull request for you to review instead.</small></div>
 <div class='field'><label>App URL (optional)</label><input name='app_url' type='url' placeholder='https://app.example.com'></div>
-<div class='field'><label class='checkbox'><input name='allow_install' type='checkbox' value='yes' required><span>I authorize Agent Daemon to add a push webhook and commit statuses to this repository and to add error-monitoring code through a pull request that is merged automatically when GitHub allows it.</span></label></div>
+<div class='field'><label class='checkbox'><input name='allow_install' type='checkbox' value='yes' required><span>I authorize Agent Daemon to add a push webhook and commit statuses to this repository and to add error-monitoring code with a commit to my branch (or a pull request, if my branch is protected).</span></label></div>
 <div class='field'><label class='checkbox'><input name='allow_ai_processing' type='checkbox' value='yes' required><span>I understand that error output and the relevant source files are sent to third-party AI providers (Groq, and Anthropic Claude for the stronger modes, possibly through OpenRouter), and that my code is built and tested inside Agent Daemon's isolated sandbox.</span></label></div>
-<div class='field'><label class='checkbox'><input name='allow_remediation' type='checkbox' value='yes'><span>For Pull request or Auto mode, I authorize small code fixes as pull requests. Auto mode may merge a fix only after the sandbox proves it and all GitHub checks pass.</span></label></div>"""
+<div class='field'><label class='checkbox'><input name='allow_remediation' type='checkbox' value='yes'><span>For Pull request or Auto mode, I authorize small code fixes. Pull request mode opens pull requests. Auto mode pushes a fix to my branch only after the sandbox proves it and all GitHub checks pass; if that fails 3 times it opens a pull request for me to review.</span></label></div>"""
         note = (f"<p class='muted'>Project {slots['used'] + 1} of {slots['limit']}. Extra projects are ₹{plans.PROJECT_SLOT_PRICE} each.</p>"
                 if not _is_admin(request) else "")
         body = _github_setup_guide() + _form("Connect a project", "Connect a GitHub repository. The first check starts right away." + note, fields,
@@ -2841,9 +2833,6 @@ def _activate_project(project: dict, token: str, ingest_key: str) -> dict:
             return out
     if watch in ("push", "both"):
         out["push"] = _start_push_watch(project["id"], project["user_id"], project, token)
-    elif watch == "runtime":
-        # Runtime-only projects used to get no first scan at all: the baseline report is part of connecting, in every mode.
-        out["scan"] = _queue_initial_scan(project["id"], project["user_id"], project)
     portal_db.set_gate_state(project["id"], portal_db.GATE_ACTIVE)
     portal_db.unpark_gate_incidents(project["id"])
     return out
@@ -2855,9 +2844,6 @@ def _activation_summary(result: dict, project: dict) -> str:
         html_out += _install_summary(result["install"], project["id"])
     if result.get("push") is not None:
         html_out += _push_summary(result["push"])
-    if result.get("scan"):
-        html_out += ("<div class='card'><h3>First scan started</h3><p class='muted'>We are cloning your repository into the sandbox, "
-                     "installing, building, testing and starting it now. The baseline health report appears on the project page.</p></div>")
     return html_out
 
 
@@ -3085,6 +3071,9 @@ def _page_project(request, project_id):
         flash = "<div class='pill green'>Queued: the latest commit is being tested. The table below updates by itself.</div>"
     elif request.query.get("checked") == ["known"]:
         flash = "<div class='pill amber'>That commit was already checked or is in the queue.</div>"
+    reported = (request.query.get("reported") or [""])[0]
+    if reported:
+        flash += ui_flow.flash_html(reported)
     cards = []
     if watch in ("runtime", "both"):
         install_card = _monitor_install_card(project, csrf)
@@ -3103,13 +3092,14 @@ def _page_project(request, project_id):
             f"<form method='post'><input type='hidden' name='csrf' value='{csrf}'><input type='hidden' name='paused' value='{'no' if paused else 'yes'}'><button class='button {'primary' if paused else 'danger'}' type='submit'>{button}</button></form></div>"
             f"<div class='stats'><span class='pill {'amber' if paused else css}'>{'Paused' if paused else _escape(state)}</span>"
             f"<span class='pill'>{_escape(WATCH_LABELS.get(watch, watch))}</span><span class='pill'>{_escape(MODE_LABELS.get(project['mode'], project['mode']))}</span>"
-            f"{checkin}</div>{flash}{monitor_panel}"
+            f"{checkin}</div>{flash}{ui_flow.flow_diagram_html()}{monitor_panel}"
+            f"{ui_flow.report_card_html(project_id, _csrf(request))}"
             f"{_push_checks_html(project, request)}"
             f"<h2>Bugs and fixes</h2>{table}<h2>Settings</h2><section class='grid'>{''.join(cards)}</section></section>")
     return _response(body, request)
 
 
-MONITOR_KIND_LABEL = {"python": "Python server", "node": "Node.js server", "browser": "Browser (web pages)"}
+MONITOR_KIND_LABEL = {"python": "Python server", "node": "Node.js server", "browser": "Browser (web pages)", "probe": "Site check (every 30 s)"}
 
 
 def _monitor_status_html(project: dict) -> str:
@@ -3143,18 +3133,25 @@ def _monitor_status_html(project: dict) -> str:
     help_steps = ""
     if state["state"] in ("never_checked_in", "offline", "waiting_first"):
         help_steps = ("<details class='more'><summary>How to fix it</summary><ol class='steps'>"
-                      + (f"<li>Merge the <a href='{_escape(project['install_pr_url'])}' target='_blank' rel='noopener'>monitoring pull request</a> if it is still open.</li>" if project.get("install_pr_url") else "")
+                      + (f"<li>Merge the <a href='{_escape(project['install_pr_url'])}' target='_blank' rel='noopener'>monitoring pull request</a> if it is still open.</li>" if '/pull/' in (project.get("install_pr_url") or '') else "")
                       + "<li>Re-deploy your app (Render, Vercel, Netlify, Railway: press <b>Deploy</b> / <b>Redeploy</b>). The monitor starts with the app.</li>"
                       "<li>Open your app in a browser once. Free hosting plans sleep when nobody visits.</li>"
                       "<li>Still nothing after 2 minutes? Press <b>Reinstall monitoring</b> below.</li></ol></details>")
+    site = portal_db.site_check_state(project, beats)
+    site_line = (f"<p><span class='pill {site['tone']}'>{_escape(site['headline'])}</span> <small class='muted'>{_escape(site['detail'])}</small></p>"
+                 if watch_has_runtime(project) else "")
     return (f"<section class='card monitor-status' id='monitor'><div class='row'><div><div class='eyebrow'>Live monitor</div>"
             f"<h3>{_escape(state['headline'])}</h3><p class='muted'>{when} · checks in every 30 seconds</p></div>"
-            f"<span class='pill {tone}'>{_escape(state['headline'])}</span></div>{detail}{help_steps}{table}</section>")
+            f"<span class='pill {tone}'>{_escape(state['headline'])}</span></div>{site_line}{detail}{help_steps}{table}</section>")
+
+
+def watch_has_runtime(project: dict) -> bool:
+    return (project.get("watch_mode") or "both") in ("runtime", "both")
 
 
 def _monitor_install_card(project: dict, csrf: str) -> str:
     pid = _escape(project["id"])
-    pr = (f"<p class='muted'>Installed through <a href='{_escape(project['install_pr_url'])}' target='_blank' rel='noopener'>this pull request</a>.</p>"
+    pr = (f"<p class='muted'>Installed with <a href='{_escape(project['install_pr_url'])}' target='_blank' rel='noopener'>{'this commit' if '/commit/' in project['install_pr_url'] else 'this pull request'}</a>.</p>"
           if project.get("install_pr_url") else "")
     label = "Reinstall monitoring" if (project.get("install_pr_url") or project.get("monitor_installed_at")) else "Install monitoring"
     return (f"<article class='card'><h3>{label}</h3><p class='muted'>Adds (or repairs) the error monitor in every part of your repository: "
@@ -3165,16 +3162,16 @@ def _monitor_install_card(project: dict, csrf: str) -> str:
 
 def _workflow_fix_steps() -> str:
     """Why Auto mode cannot merge without a workflow, and how the customer fixes it."""
-    return ("<p class='muted'>Auto mode merges a fix only after a GitHub check passes. This repository has no GitHub Actions workflow, "
-            "so there is no check to pass and fixes stay as open pull requests. We could not add a workflow because your GitHub token "
+    return ("<p class='muted'>Auto mode pushes a fix only after a GitHub check passes. This repository has no GitHub Actions workflow, "
+            "so there is no GitHub check; fixes the sandbox cannot prove on its own are sent to you as pull requests for review. We could not add a workflow because your GitHub token "
             "is not allowed to write workflow files. Monitoring itself is installed and working.</p>"
             "<ol class='muted'>"
             "<li>On GitHub open <b>Settings</b>, then <b>Developer settings</b>, then <b>Personal access tokens</b>, then <b>Tokens (classic)</b>, "
             "and open the token you gave us.</li>"
             "<li>Tick the <code>workflow</code> scope and save. If you make a brand new token, tick <code>repo</code> and <code>workflow</code>, "
             "then use <b>Update GitHub token</b> on this page first.</li>"
-            "<li>Come back to this project page and press <b>Install monitoring</b>. We will add the test workflow in a new pull request "
-            "and merge it.</li></ol>")
+            "<li>Come back to this project page and press <b>Install monitoring</b>. We will add the test workflow to your branch."
+            "</li></ol>")
 
 
 def _workflow_fix_card(project_id: str, request) -> str:
@@ -3248,9 +3245,11 @@ def _install_summary(result: dict, project_id: str) -> str:
     elif not result.get("entry_file"):
         notes.append("We could not find your app's main file, so the monitor was added but could not be switched on automatically.")
     if result.get("workflow_added"):
-        notes.append("A GitHub Actions workflow was added that checks your code and runs your tests on every pull request. "
-                     "Auto mode merges a fix only after that check passes.")
-    if result.get("merged"):
+        notes.append("A GitHub Actions workflow was added that checks your code and runs your tests on every pull request and every push. "
+                     "Auto mode pushes a fix only after that check passes.")
+    if result.get("direct"):
+        notes.append("Monitoring was added straight to your branch (no pull request). It starts the next time your app deploys. Nothing else to configure.")
+    elif result.get("merged"):
         notes.append("The change was merged automatically. Monitoring starts the next time your app deploys and checks in every 30 seconds. "
                      "Nothing else to configure.")
     else:
@@ -3260,6 +3259,45 @@ def _install_summary(result: dict, project_id: str) -> str:
     if not result.get("workflow_added") and not result.get("had_ci"):
         card += "<div class='card'><h3>Auto mode needs a test workflow</h3>" + _workflow_fix_steps() + "</div>"
     return card
+
+
+REPORTS_PER_HOUR = 5
+
+
+def _recent_reports(project_id: str) -> int:
+    since = (datetime.now(timezone.utc) - timedelta(hours=1)).isoformat(timespec="seconds")
+    conn = portal_db.get_connection()
+    try:
+        row = portal_db._execute(conn, "SELECT COUNT(*) AS n FROM incidents WHERE project_id=? AND signature LIKE 'user_report:%' AND first_seen>?",
+                                 (project_id, since)).fetchone()
+        return int(row["n"]) if row else 0
+    finally:
+        conn.close()
+
+
+def _page_report(request, project_id):
+    """The last-resort path: the owner describes what is broken in plain words and the agent investigates the code."""
+    gate = _require_access(request)
+    if gate:
+        return gate
+    if request.method != "POST" or not _csrf_valid(request):
+        return _response("<div class='alert'>Request expired or invalid.</div>", request, "403 Forbidden")
+    project = portal_db.get_project(project_id, request.session["user_id"])
+    if not project:
+        return _response("<h1>Project not found</h1>", request, "404 Not Found")
+    if project.get("gate_state") == portal_db.GATE_WAITING:
+        return _redirect(f"/projects/{project_id}/make-private")
+    text = " ".join(str(request.form.get("text", "")).split())[:1500]
+    if len(text) < 8:
+        return _redirect(f"/projects/{project_id}?reported=short")
+    if _recent_reports(project_id) >= REPORTS_PER_HOUR:
+        return _redirect(f"/projects/{project_id}?reported=limit")
+    evidence = {"kind": "user_report", "owner_report": text}
+    portal_db.ingest_event(project_id, timestamp=datetime.now(timezone.utc).isoformat(timespec="seconds"), level="ERROR",
+                           message="[user report] " + text[:300], traceback="[evidence] " + json.dumps(evidence) + "\n",
+                           signature="user_report:" + hashlib.sha1(text.lower().encode("utf-8")).hexdigest()[:12])
+    portal_db.audit(project_id, "user_report_sent", {"chars": len(text)})
+    return _redirect(f"/projects/{project_id}?reported=1")
 
 
 def _page_install_monitoring(request, project_id):
@@ -3313,7 +3351,7 @@ def _page_update_github_token(request, project_id):
     if not portal_db.update_project_github_token(project_id, user_id, ciphertext):
         return _response("<h1>Project not found</h1>", request, "404 Not Found")
     portal_db.audit(project_id, "github_token_updated", {"repository": f"{project['repo_owner']}/{project['repo_name']}"})
-    return _response("<div class='pill green'>GitHub token validated and updated. You can retry the monitoring pull request.</div><p><a class='button primary' href='/projects/" + _escape(project_id) + "'>Back to project</a></p>", request)
+    return _response("<div class='pill green'>GitHub token validated and updated. You can retry the monitoring install.</div><p><a class='button primary' href='/projects/" + _escape(project_id) + "'>Back to project</a></p>", request)
 
 
 def _page_rotate_ingest_key(request, project_id):
@@ -4049,6 +4087,9 @@ def _dispatch(request: Request) -> Response:
     match = re.fullmatch(r"/projects/([0-9a-f-]{36})/github-token", request.path)
     if match:
         return _page_update_github_token(request, match.group(1))
+    match = re.fullmatch(r"/projects/([0-9a-f-]{36})/report", request.path)
+    if match:
+        return _page_report(request, match.group(1))
     match = re.fullmatch(r"/projects/([0-9a-f-]{36})/rotate-key", request.path)
     if match:
         return _page_rotate_ingest_key(request, match.group(1))

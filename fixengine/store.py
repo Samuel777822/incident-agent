@@ -482,3 +482,40 @@ def paths_for_incidents(incident_ids) -> dict:
         if r["tier"] and r["result"] not in ("system_fault", "pending"):
             entry["tiers"].append(r["tier"])
     return out
+
+
+# ---- v3: the GitHub proof loop (state lives in fx_flags so no schema migration is needed) ----------------------------------
+def bugs_by_status(status: str, limit: int = 50) -> list[dict]:
+    return _all("SELECT * FROM fx_bugs WHERE status=? ORDER BY created_at ASC LIMIT ?", (status, limit))
+
+
+def gh_state(bug_id) -> dict:
+    try:
+        data = json.loads(get_flag(f"gh:{bug_id}", "") or "{}")
+        return data if isinstance(data, dict) else {}
+    except ValueError:
+        return {}
+
+
+def save_gh_state(bug_id, state: dict) -> None:
+    set_flag(f"gh:{bug_id}", json.dumps(state, sort_keys=True)[:60000])
+
+
+def record_direct_push(incident_id, project_id, *, branch, file_path, diff, head_sha, verification_text) -> None:
+    """The fix is on the customer's tracked branch: store it like a merged fix and resolve the incident."""
+    ts = now()
+    conn = get_connection()
+    try:
+        _execute(conn, "INSERT INTO fixes(id,incident_id,branch,file_path,diff,ci_result,created_at) VALUES(?,?,?,?,?,?,?)",
+                 (new_id(), incident_id, branch, (file_path or "")[:500], (diff or "")[:50000], "merged", ts))
+        _execute(conn, "UPDATE incidents SET report=COALESCE(report,'') || ? WHERE id=? AND project_id=?",
+                 ("\n\nFix pushed directly to your branch (commit " + str(head_sha)[:7] + "). " + verification_text, incident_id, project_id))
+        _execute(conn, "INSERT INTO audit_log(id,project_id,action,detail,created_at) VALUES(?,?,?,?,?)",
+                 (new_id(), project_id, "fix_pushed_direct", json.dumps({"incident_id": incident_id, "sha": head_sha}, sort_keys=True), ts))
+        conn.commit()
+    except Exception:
+        conn.rollback()
+        raise
+    finally:
+        conn.close()
+    portal_db.update_portal_pr_status(incident_id, "merged", merged=True)

@@ -435,6 +435,9 @@ def _fake_github(monkeypatch, entry_source, private=True, mergeable=True, missin
             if url.endswith("/branches/" + name) or url.endswith("/git/ref/heads/" + name):
                 raise mi.GitHubInstallError("GitHub could not find the branch for this token.")
         calls.setdefault("urls", []).append(url)
+        if "/git/trees/" in url and "recursive" in url:      # v3: the installer never guesses; it needs the real file list
+            names = ["README.md"] + (["app.py"] if entry_source is not None else [])
+            return {"tree": [{"path": n, "type": "blob", "size": 100} for n in names]}
         if "/contents/" in url:
             name = url.split("/contents/")[1].split("?")[0]
             if name.startswith(".github/workflows") and existing_workflows:

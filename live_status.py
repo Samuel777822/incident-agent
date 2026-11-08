@@ -27,7 +27,10 @@ INCIDENT_STAGES = {
     "pr_open": ("Fix pushed · pull request ready for your review", "green", 5, False),
     "merging": ("Fix proven · merging into your branch", "blue", 5, True),
     "merged": ("Fixed · the fixed version is on GitHub", "green", 6, False),
-    "needs_human": ("Needs a human", "red", None, False),
+    "github_testing": ("GitHub is testing the fix", "blue", 4, True),
+    "github_failed": ("GitHub test failed · sending the error back to the AI", "amber", 2, True),
+    "pushed": ("Fixed · pushed to your branch", "green", 6, False),
+    "needs_human": ("Needs human review", "red", None, False),
     "resolved": ("Resolved", "green", 6, False),
 }
 PUSH_STAGES = {
@@ -89,7 +92,9 @@ def ago(value) -> str:
 def incident_steps(mode: str) -> list[str]:
     if mode == "report":
         return ["Caught", "Diagnose", "Report ready"]
-    return ["Caught", "Reproduce", "Write fix", "Test fix", "Push to GitHub", "Merge" if mode == "auto" else "Your review"]
+    if mode == "auto":
+        return ["Caught", "Reproduce", "Write fix", "Sandbox test", "GitHub test", "Pushed"]
+    return ["Caught", "Reproduce", "Write fix", "Test fix", "Push to GitHub", "Your review"]
 
 
 def incident_view(inc: dict, mode: str, quota: dict | None = None) -> dict:
@@ -99,7 +104,7 @@ def incident_view(inc: dict, mode: str, quota: dict | None = None) -> dict:
     if not stage:
         stage = {"pr_opened": "pr_open", "needs_human": "needs_human", "resolved": "resolved", "awaiting_choice": "waiting_user",
                  "diagnosed": "resolved" if mode == "report" else "thinking"}.get(status, "diagnosing")
-    if status == "resolved" and stage not in ("merged", "resolved"):
+    if status == "resolved" and stage not in ("merged", "resolved", "pushed"):
         stage = "merged" if inc.get("pr_url") else "resolved"
     if status == "needs_human":
         stage = "needs_human"

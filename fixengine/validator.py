@@ -25,7 +25,7 @@ class PolicyError(ValueError):
 
 
 def check_edits(edits: list[dict], repo_files: dict[str, str], cfg: dict | None = None) -> None:
-    max_files, max_lines = 3, 40
+    max_files, max_lines = 5, 120
     if not edits:
         raise PolicyError("no edits")
     if len({e["file_path"] for e in edits}) > max_files:
@@ -93,6 +93,8 @@ def verification_level(*, baseline_failing, baseline_had_tests: bool, result, ch
     check_failed_before: the bug came from a push check, so the sandbox run that failed on the pushed commit IS the
     reproduction. If that same run (install, build, type-check, tests, site check, start-up) is green after the fix, the fix
     is proven even when the project has no tests."""
+    if result.passed and getattr(result, "journeys_ran", False) and baseline_failing not in (None, 0):
+        return "journey_fixed"           # a real browser journey failed before the fix and passes now
     if check_failed_before and result.passed and baseline_failing not in (None, 0):
         if result.tests_ran and baseline_had_tests and baseline_failing > 0:
             return "tests_fixed"
@@ -108,9 +110,11 @@ def verification_level(*, baseline_failing, baseline_had_tests: bool, result, ch
     return "failed"
 
 
-PROVEN_LEVELS = ("tests_fixed", "check_fixed")
+PROVEN_LEVELS = ("tests_fixed", "check_fixed", "journey_fixed")
 
 VERIFY_TEXT = {
+    "journey_fixed": "A browser journey (opening the pages and clicking the buttons) failed before the fix and passes with it, and the build and checks pass too.",
+    "parse_only": "Every changed file still parses. The sandbox could not be used for this check.",
     "check_fixed": "The pushed commit failed our sandbox check (install, build, type-check, tests or site check). With this fix the same check passes.",
     "tests_fixed": "Tests that failed before the fix now pass, the project builds, and (where detectable) it starts.",
     "tests_pass_not_reproduced": "The project's tests pass, but they did not reproduce this error before the fix, so the fix is NOT proven. Review carefully.",

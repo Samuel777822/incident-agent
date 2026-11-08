@@ -31,10 +31,27 @@ def _get(url: str, headers: dict | None = None) -> dict | None:
         return None
 
 
+def _is_zero(value) -> bool:
+    try:
+        return float(value) == 0.0
+    except (TypeError, ValueError):
+        return False
+
+
+def _or_entry(m: dict) -> dict:
+    """One OpenRouter model: id, age, whether it costs nothing, context size and what it accepts/produces."""
+    pricing = m.get("pricing") or {}
+    arch = m.get("architecture") or {}
+    mid = str(m.get("id"))
+    free = mid.endswith(":free") or (_is_zero(pricing.get("prompt")) and _is_zero(pricing.get("completion")) and "prompt" in pricing)
+    return {"id": mid, "created": int(m.get("created") or 0), "free": bool(free), "context": int(m.get("context_length") or 0),
+            "modality": str(arch.get("modality") or ""), "name": str(m.get("name") or "")[:80]}
+
+
 def _fetch(provider: str) -> list[dict] | None:
     if provider == "openrouter":
         data = _get("https://openrouter.ai/api/v1/models")
-        return [{"id": str(m.get("id")), "created": int(m.get("created") or 0)} for m in (data or {}).get("data", [])] if data else None
+        return [_or_entry(m) for m in (data or {}).get("data", [])] if data else None
     if provider == "anthropic" and os.getenv("ANTHROPIC_API_KEY"):
         data = _get("https://api.anthropic.com/v1/models?limit=1000",
                     {"x-api-key": os.environ["ANTHROPIC_API_KEY"], "anthropic-version": "2023-06-01"})

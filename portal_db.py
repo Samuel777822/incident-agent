@@ -2151,7 +2151,7 @@ def record_monitor_install(project_id: str, targets: list, *, installed: bool) -
         conn.close()
 
 
-def record_heartbeat(project_id: str, monitor: str, component: str = "", version: str = "", runtime: str = "") -> None:
+def record_heartbeat(project_id: str, monitor: str, component: str = "", version: str = "", runtime: str = "", touch_project: bool = True) -> None:
     """One check-in from one monitor (python / node / browser) of one part of the repo."""
     monitor = (monitor or "unknown")[:20]
     component = (component or "")[:80]
@@ -2162,7 +2162,8 @@ def record_heartbeat(project_id: str, monitor: str, component: str = "", version
                           VALUES(?,?,?,?,?,1,?,?) ON CONFLICT(project_id,monitor,component) DO UPDATE SET
                           last_seen=excluded.last_seen,beats=monitor_heartbeats.beats+1,version=excluded.version,runtime=excluded.runtime""",
                  (project_id, monitor, component, now, now, version[:20], runtime[:40]))
-        _execute(conn, "UPDATE projects SET status='connected',last_heartbeat_at=?,monitor_alerted_at='' WHERE id=?", (now, project_id))
+        if touch_project:     # the site check ('probe') must not hide that the monitor itself was never deployed
+            _execute(conn, "UPDATE projects SET status='connected',last_heartbeat_at=?,monitor_alerted_at='' WHERE id=?", (now, project_id))
         conn.commit()
     finally:
         conn.close()
@@ -2203,6 +2204,7 @@ def monitor_state(project: dict, beats: list[dict] | None = None) -> dict:
         return {"state": "push_only", "tone": "", "headline": "Live monitor off (push checks only)", "detail": "", "last_checkin": "",
                 "server_side": False}
     beats = beats if beats is not None else list_monitor_heartbeats(project["id"])
+    beats = [b for b in beats if b["monitor"] != "probe"]          # the site check has its own line (site_check_state)
     try:
         targets = json.loads(project.get("monitor_targets_json") or "[]")
     except ValueError:
@@ -2233,6 +2235,22 @@ def monitor_state(project: dict, beats: list[dict] | None = None) -> dict:
     return {"state": "offline", "tone": "red", "headline": "Monitor offline",
             "detail": "No check-in for a while. Your app may be down, asleep (free hosting sleeps after ~15 minutes), or was "
                       "re-deployed without the monitor.", "last_checkin": last, "server_side": True}
+
+
+def site_check_state(project: dict, beats: list[dict] | None = None) -> dict:
+    """The 30-second check of the site address itself: {state: answering|silent|no_address, headline, detail}."""
+    if not (project.get("app_url") or "").strip():
+        return {"state": "no_address", "tone": "", "headline": "Site check: no site address yet",
+                "detail": "Add your live site address (or set it as the repository's website on GitHub) and the agent checks it every 30 seconds."}
+    beats = beats if beats is not None else list_monitor_heartbeats(project["id"])
+    probe = next((b for b in beats if b["monitor"] == "probe"), None)
+    age = _age_seconds(probe["last_seen"]) if probe else None
+    if age is not None and age <= 120:
+        return {"state": "answering", "tone": "green", "headline": "Site check: your site is answering", "detail": "Checked every 30 seconds.",
+                "last_checkin": probe["last_seen"]}
+    return {"state": "silent", "tone": "amber", "headline": "Site check: no good answer lately",
+            "detail": "The agent could not get a normal page from your site address in the last two minutes (the host may be down or asleep).",
+            "last_checkin": probe["last_seen"] if probe else ""}
 
 
 def projects_needing_monitor_alert() -> list[dict]:

@@ -15,15 +15,8 @@ import urllib.request
 def main() -> int:
     port, wait, command = int(sys.argv[1]), float(sys.argv[2]), sys.argv[3]
     env = dict(os.environ, PORT=str(port), HOST="0.0.0.0")
-    windows = sys.platform == "win32"
-    if windows:
-        # cmd.exe does not expand $PORT and has no python3 launcher: substitute both before starting.
-        command = command.replace("${PORT}", str(port)).replace("$PORT", str(port))
-        if command.startswith("python3 ") or " python3 " in command:
-            command = command.replace("python3 ", f'"{sys.executable}" ')
-    popen_kwargs = {"creationflags": subprocess.CREATE_NEW_PROCESS_GROUP} if windows else {"start_new_session": True}
     proc = subprocess.Popen(command, shell=True, env=env, stdout=subprocess.PIPE, stderr=subprocess.STDOUT,
-                            text=True, **popen_kwargs)
+                            text=True, start_new_session=True)
     deadline, status = time.time() + wait, None
     try:
         while time.time() < deadline:
@@ -40,10 +33,7 @@ def main() -> int:
                 time.sleep(0.5)
     finally:
         try:
-            if windows:
-                subprocess.run(["taskkill", "/T", "/F", "/PID", str(proc.pid)], capture_output=True, timeout=10)
-            else:
-                os.killpg(os.getpgid(proc.pid), signal.SIGTERM)
+            os.killpg(os.getpgid(proc.pid), signal.SIGTERM)
         except Exception:
             pass
     try:

@@ -78,29 +78,6 @@ class AdapterError(RuntimeError):
 
 _CONFIG_WORDS = ("no endpoints", "data policy", "guardrail", "not a valid model", "model not found", "model_not_found",
                  "does not exist", "decommission", "no longer available", "not found")
-_MODEL_GONE_WORDS = ("not a valid model", "model not found", "model_not_found", "does not exist", "decommission",
-                     "no longer available", "no endpoints found for", "unknown model", "retired", "deprecated", "not_found_error")
-
-
-def choose_live_replacement(provider: str, model: str, *, allow_network: bool = True) -> str | None:
-    """When a provider rejects `model` as unavailable/retired, check the provider's current catalogue for a compatible
-    replacement on the same provider. Never invents model IDs or switches providers."""
-    from . import model_catalog, model_fix
-    if not allow_network and provider not in model_catalog._CACHE:
-        return None
-    listing = model_catalog.models(provider)
-    if not listing:
-        return None
-    live = {m["id"] for m in listing if m.get("id")}
-    if model in live:
-        return None
-    if model.endswith(":free") and model.removesuffix(":free") in live:
-        return model.removesuffix(":free")
-    choice = model_fix.choose_replacement(model, provider)
-    new = choice.get("new") or ""
-    if choice.get("verified") and new and new != model and new in live:
-        return new
-    return None
 
 
 def _detail(resp) -> str:
@@ -199,7 +176,7 @@ class AnthropicAdapter(BaseAdapter):
                 "system": [{"type": "text", "text": system}],
                 "messages": [{"role": "user", "content": content}]}
         headers = {"x-api-key": key, "anthropic-version": "2023-06-01", "content-type": "application/json"}
-        last, last_status, replaced = "unknown error", None, False
+        last, last_status = "unknown error", None
         for attempt in range(4):
             try:
                 if self._client is not None:
@@ -227,15 +204,7 @@ class AnthropicAdapter(BaseAdapter):
             if code in (401, 403):
                 raise AdapterError("auth", f"Anthropic rejected the API key (HTTP {code})", provider="anthropic", model=self.model, status=code)
             if code in (400, 404, 413):
-                detail = _detail(resp)
-                if not replaced and (code == 404 or any(w in detail.lower() for w in _MODEL_GONE_WORDS)):
-                    rep = choose_live_replacement("anthropic", self.model, allow_network=(self._client is None))
-                    if rep:
-                        log.warning("anthropic model %s unavailable; retrying with verified catalogue replacement %s", self.model, rep)
-                        self.model = body["model"] = rep
-                        replaced = True
-                        continue
-                raise _client_error("anthropic", self.model, code, detail)
+                raise _client_error("anthropic", self.model, code, _detail(resp))
             if code == 429 or code >= 500:
                 last = f"HTTP {code}"
                 last_status = code
@@ -279,7 +248,7 @@ class GroqAdapter(BaseAdapter):
         body = {"model": self.model, "temperature": 0.1, "max_tokens": int(max_tokens),
                 "messages": [{"role": "system", "content": system}, {"role": "user", "content": user}],
                 "response_format": {"type": "json_object"}, "reasoning_effort": "low"}
-        last, last_status, replaced = "unknown", None, False
+        last, last_status = "unknown", None
         for attempt in range(3):
             try:
                 resp = self._post(body)
@@ -304,15 +273,7 @@ class GroqAdapter(BaseAdapter):
                 last, last_status = f"HTTP {code}", code; _sleep_backoff(attempt, self._sleep); continue
             if code >= 500:
                 last, last_status = f"HTTP {code}", code; _sleep_backoff(attempt, self._sleep); continue
-            detail = _detail(resp)
-            if not replaced and (code == 404 or any(w in detail.lower() for w in _MODEL_GONE_WORDS)):
-                rep = choose_live_replacement("groq", body["model"], allow_network=(self._client is None))
-                if rep:
-                    log.warning("groq model %s unavailable; retrying with verified catalogue replacement %s", body["model"], rep)
-                    self.model = body["model"] = rep
-                    replaced = True
-                    continue
-            raise _client_error("groq", body["model"], code, detail)
+            raise _client_error("groq", body["model"], code, _detail(resp))
         raise AdapterError("rate_limit" if "429" in last or "413" in last else "outage", f"Groq unavailable after retries ({last})",
                            provider="groq", model=body["model"], status=last_status)
 
@@ -363,7 +324,7 @@ class OpenRouterAdapter(BaseAdapter):
                 "usage": {"include": True}}
         if self.tier == "groq":                                          # the free tier uses an open reasoning model
             body["reasoning"] = {"effort": "low"}
-        last, last_status, replaced = "unknown", None, False
+        last, last_status = "unknown", None
         for attempt in range(4):
             try:
                 resp = self._post(body)
@@ -398,13 +359,6 @@ class OpenRouterAdapter(BaseAdapter):
             if code in (400, 404, 413):
                 detail = _detail(resp)
                 privacy = code == 404 and any(w in detail.lower() for w in ("data policy", "guardrail", "publish"))
-                if not privacy and not replaced and (code == 404 or any(w in detail.lower() for w in _MODEL_GONE_WORDS)):
-                    rep = choose_live_replacement("openrouter", self.model, allow_network=(self._client is None))
-                    if rep:
-                        log.warning("openrouter model %s unavailable; retrying with verified catalogue replacement %s", self.model, rep)
-                        self.model = body["model"] = rep
-                        replaced = True
-                        continue
                 raise _client_error("openrouter", self.model, code, detail, self.PRIVACY_HINT if privacy else "")
             if code == 429 or code >= 500:
                 last, last_status = f"HTTP {code}", code

@@ -117,8 +117,8 @@ G_NODES = {
              "Public repositories get nothing installed, because anyone could read the monitor's connection details."),
     "private": ("amber", "🧭", "Make it private", "step-by-step screen", "A simple screen shows how to make the repository private "
                 "(computer and phone). The button 'I've made it private, install now' asks GitHub again."),
-    "install": ("violet", "📦", "Install monitor", "1 PR, merged for you", "We detect every part of the repo (Python, Node.js, "
-                "TypeScript, HTML/JS, React, Next.js, mixed repos), add the right monitor to each, and merge the pull request."),
+    "install": ("violet", "📦", "Install monitor", "committed for you", "We detect every part of the repo (Python, Node.js, "
+                "TypeScript, HTML/JS, React, Next.js, mixed repos), add the right monitor to each, and commit it to your branch (a pull request only if your branch is protected)."),
     "monitors": ("cyan", "🛰", "Monitor in your app", "Python, Node, web", "Each monitor catches crashes, unhandled promise "
                  "rejections, console errors and failed API calls (for example a retired AI model), with the full message."),
     "heartbeat": ("cyan", "💓", "Heartbeat · 30 s", "id · status · time", "Every monitor checks in every 30 seconds, so a "
@@ -142,8 +142,8 @@ G_NODES = {
     "fix": ("green", "🩹", "Fix", "small, safe patch", "At most 3 files and 40 lines; never tests, CI, dependencies or secrets."),
     "tests": ("green", "✅", "Tests", "same check must pass", "Your tests (or build / lint / parse checks) run on the patched code. "
               "Not green? Nothing is pushed and the agent tries again."),
-    "pr": ("green", "🚀", "Pull request", "merged when proven", "A branch agent-daemon/fix-… and a pull request. Auto mode merges it "
-           "once proven. Visibility is re-checked before every commit we make."),
+    "pr": ("green", "🚀", "Test, then push", "pushed when proven", "A test branch agent-daemon/fix-… where your GitHub tests run. Auto mode pushes the fix "
+           "to your branch once proven. Visibility is re-checked before every commit we make."),
 }
 
 G_EDGES_LEGEND = [("violet", "", "Setup"), ("cyan", "", "Monitoring data"), ("magenta", "", "AI request"),

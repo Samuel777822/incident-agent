@@ -15,7 +15,7 @@ import html
 import re
 from datetime import datetime, timedelta, timezone
 
-LIVE_JS_VERSION = "2"
+LIVE_JS_VERSION = "3"
 
 _TONES = {"green", "amber", "red", "blue", "muted"}
 _DIAGNOSING = {"diagnosing", "queued", "processing"}
@@ -234,19 +234,14 @@ def render_board(project_id: str, incidents: list, mode: str) -> str:
 _STYLE = """<style>
 .board-head{display:flex;justify-content:flex-end;margin:-6px 0 10px}
 .live{font-size:12px;color:#8ce4c0}.live[data-state='off']{color:#ffdc91}
-.inc{background:linear-gradient(145deg,#170d22,#0f0817);border:1px solid var(--line);border-radius:16px;margin:0 0 14px;overflow:hidden}
+.inc{background:linear-gradient(145deg,#171027,#0e0a18);border:1px solid var(--line);border-radius:20px;margin:0 0 16px;overflow:hidden;box-shadow:0 12px 40px #0004}
+.inc[data-active='1']{border-color:#3b5a99;box-shadow:0 12px 40px #1b3a7a40}
 .inc>details>summary{list-style:none;cursor:pointer;padding:18px 20px;display:block}
 .inc>details>summary::-webkit-details-marker{display:none}
 .inc-top{display:flex;justify-content:space-between;align-items:center;gap:12px;flex-wrap:wrap}
 .inc-sub{margin:6px 0 12px;font-size:13px}
 .pill.tone-green{color:#8ce4c0;background:#14392f}.pill.tone-amber{color:#ffdc91;background:#3a301b}
 .pill.tone-red{color:#ffb3b3;background:#3d1c24}.pill.tone-blue{color:#d6c8ff;background:#2a1d4a}.pill.tone-muted{color:#b8c9df;background:#1b2d43}
-.steps{list-style:none;display:flex;flex-wrap:wrap;gap:6px 18px;margin:0;padding:0;font-size:13px}
-.steps li{display:flex;align-items:center;gap:7px;color:#7d8ba3}
-.steps .dot{width:10px;height:10px;border-radius:50%;border:2px solid #4a3556;background:transparent;flex:none}
-.steps .done{color:#cfe9de}.steps .done .dot{background:#55d6a1;border-color:#55d6a1}
-.steps .active{color:#ffe6a8}.steps .active .dot{border-color:#f0c36b;background:#f0c36b;animation:pulse 1.2s ease-in-out infinite}
-.steps .fail{color:#ffb3b3}.steps .fail .dot{background:#ff7a8a;border-color:#ff7a8a}
 @keyframes pulse{50%{opacity:.35}}
 .hint{display:inline-block;margin-top:12px;font-size:12px;color:var(--blue)}
 .inc>details[open] .hint{display:none}
@@ -268,7 +263,7 @@ def render_board_section(project_id: str, incidents: list, mode: str) -> str:
 
 
 LIVE_JS = """(function () {
-  // Any element with data-live="<url>" re-fetches its HTML: every 3 s while something in it is working, every 15 s otherwise.
+  // Any element with data-live="<url>" re-fetches its HTML every 5 seconds (15 s after a failed fetch).
   var boxes = document.querySelectorAll('[data-live]');
   var dot = document.getElementById('live-dot');
   function setDot(ok) {
@@ -293,7 +288,7 @@ LIVE_JS = """(function () {
     function isActive() { return !!box.querySelector('[data-active="1"]'); }
     function schedule() {
       clearTimeout(timer);
-      timer = setTimeout(tick, failures ? 15000 : (isActive() ? 3000 : 15000));
+      timer = setTimeout(tick, failures ? 15000 : 5000);
     }
     function tick() {
       if (document.hidden) { schedule(); return; }

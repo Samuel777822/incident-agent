@@ -18,6 +18,7 @@ from __future__ import annotations
 import ast
 import base64
 import json
+import os
 import posixpath
 import re
 import time
@@ -110,7 +111,6 @@ MONITOR_DIR = Path(__file__).with_name("monitors")
 PY_FILE, PY_CONFIG = "incident_agent_monitor.py", "incident_agent_config.json"
 NODE_FILE, NODE_CONFIG = "incident-agent-monitor.cjs", "incident-agent-config.json"
 BROWSER_FILE = "incident-agent-monitor.js"
-JAVA_FILE = "AgentDaemonMonitor.java"
 MARKER = "incident-agent-monitor"
 ENTRY_CANDIDATES = ("app.py", "main.py", "wsgi.py", "server.py", "run.py", "application.py", "manage.py", "index.py")
 IMPORT_LINE = "import incident_agent_monitor  # noqa: F401  (Agent Daemon error monitoring)"
@@ -141,18 +141,6 @@ def browser_source(config: dict) -> str:
     text = (MONITOR_DIR / "browser_monitor.js").read_text(encoding="utf-8")
     start, end = text.index("/*__AGENT_DAEMON_CONFIG__*/"), text.index("/*__END__*/") + len("/*__END__*/")
     return text[:start] + json.dumps(config, separators=(", ", ": ")) + text[end:]
-
-
-def java_source(*, package: str, ingest_url: str, heartbeat_url: str, ingest_key: str,
-                project_id: str, component: str) -> str:
-    """Build the Java monitor with this project's send-only ingest credentials."""
-    text = (MONITOR_DIR / "AgentDaemonMonitor.java.template").read_text(encoding="utf-8")
-    package_line = f"package {package};\n\n" if package else ""
-    text = text.replace("__PACKAGE__", package_line)
-    for name, value in {"INGEST_URL": ingest_url, "HEARTBEAT_URL": heartbeat_url, "INGEST_KEY": ingest_key,
-                        "PROJECT_ID": project_id, "COMPONENT": component}.items():
-        text = text.replace(f"__{name}__", json.dumps(value, ensure_ascii=True))
-    return text
 
 
 def _insert_import(source: str, line: str = IMPORT_LINE):
@@ -265,51 +253,35 @@ def _node_start_entry(pkg: dict) -> tuple[str, str]:
     return "", ""
 
 
-def _java_main_entry(base: str, names: set[str], read) -> str:
-    """Find a conventional Java application entry point under a Maven or Gradle module."""
-    prefix = base + "/" if base else ""
-    pattern = re.compile(r"\bpublic\s+static\s+void\s+main\s*\(\s*String\s*(?:\[\s*\]|\.\.\.)\s*[\w$]+\s*\)")
-    for path in sorted(n for n in names if n.startswith(prefix + "src/main/java/") and n.endswith(".java")):
-        if pattern.search(read(path) or ""):
-            return path
-    return ""
+SCRIPT_SRC = re.compile(r"""<script[^>]*\bsrc\s*=\s*["']([^"'#?]+)""", re.I)
+SERVERLESS_DIRS = ("api", "netlify/functions", "functions")
 
 
-def _insert_java_monitor(source: str) -> str | None:
-    """Add the monitor start block to the Java class with the application's main method."""
-    if "AgentDaemonMonitor.start()" in source:
-        return source
-    main = re.search(r"\bpublic\s+static\s+void\s+main\s*\(\s*String\s*(?:\[\s*\]|\.\.\.)\s*[\w$]+\s*\)", source)
-    if not main:
-        return None
-    class_match = re.search(r"\bclass\s+[\w$]+[^{}]*\{", source[:main.start()])
-    if not class_match:
-        return None
-    open_brace = class_match.end() - 1
-    return source[:open_brace + 1] + "\n    static { AgentDaemonMonitor.start(); } // Agent Daemon error monitoring\n" + source[open_brace + 1:]
+def _script_refs(names, read) -> set[str]:
+    """Paths of JavaScript files that an HTML page loads with <script src>. They run in the BROWSER, so they are never a Node
+    server entry and must never get a Node `require(...)` line (that throws "require is not defined" and kills the page's script)."""
+    out: set[str] = set()
+    for page in sorted(n for n in names if n.lower().endswith((".html", ".htm")))[:40]:
+        folder = posixpath.dirname(page)
+        for match in SCRIPT_SRC.finditer(read(page) or ""):
+            src = match.group(1).strip()
+            if re.match(r"^(https?:)?//", src) or src.startswith("data:"):
+                continue
+            out.add(posixpath.normpath(src.lstrip("/")))
+            out.add(posixpath.normpath(posixpath.join(folder, src.lstrip("/"))))
+    return out
 
 
 def detect_targets(paths, read) -> list[dict]:
     """Every part of the repository that needs its own monitor.
 
     paths: every file path in the repo (posix, relative). read(path) -> text or None.
-    Each target: {kind: java|python|node|browser, base, framework, entry, label}."""
+    Each target: {kind: python|node|browser, base, framework, entry, label}."""
     names = {p for p in paths if _visible(p)}
     targets: list[dict] = []
     handled_html: set[str] = set()
     spa_bases: set[str] = set()
-
-    # --- Java applications (one monitor for each conventional Maven/Gradle module)
-    java_bases = set()
-    for path in names:
-        absolute = "/" + path
-        marker = "/src/main/java/"
-        if path.endswith(".java") and marker in absolute:
-            java_bases.add(absolute.split(marker, 1)[0].lstrip("/"))
-    for base in sorted(java_bases):
-        entry = _java_main_entry(base, names, read)
-        if entry:
-            targets.append({"kind": "java", "base": base, "framework": "java", "entry": entry, "label": "Java app"})
+    browser_scripts = _script_refs(names, read)
 
     # --- Node / JavaScript / TypeScript projects (every package.json)
     for pkg_path in sorted(n for n in names if n.endswith("package.json") and n.count("/") <= 3):
@@ -339,10 +311,12 @@ def detect_targets(paths, read) -> list[dict]:
         how, entry = _node_start_entry(pkg)
         if how == "file" and _join(base, entry) not in names:   # e.g. npm init's default "main": "index.js" that does not exist
             how, entry = "", ""
+        if entry and _join(base, entry) in browser_scripts:     # a page loads this file with <script src>: it is browser code
+            how, entry = "", ""
         if not entry:
             for cand in ("server.js", "index.js", "app.js", "src/server.js", "src/index.js", "src/app.js", "server.mjs", "index.mjs",
                          "api/index.js", "server/index.js"):
-                if prefix + cand in names:
+                if prefix + cand in names and prefix + cand not in browser_scripts:
                     how, entry = "file", cand
                     break
         is_server = bool(server) or (bool(entry) and not spa)
@@ -351,6 +325,17 @@ def detect_targets(paths, read) -> list[dict]:
             targets.append({"kind": "node", "base": base, "framework": server or "node", "entry": _join(base, entry) if entry else "",
                             "how": how, "esm": module, "label": {"express": "Express server", "fastify": "Fastify server",
                                                                   "@nestjs/core": "NestJS server"}.get(server, "Node.js server")})
+
+    # --- serverless functions (Vercel api/, Netlify functions): where chatbots usually call the AI provider with the secret key
+    if not any(t["kind"] == "node" and t["base"] == "" for t in targets):
+        for fdir in SERVERLESS_DIRS:
+            depth = fdir.count("/") + 1
+            funcs = sorted(n for n in names if n.startswith(fdir + "/") and n.count("/") == depth
+                           and n.endswith((".js", ".mjs", ".cjs")) and n not in browser_scripts)[:20]
+            if funcs:
+                targets.append({"kind": "node", "base": "", "framework": "serverless", "entry": fdir + "/", "functions": funcs,
+                                "label": f"Serverless functions ({fdir}/)"})
+                break
 
     # --- Python projects (one target per project folder; a nested folder is skipped when a parent already has an app)
     py_bases = set()
@@ -410,25 +395,7 @@ def plan_install(targets: list[dict], read, *, ingest_url: str, ingest_key: str,
     for t in targets:
         label, base = t["label"], t["base"]
         component = f"{t['kind']}:{base or '.'}"
-        if t["kind"] == "java":
-            entry = t["entry"]
-            source = current(entry) or ""
-            patched = _insert_java_monitor(source)
-            if patched is None:
-                results.append({"label": label, "kind": "java", "wired": False, "file": entry,
-                                "note": f"{entry} does not have a supported public static void main entry point, so Java monitoring was not enabled."})
-                continue
-            package_match = re.search(r"(?m)^\s*package\s+([\w.]+)\s*;", source)
-            package = package_match.group(1) if package_match else ""
-            folder = posixpath.dirname(entry)
-            files[_join(folder, JAVA_FILE)] = java_source(
-                package=package, ingest_url=ingest_url, heartbeat_url=heartbeat_url, ingest_key=ingest_key,
-                project_id=project_id, component=component)
-            if patched != source:
-                files[entry] = patched
-            results.append({"label": label, "kind": "java", "wired": True, "file": entry,
-                            "how": f"uncaught exception handler and 30-second heartbeat in {entry}"})
-        elif t["kind"] == "python":
+        if t["kind"] == "python":
             entry = t["entry"]
             folder = posixpath.dirname(entry) if entry else base
             files[_join(folder, PY_FILE)] = _client_source()
@@ -476,6 +443,25 @@ def plan_install(targets: list[dict], read, *, ingest_url: str, ingest_key: str,
                 results.append({"label": label, "kind": "node", "wired": False, "file": inst_ts if current(inst_ts) else inst_js,
                                 "note": "This app already has its own instrumentation file, so we did not change it. "
                                         f"Add `await import('{rel}')` inside its register() function."})
+        elif t["kind"] == "node" and t["framework"] == "serverless":
+            files[_join(base, NODE_FILE)] = node_source()
+            if embedded:
+                files[_join(base, NODE_CONFIG)] = server_config(component)
+            wired = []
+            for fn in t.get("functions", []):
+                source = current(fn)
+                if source is None:
+                    continue
+                if MARKER not in source:
+                    rel = _rel(posixpath.dirname(fn), _join(base, NODE_FILE))
+                    rel = rel if rel.startswith(".") else "./" + rel
+                    esm = fn.endswith(".mjs") or bool(re.search(r"^\s*(import|export)\s", source, re.M))
+                    line = (f"import '{rel}'; // Agent Daemon error monitoring" if esm else f"require('{rel}'); // Agent Daemon error monitoring")
+                    files[fn] = insert_js_require(source, line)
+                wired.append(fn)
+            results.append({"label": label, "kind": "node", "wired": bool(wired), "file": wired[0] if wired else "",
+                            "how": f"one line at the top of {len(wired)} function file(s)" if wired else "",
+                            "note": "" if wired else "No function file could be read."})
         elif t["kind"] == "node":
             files[_join(base, NODE_FILE)] = node_source()
             if embedded:
@@ -744,58 +730,63 @@ def open_monitoring_pr(*, owner: str, repo: str, base_branch: str, project_id: s
         python_hits = [r for r in results if r["kind"] == "python" and r.get("wired")]
         patched_file = python_hits[0]["file"] if python_hits else next((r["file"] for r in results if r.get("wired")), None)
         entry_name = patched_file or next((r["file"] for r in results if r.get("file")), None)
-    else:   # the file list could not be read: the classic Python-only install
-        targets, results = [], []
-        base_files = {PY_FILE: _client_source()}
-        if embedded:
-            base_files[PY_CONFIG] = json.dumps({"ingest_url": ingest_url, "heartbeat_url": ingest_url.rsplit("/", 1)[0] + "/heartbeat",
-                                                "ingest_key": ingest_key, "project_id": project_id, "component": "python:."},
-                                               indent=2) + "\n"
-        entry_name, entry_source = _find_entry_file(api, token, base_branch)
-        patched_file = None
-        if entry_name:
-            patched = _insert_import(entry_source)
-            if patched is not None and patched != entry_source:
-                base_files[entry_name] = patched
-                patched_file = entry_name
-        results = [{"label": "Python app", "kind": "python", "wired": bool(patched_file or (entry_name and entry_source and "incident_agent_monitor" in entry_source)),
-                    "file": entry_name or "", "how": f"one import line at the top of {entry_name}" if entry_name else "",
-                    "note": "" if entry_name else "We could not find the file that starts your app."}]
+    else:   # never guess: a Python-only install on a repo we could not read is exactly how JS sites got Python errors
+        raise GitHubInstallError("GitHub did not return this repository's file list. Nothing was changed. Try again in a minute.")
     had_ci = _has_workflows(api, token, base_branch)
 
     def build_files(with_workflow: bool) -> dict:
         out = dict(base_files)
         if with_workflow:
             out[WORKFLOW_PATH] = WORKFLOW_SOURCE
-        out["INCIDENT_AGENT_SETUP.md"] = _setup_guide(project_id, patched_file, embedded, with_workflow, had_ci, results if paths else None)
+        out["INCIDENT_AGENT_SETUP.md"] = _setup_guide(project_id, patched_file, embedded, with_workflow, had_ci, results)
         return out
 
-    def push(file_map: dict) -> bool:
-        """Create the install branch. Returns False when it would change nothing."""
+    direct = auto_merge and os.getenv("AGENT_DIRECT_PUSH", "1").strip().lower() not in ("0", "false", "no", "off")
+
+    def push(file_map: dict, make_branch: bool = True) -> str:
+        """Create the commit (and, for the pull-request route, the install branch). Returns '' when it would change nothing."""
         entries = [{"path": path, "mode": "100644", "type": "blob", "sha": _blob(api, token, content)}
                    for path, content in file_map.items()]
         tree = _request(api + "/git/trees", token, "POST", {"base_tree": base_commit["tree"]["sha"], "tree": entries})["sha"]
         if tree == base_commit["tree"]["sha"]:
-            return False
+            return ""
         commit = _request(api + "/git/commits", token, "POST", {
-            "message": "chore: add Agent Daemon error monitoring", "tree": tree, "parents": [base]})["sha"]
-        _request(api + "/git/refs", token, "POST", {"ref": f"refs/heads/{branch}", "sha": commit})
-        return True
+            "message": "chore: add Agent Daemon error monitoring [agent-daemon]", "tree": tree, "parents": [base]})["sha"]
+        if make_branch:
+            _request(api + "/git/refs", token, "POST", {"ref": f"refs/heads/{branch}", "sha": commit})
+        return commit
+
+    def land(file_map: dict) -> tuple[str, str]:
+        """('sha', 'direct' | 'branch'). Direct = the tracked branch moves to the commit (no pull request)."""
+        commit = push(file_map, make_branch=not direct)
+        if not commit:
+            return "", ""
+        if direct:
+            try:
+                _request(f"{api}/git/refs/heads/{ref}", token, "PATCH", {"sha": commit, "force": False})
+                return commit, "direct"
+            except GitHubInstallError:     # protected branch (or a token problem): fall back to the pull request route
+                _request(api + "/git/refs", token, "POST", {"ref": f"refs/heads/{branch}", "sha": commit})
+        return commit, "branch"
 
     summary = {"targets": results, "kinds": sorted({r["kind"] for r in results})}
     workflow_added = not had_ci
     try:
-        pushed = push(build_files(workflow_added))
+        pushed, route = land(build_files(workflow_added))
     except GitHubInstallError:
         if not workflow_added:
             raise
         # Most likely the token lacks the Workflows permission: still install monitoring, without the workflow.
         workflow_added = False
-        pushed = push(build_files(False))
+        pushed, route = land(build_files(False))
     if not pushed:  # a retry where everything is already installed and the workflow still cannot be added
         return {"url": "", "number": 0, "branch": "", "base_branch": base_branch, "merged": False,
                 "patched_file": patched_file, "entry_file": entry_name, "embedded_key": embedded,
                 "workflow_added": False, "had_ci": had_ci, "unchanged": True, **summary}
+    if route == "direct":
+        return {"url": f"https://github.com/{owner}/{repo}/commit/{pushed}", "number": 0, "branch": base_branch, "base_branch": base_branch,
+                "merged": True, "direct": True, "patched_file": patched_file, "entry_file": entry_name, "embedded_key": embedded,
+                "workflow_added": workflow_added, "had_ci": had_ci, **summary}
     body = ("Adds Agent Daemon error monitoring for every part of this repository. Merging this pull request is the only step "
             "needed: monitoring starts the next time your app deploys and checks in every 30 seconds. If your repository had no "
             "GitHub Actions workflow, one is added so Auto mode has a passing check to wait for.\n\nSee INCIDENT_AGENT_SETUP.md for what changed.")

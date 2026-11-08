@@ -96,6 +96,8 @@ DEFAULTS: dict = {
         "image_python": "fixengine-sandbox-python:1",
         "image_node": "fixengine-sandbox-node:1",     # also used for static HTML/CSS/JS sites
         "image_java": "fixengine-sandbox-java:1",
+        "image_browser": "fixengine-sandbox-browser:1",   # optional: headless-browser journeys for static sites (see sandbox/Dockerfile.browser)
+        "journey_timeout_seconds": 150,
         "max_repo_mb": 50,
         "max_repo_files": 6000,
     },

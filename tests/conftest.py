@@ -31,6 +31,11 @@ def _isolated_environment(monkeypatch):
                  "ADMIN_EMAIL", "UPI_ID", "UPI_PAYEE_NAME"):
         monkeypatch.delenv(name, raising=False)
     monkeypatch.setenv("ADMIN_EMAILS", "admin1@example.com,admin2@example.com")
+    # v3 defaults for the OLD tests: they expect the pull-request flow, an offline model catalog and no browser journeys.
+    # The v3 tests (tests/test_v3.py) switch direct push back on themselves.
+    monkeypatch.setenv("AGENT_DIRECT_PUSH", "0")
+    monkeypatch.setenv("MODEL_CATALOG_OFFLINE", "1")
+    monkeypatch.setenv("FIX_JOURNEYS_ENABLED", "0")
 
 
 @pytest.fixture(autouse=True)

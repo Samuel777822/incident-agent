@@ -935,7 +935,7 @@ def render_homepage_html() -> str:
             </div>
             <div style="margin-top:10px;font-size:11.5px;color:#8ce4c0;display:flex;justify-content:space-between;align-items:center">
               <span>Branch: <code>agent-daemon/fix-checkout-keyerror</code></span>
-              <span class="pill green" style="padding:2px 8px;font-size:10.5px">Auto mode: merged</span>
+              <span class="pill green" style="padding:2px 8px;font-size:10.5px">Auto mode: pushed</span>
             </div>
           </div>
         </div>
@@ -1063,7 +1063,7 @@ def render_homepage_html() -> str:
       </div>
       <h3 style="font-size:18px;margin:0 0 10px;color:var(--text);font-family:var(--serif)">Fix pushed back</h3>
       <p style="color:var(--muted);font-size:14px;line-height:1.6;margin:0">
-        The fix lands on a new branch with a pull request. Auto mode merges it as soon as it is proven, so the fixed version is on GitHub before you deploy.
+        The fix is tested on a branch first. Pull request mode gives you a pull request. Auto mode runs your GitHub tests and pushes the proven fix to your branch, so the fixed version is on GitHub before you deploy.
       </p>
     </div>
   </div>
@@ -1107,7 +1107,7 @@ def render_homepage_html() -> str:
       <span class="feature-num">04</span>
       <div class="feature-icon-box">{ICON_PR}</div>
       <h3>Fixes pushed to GitHub</h3>
-      <p>Small, proven patches on a fix branch with a pull request; merged for you in Auto mode.</p>
+      <p>Small, proven patches tested on a fix branch; in Auto mode pushed to your branch once your GitHub tests pass.</p>
     </div>
 
     <!-- 05 -->
@@ -1133,7 +1133,7 @@ def render_homepage_html() -> str:
   <div style="text-align:center;margin-bottom:30px">
     <div class="section-tag" style="color:#6fe0b0">ENTERPRISE SAFETY GATES</div>
     <h2 class="section-headline">AI-Powered. Developer-Controlled.</h2>
-    <p class="section-sub" style="margin:auto">Your code runs only inside a throw-away sandbox, models only ever return text, and nothing reaches your branch without a pull request.</p>
+    <p class="section-sub" style="margin:auto">Your code runs only inside a throw-away sandbox, models only ever return text, and nothing reaches your branch until the sandbox and your GitHub tests pass (in Pull request mode, nothing reaches it without your review).</p>
   </div>
 
   <div class="sec-card-wrap">
@@ -1154,7 +1154,7 @@ def render_homepage_html() -> str:
         </div>
         <div class="sec-item">
           <div class="sec-item-icon">{ICON_CHECK}</div>
-          <div><b>Proof required:</b> Auto mode merges only when the check that failed now passes in the sandbox and every GitHub check is green.</div>
+          <div><b>Proof required:</b> Auto mode pushes only when the check that failed now passes in the sandbox and every GitHub check is green. If it fails, the error goes back to the AI (3 rounds), then a human reviews a pull request.</div>
         </div>
         <div class="sec-item">
           <div class="sec-item-icon">{ICON_CHECK}</div>
@@ -1272,12 +1272,12 @@ def render_homepage_html() -> str:
       <div id="sc-pane-3" style="display:none">
         <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:14px;flex-wrap:wrap;gap:8px">
           <div>
-            <span class="pill green" style="font-size:11px">{ICON_PR} STAGE 4 :: GITHUB PULL REQUEST</span>
+            <span class="pill green" style="font-size:11px">{ICON_PR} STAGE 4 :: GITHUB TESTS, THEN PUSH</span>
             <h3 style="margin:6px 0 0;font-size:19px;color:#fff">PR #42 Opened with Passing CI Regression Test</h3>
           </div>
           <span class="pill green" style="font-size:11px">{ICON_CHECK} CI Verified</span>
         </div>
-        <p style="color:#cfc5dc;font-size:14.5px;line-height:1.6">The agent generates a dedicated branch, commits the minimal safe patch, opens a GitHub PR, and waits for your review or auto-merges if Auto mode is enabled.</p>
+        <p style="color:#cfc5dc;font-size:14.5px;line-height:1.6">The agent commits the minimal safe patch to a fix branch and your GitHub tests run on it. If they fail, the error goes back to the AI (up to 3 rounds). Pull request mode opens a PR for your review. Auto mode pushes the proven fix to your branch, or opens a PR for review after 3 failed rounds.</p>
         <div style="background:#040c08;padding:14px;border-radius:8px;border:1px solid #1a4d3b;font-family:Consolas,monospace;font-size:12.5px;color:#8ce4c0">
           PR #42: fix(checkout): defend against missing price attribute · CI Status: 42/42 Passed · Ready for One-Click Merge
         </div>
@@ -1299,7 +1299,7 @@ def render_homepage_html() -> str:
   <div style="display:grid;grid-template-columns:repeat(auto-fit,minmax(300px,1fr));gap:16px;margin-top:14px">
     <div style="background:#0c0614;border:1px solid #2d1830;border-radius:10px;padding:18px">
       <div style="font-weight:700;color:#ff8a7a;font-size:14px;margin-bottom:6px">1. Make your repository private</div>
-      <p class="muted" style="font-size:13px;line-height:1.5;margin:0 0 10px">We read your source files and error logs to diagnose problems, and Auto mode only merges fixes in private repositories. A private repository keeps your code and logs away from the public.</p>
+      <p class="muted" style="font-size:13px;line-height:1.5;margin:0 0 10px">We read your source files and error logs to diagnose problems, and Auto mode only pushes fixes to private repositories. A private repository keeps your code and logs away from the public.</p>
       <details>
         <summary style="cursor:pointer;color:var(--blue);font-size:12.5px;font-weight:600">Show 5 quick steps ▾</summary>
         <ol class="steps muted" style="font-size:12.5px;line-height:1.5;margin:8px 0 0;padding-left:18px">
@@ -1329,8 +1329,8 @@ def render_homepage_html() -> str:
       <div style="margin-top:10px;padding-top:8px;border-top:1px solid #281432;font-size:11.5px;color:var(--muted)">
         <b>What the agent uses each permission for:</b>
         <ul style="margin:4px 0 0;padding-left:16px">
-          <li><code>repo</code>: read your code, create a branch and open pull requests. Nothing is merged unless you choose Auto mode.</li>
-          <li><code>workflow</code>: add a small test workflow file, so Auto mode has a check that must pass before merging.</li>
+          <li><code>repo</code>: read your code, create a test branch for each fix and read your GitHub test results. In Pull request mode it opens a pull request for you. In Auto mode it pushes a fix to your branch, only after our sandbox and your GitHub tests pass.</li>
+          <li><code>workflow</code>: add a small test workflow file, so Auto mode has a GitHub check that must pass before a fix is pushed.</li>
         </ul>
       </div>
     </div>

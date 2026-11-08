@@ -75,6 +75,18 @@ def user_pr_opened(user_id: str, project_name: str, pr_url: str, verified: str) 
              "fix_pr")
 
 
+def user_fix_pushed(user_id: str, project_name: str, branch: str, verified: str) -> None:
+    _to_user(user_id, f"Fixed and pushed: {project_name}",
+             f"The agent fixed a bug and pushed the fix to your {branch} branch after it passed the sandbox and your GitHub tests.\n\n"
+             f"Verification: {verified}\nOpen {_base()}/dashboard to see what changed.", "fix_pushed")
+
+
+def user_needs_review(user_id: str, project_name: str, pr_url: str, why: str) -> None:
+    _to_user(user_id, f"Needs your review: {project_name}",
+             f"The agent could not get a fix through your GitHub tests, so it opened a pull request for you: {pr_url}\n\n{why}\n"
+             "Nothing was pushed to your main branch.", "fix_review")
+
+
 def admin_level(level: int, name: str, spend: float, budget: float) -> None:
     _to_admins(f"Auto-fix budget alert: {name}",
                f"Month spend is Rs {spend:.2f} of the global budget B = Rs {budget:.2f} (level {level}: {name}).\n"

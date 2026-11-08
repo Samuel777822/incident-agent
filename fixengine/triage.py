@@ -14,6 +14,10 @@ STATIC_HINTS = ("unclosed <", "unexpected closing", "missing file", "unbalanced"
                 "syntaxerror", "invalid json", "declaration without")
 CONFIG_HINTS = ("environment variable", "environ", "no such file", "connection refused", "config",
                 "secret", "api key", "permission denied", "module not found", "cannot find module")
+# Problems seen from the user's side (browser monitor, site probe, owner report): category and difficulty score.
+WEB_KINDS = {"retired_model": ("retired_model", -2), "external_api": ("external_api", 0), "failed_request": ("external_api", 0),
+             "dead_click": ("ui_dead_click", 1), "ui_error_text": ("ui_dead_click", 1), "js_error": ("logic", 0),
+             "journey_failed": ("ui_dead_click", 1), "user_report": ("user_report", 1), "site_down": ("external_api", 1)}
 # Whole-word matches only: a plain substring test made "race" match every Python "Traceback" and "lock" match "block".
 HARD_RE = re.compile(r"\b(?:race condition|races?|deadlock\w*|lock(?:s|ed|ing)?|async\w*|await\w*|threads?|thread-?safe|concurren\w*|"
                      r"timeouts?|timed out|state|stale|cache[ds]?|inconsistent|memory|synchronized|volatile|promises?|"
@@ -21,7 +25,7 @@ HARD_RE = re.compile(r"\b(?:race condition|races?|deadlock\w*|lock(?:s|ed|ing)?|
 
 
 def classify(*, error_type: str, message: str, traceback: str, frame_count: int, files_in_trace: int,
-             repo_tokens: int, has_tests: bool, prior_failures: int = 0, prior_models=()) -> dict:
+             repo_tokens: int, has_tests: bool, prior_failures: int = 0, prior_models=(), kind: str = "") -> dict:
     """Return {"bug_class": easy|medium|hard, "category": ..., "score": n, "reasons": [...]}"""
     et = (error_type or "").lower()
     text = f"{message}\n{traceback}".lower()
@@ -33,7 +37,13 @@ def classify(*, error_type: str, message: str, traceback: str, frame_count: int,
         score -= 1
         reasons.append(f"simple error type ({error_type})")
     category = "logic"
-    if et.startswith("static_") or any(h in text for h in STATIC_HINTS) and et.startswith(("static", "syntax")):
+    web_kind = (kind or "").lower()
+    if web_kind in WEB_KINDS:
+        # Browser evidence: a failed request is NOT 'config' even when the text says "connection refused" or "api key".
+        category = WEB_KINDS[web_kind][0]
+        score += WEB_KINDS[web_kind][1]
+        reasons.append(f"seen in the browser: {web_kind.replace('_', ' ')}")
+    elif et.startswith("static_") or any(h in text for h in STATIC_HINTS) and et.startswith(("static", "syntax")):
         category = "markup_or_style"
         score -= 1
         reasons.append("static HTML/CSS/JS problem")

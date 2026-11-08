@@ -281,7 +281,7 @@ def test_docker_commands_never_carry_host_secrets(tmp_path, monkeypatch):
 
 
 def _run_probe(extra_env):
-    env = {k: os.environ[k] for k in ("PATH", "SYSTEMROOT", "SYSTEMDRIVE", "WINDIR", "PROGRAMDATA", "TEMP", "TMP") if k in os.environ}
+    env = {k: os.environ[k] for k in ("PATH", "SYSTEMROOT", "TEMP", "TMP") if k in os.environ}
     env.update(extra_env)
     proc = subprocess.run([sys.executable, "-c", _abuse_module().secrets_script()], env=env, capture_output=True, text=True)
     return proc.returncode, proc.stdout.strip()

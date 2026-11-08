@@ -7,14 +7,17 @@ from __future__ import annotations
 
 import logging
 import os
+import re
+import json
 import shutil
 import tempfile
+import time
 from pathlib import Path
 
 import portal_db
 
 from . import adapters as fx_adapters
-from . import admin_tools, fingerprint, notify, prompts, repo_context, review, router, sandbox, store, triage, validator
+from . import admin_tools, fingerprint, journeys, notify, prompts, repo_context, review, router, sandbox, store, triage, validator
 from . import config as fx_config
 from . import git_ops
 from .guard import Guard
@@ -23,11 +26,16 @@ log = logging.getLogger("fixengine")
 PAID = fx_config.PAID_TIERS
 AGENT_MARK = "[agent-daemon]"   # in every fix title, so a later push of the agent's own fix is recognised (no fix loops)
 OUTAGE_MINUTES = 10
+MAX_GITHUB_ROUNDS = int(os.getenv("FIX_GITHUB_ROUNDS", "3") or 3)        # red GitHub runs before a human is asked
+GITHUB_WAIT_SECONDS = int(os.getenv("FIX_GITHUB_WAIT_SECONDS", "1200") or 1200)
+GITHUB_NO_CHECKS_GRACE = int(os.getenv("FIX_GITHUB_NO_CHECKS_GRACE", "150") or 150)
+
+
+def direct_push_enabled() -> bool:
+    return os.getenv("AGENT_DIRECT_PUSH", "1").strip().lower() not in ("0", "false", "no", "off")
 
 
 def enabled() -> bool:
-    if os.getenv("RENDER", "").strip().lower() == "true" and os.getenv("FIXENGINE_FORCE_DISABLED", "") != "1":
-        return True
     return os.getenv("FIXENGINE_ENABLED", "").strip().lower() in ("1", "true", "yes", "on")
 
 
@@ -46,7 +54,7 @@ def _failed_test_names(output: str) -> list[str]:
 
 class Engine:
     def __init__(self, cfg: dict | None = None, *, adapters=None, runner=None, repo_provider=None, commits_provider=None,
-                 pr_opener=None, guard: Guard | None = None):
+                 pr_opener=None, guard: Guard | None = None, gh=None):
         self.cfg = cfg or fx_config.load()
         self.adapters = adapters or fx_adapters.build_adapters(self.cfg)
         self.runner = runner or sandbox.make_runner(self.cfg)
@@ -54,6 +62,7 @@ class Engine:
         self.commits_provider = commits_provider or git_ops.recent_commits_text
         self.pr_opener = pr_opener or git_ops.open_pr
         self.guard = guard or Guard(self.cfg)
+        self.gh = gh or git_ops          # the GitHub calls of the proof loop (tests pass a fake)
 
     # ---- entry points ---------------------------------------------------------------------------------------------
     def handle_incident(self, claimed: dict) -> str:
@@ -85,6 +94,7 @@ class Engine:
         scan = repo_context.scan_repo(root, max_files=int(self.cfg["sandbox"]["max_repo_files"]))
         files = scan["files"]
         profile = sandbox.detect_profiles(root, files)
+        self._prepare_journeys(root, files, profile, claimed)
         from_push = claimed.get("source") == "push"
         bug = store.get_bug_by_incident(incident_id)
         if bug is None:
@@ -93,7 +103,8 @@ class Engine:
             tri = triage.classify(error_type=fp["error_type"], message=message, traceback=traceback_text,
                                   frame_count=len(frames), files_in_trace=len(fp["files"]),
                                   repo_tokens=repo_context.repo_tokens(files), has_tests=profile.has_tests,
-                                  prior_failures=store.count_prior_failures(project_id, fp["hash"]))
+                                  prior_failures=store.count_prior_failures(project_id, fp["hash"]),
+                                  kind=str(_evidence_of(claimed).get("kind", "")))
             bug = store.create_bug(project_id=project_id, user_id=user_id, incident_id=incident_id, fingerprint_json=fp,
                                    bug_class=tri["bug_class"], category=tri["category"])
         if bug["baseline_failing"] is None:
@@ -144,11 +155,24 @@ class Engine:
                 return "dry_run"
             if result[0] == "pass":
                 result[1]["from_push"] = from_push
+                if self._direct_push(project, claimed):
+                    return self._start_github_proof(claimed, project, bug, result[1])
                 return self._open_pr(claimed, project, bug, result[1])
             if result[0] == "fault":
                 return self._fault_wait(claimed, bug, result[1], 300)
         bug = store.get_bug(bug["id"])
         return self._finish_review(claimed, project, bug, store.list_attempts(bug["id"]), event, "loop limit reached")
+
+    def _prepare_journeys(self, root: Path, files: dict, profile, claimed: dict) -> None:
+        """Static sites: write the browser journeys next to the code (scratch copy only) so the sandbox can prove a UI fix."""
+        try:
+            if os.getenv("FIX_JOURNEYS_ENABLED", "1").strip().lower() in ("0", "false", "no", "off"):
+                return
+            parts = getattr(profile, "parts", None) or [profile]
+            if any(getattr(p, "language", "") == "static" for p in parts):
+                journeys.prepare(root, files, evidence=_evidence_of(claimed))
+        except Exception:
+            log.debug("could not prepare browser journeys")
 
     def _router_input(self, user_id, bug, attempts, blocked, repo_tok) -> router.RouterInput:
         counted = [a for a in attempts if a["result"] != "system_fault"]
@@ -240,7 +264,9 @@ class Engine:
             message=message, traceback=traceback_text, files=chosen, context_files=tests, commits=commits,
             history=history, strong_diagnosis=bug["strong_diagnosis"], has_tests=profile.has_tests,
             sandbox_output=(last["error_summary"] if last and last["result"] == "fail" else ""),
-            baseline_output=bug["baseline_output"] if not counted else "")
+            baseline_output=bug["baseline_output"] if not counted else "",
+            previous_patch=(last["patch_json"] if last and last["result"] == "fail" else ""),
+            evidence={**_evidence_of(claimed), **(store.gh_state(bug["id"]).get("evidence") or {})})
         try:
             res = adapter.call(prompts.SYSTEM_PROMPT, blocks, 2500 if tier == "groq" else 4000)
             _stage(claimed["incident_id"], "testing_fix", "applying the patch, then install → build → tests → start-up", tier)
@@ -299,11 +325,10 @@ class Engine:
                                  error_summary="")
             return ("pass", {"new_files": new_files, "diff": diff, "diagnosis": parsed["diagnosis"], "level": level,
                              "tier": tier, "model": model, "attempt_id": attempt_id})
-        tail = sres.output[-600:]
-        after_fp = fingerprint.fingerprint(tail[:400], tail)
+        after_fp = fingerprint.fingerprint(sres.output[:400], sres.output)
         before_fp = _fp_of(bug, last)
         progressed = fingerprint.made_progress(before_fp, after_fp, prev_failing if (prev_failing or 0) >= 0 else None, sres.failing)
-        store.finish_attempt(attempt_id, result="fail", error_summary=tail, diagnosis=parsed["diagnosis"][:500],
+        store.finish_attempt(attempt_id, result="fail", error_summary=sres.output[-600:], diagnosis=parsed["diagnosis"][:500],
                              patch_json=patch_json, failing_before=prev_failing, failing_after=sres.failing,
                              progress=1 if progressed else 0)
         if tier in router.STRONG:
@@ -337,6 +362,180 @@ class Engine:
         store.park_incident(claimed["incident_id"], claimed["project_id"], waiting_for_choice=False, delay_seconds=delay)
         log.info("Bug %s waiting %ss: %s", bug["id"], delay, reason)
         return "waiting"
+
+
+    # ---- v3: sandbox proof -> GitHub proof -> direct push (no pull request) ---------------------------------------------------
+    def _direct_push(self, project, claimed) -> bool:
+        mode = project.get("mode") or claimed.get("mode")
+        return mode == "auto" and direct_push_enabled()
+
+    def _start_github_proof(self, claimed, project, bug, win: dict) -> str:
+        incident_id = claimed["incident_id"]
+        state = store.gh_state(bug["id"])
+        round_no = int(state.get("round", 0)) + 1
+        short = " ".join(str(win["diagnosis"]).split())[:60].rstrip(" .")
+        title = f"fix: {short or 'incident ' + incident_id[:8]} {AGENT_MARK}"
+        _stage(incident_id, "pushing", f"sending the fix to a test branch on GitHub (round {round_no} of {MAX_GITHUB_ROUNDS})", win["tier"])
+        try:
+            pushed = self.gh.push_fix_branch(project, bug_id=bug["id"], new_files=win["new_files"], title=title)
+        except Exception as exc:
+            from monitoring_installer import PublicRepoError
+            if isinstance(exc, PublicRepoError):
+                store.update_bug(bug["id"], status="open")
+                portal_db.park_incident_for_gate(incident_id, claimed["project_id"])
+                return "waiting_private"
+            return self._fault_wait(claimed, bug, f"could not push the test branch ({exc.__class__.__name__})", 300)
+        state.update({"round": round_no, "branch": pushed["branch"], "head_sha": pushed["head_sha"], "base_sha": pushed["base_sha"],
+                      "pushed_at": time.time(), "attempt_id": win["attempt_id"], "tier": win["tier"], "model": win["model"],
+                      "level": win["level"], "diagnosis": str(win["diagnosis"])[:1500], "diff": str(win["diff"])[:40000],
+                      "title": title, "files": sorted(win["new_files"])[:20]})
+        if win.get("verified_text"):
+            state["verified_text"] = str(win["verified_text"])[:600]
+        if win.get("evidence"):
+            state["evidence"] = win["evidence"]
+        store.save_gh_state(bug["id"], state)
+        result = {"category": "code_bug", "confidence": "high" if win["level"] in validator.PROVEN_LEVELS else "medium",
+                  "root_cause": win["diagnosis"], "report": f"Fixed by the {win['tier']} model. {validator.VERIFY_TEXT.get(win['level'], '')}"}
+        portal_db.complete_diagnosis(incident_id, claimed["project_id"], result)
+        store.update_bug(bug["id"], status="github_testing")
+        _stage(incident_id, "github_testing", f"GitHub is running your tests on the fix (round {round_no} of {MAX_GITHUB_ROUNDS})", win["tier"])
+        return "github_testing"
+
+    def start_proof_for_files(self, claimed, project, *, new_files, diff, diagnosis, level, verified_text="", evidence=None) -> str:
+        """A ready-made fix (the deterministic retired-model fix) enters the same sandbox-then-GitHub proof loop as an AI fix."""
+        bug = store.get_bug_by_incident(claimed["incident_id"])
+        if bug is None:
+            bug = store.create_bug(project_id=claimed["project_id"], user_id=project["user_id"], incident_id=claimed["incident_id"],
+                                   fingerprint_json={"hash": "model-fix", "error_type": "retired_model", "files": []},
+                                   bug_class="easy", category="retired_model")
+        win = {"new_files": new_files, "diff": diff, "diagnosis": diagnosis, "level": level, "tier": "free", "model": "",
+               "attempt_id": "", "verified_text": verified_text, "evidence": evidence or {}}
+        return self._start_github_proof(claimed, project, bug, win)
+
+    def process_proofs(self) -> int:
+        """Called by the worker every few seconds: look at every fix that is waiting for GitHub's tests."""
+        count = 0
+        for bug in store.bugs_by_status("github_testing"):
+            try:
+                self._check_proof(bug)
+            except Exception as exc:
+                log.warning("proof check for bug %s deferred (%s)", bug["id"], exc.__class__.__name__)
+            count += 1
+        return count
+
+    def _check_proof(self, bug) -> None:
+        link = store.incident_for_bug(bug["id"])
+        state = store.gh_state(bug["id"])
+        if not link or not state.get("head_sha"):
+            return
+        project = store.get_project_row(link["project_id"])
+        if not project:
+            return
+        claimed = {"incident_id": link["incident_id"], "project_id": link["project_id"]}
+        age = time.time() - float(state.get("pushed_at", 0) or 0)
+        status = self.gh.checks_state(project, state["head_sha"])
+        if status == "pending":
+            if age > GITHUB_WAIT_SECONDS:
+                self._needs_review(claimed, project, bug, state, "GitHub did not finish the tests in time.")
+            return
+        if status == "no_checks":
+            if age < GITHUB_NO_CHECKS_GRACE:
+                return
+            if state.get("level") in validator.PROVEN_LEVELS:
+                state["no_github_tests"] = True
+                store.save_gh_state(bug["id"], state)
+                self._push_to_branch(claimed, project, bug, state)
+            else:
+                self._needs_review(claimed, project, bug, state, "No GitHub test ran and the sandbox could not prove the fix by itself.")
+            return
+        if status == "success":
+            self._push_to_branch(claimed, project, bug, state)
+            return
+        if status == "failed":
+            self._github_red(claimed, project, bug, state)
+
+    def _github_red(self, claimed, project, bug, state) -> None:
+        round_no = int(state.get("round", 1))
+        try:
+            text = self.gh.failed_check_log(project, state["head_sha"])
+        except Exception:
+            text = "GitHub reported a failed check but its log could not be read."
+        summary = f"GitHub tests failed after your patch (round {round_no} of {MAX_GITHUB_ROUNDS}).\n{text}"
+        if state.get("attempt_id"):
+            try:
+                store.finish_attempt(state["attempt_id"], result="fail", error_summary=summary[:6000], progress=0)
+            except Exception:
+                log.debug("could not mark the attempt failed")
+        state["last_log"] = text[:6000]
+        store.save_gh_state(bug["id"], state)
+        if round_no >= MAX_GITHUB_ROUNDS:
+            self._needs_review(claimed, project, bug, state, f"GitHub tests still failed after {round_no} tries.")
+            return
+        _stage(claimed["incident_id"], "github_failed",
+               f"GitHub test failed (round {round_no} of {MAX_GITHUB_ROUNDS}) · sending what failed back to the AI model", state.get("tier", ""))
+        store.update_bug(bug["id"], status="open")
+        store.unpark_incident(claimed["incident_id"], claimed["project_id"])
+
+    def _push_to_branch(self, claimed, project, bug, state) -> None:
+        incident_id = claimed["incident_id"]
+        _stage(incident_id, "pushing", "GitHub tests passed · pushing the fix to your branch", state.get("tier", ""))
+        outcome = self.gh.fast_forward_base(project, state["head_sha"], state["base_sha"])
+        level = state.get("level", "")
+        verified = state.get("verified_text") or validator.VERIFY_TEXT.get(level, "")
+        if state.get("no_github_tests"):
+            verified += " No GitHub test ran for this fix (your workflow does not run on branches), so the sandbox was the proof."
+        if outcome == "ok":
+            self.gh.delete_branch(project, state["branch"])
+            store.record_direct_push(incident_id, claimed["project_id"], branch=state["branch"], file_path=", ".join(state.get("files", [])),
+                                     diff=state.get("diff", ""), head_sha=state["head_sha"], verification_text=verified)
+            _stage(incident_id, "pushed", f"pushed to {project.get('branch', 'your branch')} after the sandbox and GitHub tests passed", state.get("tier", ""))
+            store.update_bug(bug["id"], status="resolved", closed_at=store.now(), stop_reason="")
+            notify.user_fix_pushed(project["user_id"], project["name"], project.get("branch", "main"), verified)
+        elif outcome == "moved":
+            moved = int(state.get("moved", 0)) + 1
+            state["moved"] = moved
+            store.save_gh_state(bug["id"], state)
+            if moved >= 2:
+                self._needs_review(claimed, project, bug, state, "Your branch kept changing while the fix was being tested.")
+                return
+            _stage(incident_id, "queued", "Your branch changed while the fix was tested · re-checking on the newest code", state.get("tier", ""))
+            store.update_bug(bug["id"], status="open")
+            store.unpark_incident(incident_id, claimed["project_id"])
+        else:     # protected branch: a pull request is the only way in. It was proven, so it may merge itself.
+            self._open_branch_pr(claimed, project, bug, state, review=False,
+                                 reason="Your branch is protected, so the proven fix was sent as a pull request.")
+
+    def _needs_review(self, claimed, project, bug, state, reason: str) -> None:
+        self._open_branch_pr(claimed, project, bug, state, review=True, reason=reason)
+
+    def _open_branch_pr(self, claimed, project, bug, state, *, review: bool, reason: str) -> None:
+        incident_id = claimed["incident_id"]
+        last = (state.get("last_log") or "")[:2500]
+        body = ("## Agent Daemon fix" + (" (needs human review)" if review else "") + "\n\n"
+                f"- Incident: {incident_id}\n- Diagnosis: {state.get('diagnosis', '')[:1200]}\n- {reason}\n\n"
+                + (f"### Last GitHub error\n```\n{last}\n```\n\n" if review and last else "")
+                + "Nothing was pushed to your main branch.")
+        try:
+            pr = self.gh.open_pr_for_branch(project, branch=state["branch"], title=state.get("title", "fix " + AGENT_MARK), body=body)
+            if not pr.get("url") or not pr.get("number"):
+                raise RuntimeError("no pull request link")
+        except Exception as exc:
+            store.update_bug(bug["id"], status="needs_human", stop_reason=reason[:300], closed_at=store.now())
+            _stage(incident_id, "needs_human", (reason + " The pull request could not be opened.")[:250])
+            portal_db.mark_remediation_needs_human(incident_id, claimed["project_id"], reason)
+            log.warning("could not open the review PR (%s)", exc.__class__.__name__)
+            return
+        store.record_pr(incident_id, claimed["project_id"], branch=pr["branch"], file_path=", ".join(state.get("files", [])),
+                        diff=state.get("diff", ""), pr_url=pr["url"], pr_number=int(pr["number"]),
+                        verification_text=reason)
+        if review:
+            store.block_automerge(incident_id)
+            store.update_bug(bug["id"], status="needs_human", stop_reason=reason[:300], pr_url=pr["url"], closed_at=store.now())
+            _stage(incident_id, "needs_human", f"Needs human review · {reason} A pull request is ready.", state.get("tier", ""))
+            notify.user_needs_review(project["user_id"], project["name"], pr["url"], reason)
+        else:
+            store.update_bug(bug["id"], status="pr_opened", pr_url=pr["url"], closed_at=store.now())
+            _stage(incident_id, "merging", "Your branch is protected · pull request opened, merging when GitHub allows", state.get("tier", ""))
 
     def _open_pr(self, claimed, project, bug, win: dict) -> str:
         attempts = store.list_attempts(bug["id"])
@@ -405,6 +604,45 @@ class Engine:
                 admin_tools.request_more_tries(user_id, tier, self.guard)
                 break
         return "needs_human"
+
+
+EVIDENCE_PREFIX = "[evidence] "
+
+
+def infer_kind(message: str) -> str:
+    low = (message or "").lower()
+    if low.startswith("[user report]"):
+        return "user_report"
+    if "dead click" in low:
+        return "dead_click"
+    if "journey" in low and "failed" in low:
+        return "journey_failed"
+    if "site is not answering" in low or "site down" in low:
+        return "site_down"
+    if re.search(r"failed with http|failed request|network error|cors", low):
+        return "failed_request"
+    return ""
+
+
+def _evidence_of(claimed: dict) -> dict:
+    """Browser, probe and owner-report facts. Monitors put one line '[evidence] {json}' at the top of the event's traceback field
+    (no schema change needed); older events get a best-effort kind from their message. Shown to the model as untrusted data."""
+    event = claimed.get("first_event") or {}
+    ev: dict = {}
+    for line in str(event.get("traceback") or "").splitlines()[:6]:
+        if line.startswith(EVIDENCE_PREFIX):
+            try:
+                data = json.loads(line[len(EVIDENCE_PREFIX):])
+                if isinstance(data, dict):
+                    ev = {str(k)[:40]: v for k, v in list(data.items())[:20]}
+            except ValueError:
+                pass
+            break
+    if not ev.get("kind"):
+        kind = infer_kind(str(event.get("message") or ""))
+        if kind:
+            ev["kind"] = kind
+    return ev
 
 
 def prompts_json(edits) -> str:

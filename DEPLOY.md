@@ -63,6 +63,16 @@ Open dashboard.render.com → your portal service → **Environment**. If you us
 | `OPENROUTER_API_KEY` and/or `ANTHROPIC_API_KEY`, `GROQ_API_KEY` | your keys | the AI modes |
 | `FIXENGINE_BUDGET_INR` / `FIXENGINE_CREDITS_INR` | e.g. `1600` / `2000` | global spend cap (80% of what you deposited) |
 
+
+## Upgrading to v3 (do these in order)
+
+1. **Deploy the new code** to the portal and the worker (Render). Your **sandbox server needs no change**: it receives the repo and the profile exactly as before, and the new files it does not know about are ignored.
+2. **Render environment** (portal and worker): `FIXENGINE_ENABLED=1` (already), keep `OPENROUTER_API_KEY` set. Optional: `AGENT_DIRECT_PUSH=1` (default), `FIX_GITHUB_ROUNDS=3`. Nothing else is required.
+3. **GitHub token**: nothing changes. Users keep giving the **classic** token with the `repo` and `workflow` scopes, exactly as the connect page says. `repo` already covers everything the new loop needs (the test branch, reading GitHub test results and logs, pushing to the branch).
+4. **Branch protection**: if a customer branch requires pull requests, the agent opens the pull request and merges it when GitHub allows (it tells the user). It never force-pushes.
+5. **Browser journeys (optional, sandbox server only)**: skip this and everything else works. To turn them on, on the sandbox server: copy the new `fixengine/sandbox.py`, `fixengine/config.py` and `sandbox/journey_runner.py` (plus `sandbox/Dockerfile.browser`) over the old ones, run `docker build -f sandbox/Dockerfile.browser -t fixengine-sandbox-browser:1 sandbox`, then restart `sandbox_service.py` the same way you started it. Your three images (Python, Node, Java) stay as they are.
+6. Run `python -m pytest -q` on your laptop (see RUN_TESTS.md). Expect the same 3 `segno` failures only if `segno` is not installed.
+
 **New in this release (all optional, defaults are fine):**
 
 | Name | Default | Why |
