@@ -648,7 +648,13 @@ class LocalUnsafeRunner(_BaseRunner):
             if profile.build:
                 plan.append(("build", [sys.executable, "-m", "compileall", "-q", "."], 60))
             if profile.test:
-                plan.append(("test", [sys.executable, "-m", "pytest", "-q", "--maxfail=50", "-p", "no:cacheprovider"], int(self.cfg["sandbox"]["timeout_seconds"])))
+                # --noconftest: prevents pytest from loading conftest.py files that exist outside the
+                # sandbox (e.g. in %TEMP% on Windows when the sandbox is created inside AppData/Local/Temp).
+                # Customer conftest.py files ARE inside the sandbox root, so those are still discovered.
+                # --override-ini=addopts= clears any inherited addopts from pytest.ini files above rootdir.
+                plan.append(("test", [sys.executable, "-m", "pytest", "-q", "--maxfail=50",
+                                      "-p", "no:cacheprovider", "--noconftest",
+                                      "--override-ini=addopts="], int(self.cfg["sandbox"]["timeout_seconds"])))
             phases = []
             for name, argv, timeout in plan:
                 started = time.time()

@@ -208,3 +208,83 @@ production-readiness results above, which were produced in a different host envi
   branch is prepared for code review; these limitations remain for maintainers to resolve or verify in the target environment.
 - **Review:** The follow-up branch is `codex/reviewable-safety-java-monitor-followup`, based on
   `dbfce6c5f94c175aa59da93844fc5798aed5687a`. The pull request for this branch is listed after it is opened.
+
+---
+
+## Second Follow-up Audit — 2026-11-08 (`audit/defect-repairs-2026-11`)
+
+This section records the work performed during the second independent audit of the `main` branch at commit `a275adf` (merge of PR #15).
+
+- **Audit Date:** `2026-11-08`
+- **Branch:** `audit/defect-repairs-2026-11` (based on `main` at `a275adf`; `main` untouched)
+- **Host Environment:** Windows (`win32`), Python `3.15.0`, Node.js `v24.22.1`
+- **Java:** not installed (3 Java-gated tests remain skipped — pre-existing)
+- **Docker:** not installed (Docker sandbox tests BLOCKED — pre-existing)
+
+### Starting Baseline (before this audit's fixes)
+
+Running `python -m pytest tests/ -q` on the unmodified `main` branch produced:
+**11 failed, 380 passed, 4 skipped** in 218 seconds.
+
+All 11 failures shared the same symptom: the fix-engine orchestrator returned `"awaiting_choice"` instead of `"pr_opened"`.
+
+### Defect Found — `LocalUnsafeRunner` pytest subprocess loads parent conftest.py (`fixengine/sandbox.py`)
+
+- **Symptom:** All 11 end-to-end tests in `tests/test_fixengine_e2e.py` (10 tests) and `tests/test_push_guard.py` (1 test) returned `"awaiting_choice"` or `"needs_human"` instead of `"pr_opened"`.
+  - Specifically: the orchestrator escalated all the way to `opus`, which has `warn_every_use=True`, triggering a user-confirmation pause before any model call could succeed.
+  - Investigation revealed that the sandbox pytest subprocess (inside `LocalUnsafeRunner.run()`) was failing with exit code 4 (pytest internal error) before any test ran: `ImportError while loading conftest 'C:\Users\prana\AppData\Local\Temp\conftest.py'. ... ModuleNotFoundError: No module named 'db'`.
+- **Root Cause:**
+  - `LocalUnsafeRunner` creates its sandbox in `tempfile.mkdtemp(prefix="fx-local-")` which on this Windows host resolves to `C:\Users\prana\AppData\Local\Temp\fx-local-XXXX\`.
+  - A prior pytest run had left the incident-agent project's own `conftest.py` at `C:\Users\prana\AppData\Local\Temp\conftest.py` (two levels above the sandbox's test files).
+  - pytest 9 walks upward from the test file directory to discover `conftest.py` files regardless of the rootdir setting, and loaded this external conftest. The incident-agent `conftest.py` imports `db` (a module only available in the incident-agent project root), causing a hard `ModuleNotFoundError` that aborted the entire pytest session before any tests ran.
+  - With pytest producing exit code 4 and output containing no parseable test counts, the sandbox reported `passed=False, failing=None`. The orchestrator treated this as a genuine test failure, escalated through all model tiers, and eventually hit the `opus` warning gate.
+- **Fix:** Added `--noconftest` and `--override-ini=addopts=` flags to the pytest invocation inside `LocalUnsafeRunner.run()` (`fixengine/sandbox.py`). `--noconftest` prevents pytest from loading any `conftest.py` files outside the sandbox directory. `--override-ini=addopts=` prevents any addopts from `pytest.ini` files in parent directories from applying.
+- **Files changed:** `fixengine/sandbox.py` (1 line → 7 lines)
+
+### Deprecation Warning Fixed — `os.path.commonprefix` in `fixengine/repo_context.py`
+
+- **Symptom:** Every test run produced 149+ `DeprecationWarning: os.path.commonprefix() is deprecated. Use os.path.commonpath() for longest path prefix.` in Python 3.13+.
+- **Root Cause:** `fixengine/repo_context.py` used `os.path.commonprefix([p[::-1], fpath[::-1]])` to find the longest common suffix between two file paths (reversed for comparison). `os.path.commonprefix` is deprecated in Python 3.13+.
+- **Fix:** Replaced with an equivalent inline `_tail_match_len()` function that compares character-by-character on reversed strings without using the deprecated API.
+- **Files changed:** `fixengine/repo_context.py` (1 line → 11 lines)
+
+### Final Test Results After Fixes
+
+```
+391 passed, 4 skipped, 0 failed  (236.36 seconds)
+```
+
+Increase from 380 passed / 11 failed to **391 passed / 0 failed**. The 4 skips are unchanged pre-existing skips:
+- 3 tests skipped: Java JDK not installed on this host
+- 1 test skipped: Playwright/Chromium not installed on this host
+
+### Security Audit Findings
+
+A complete security review was performed. No new issues found. Key confirmations:
+1. **No hardcoded secrets:** All API keys read from environment variables only.
+2. **SQL injection:** All database queries use parameterized `?` placeholders.
+3. **Path traversal:** `validator.write_files` uses `target.relative_to(root)` to block escapes; `safe_extract_tar` skips symlinks and rejects `..` components.
+4. **CSRF:** All POST forms validate HMAC-signed CSRF tokens.
+5. **Auth bypass:** Session cookies are HMAC-signed; admin access checked by email set.
+6. **Key exposure:** Ingest keys stored as SHA-256 hashes; monitor keys rotate on repo-goes-public.
+7. **Sandbox injection:** Docker runner uses `--read-only`, `--cap-drop ALL`, `--network none`, `--user 10001:10001` for all customer code.
+8. **PR auto-merge:** Confirmed absent — no code path calls a GitHub merge API. PRs require human review.
+
+### Remaining Blocked Items (require missing infrastructure)
+
+| Item | Status | Blocker |
+|---|---|---|
+| Docker sandbox execution | BLOCKED | Docker not installed on this host |
+| Java monitoring compile/runtime | BLOCKED | Java JDK not installed on this host |
+| Browser automation tests | BLOCKED | Playwright/Chromium not installed |
+| Live AI provider calls | BLOCKED | No API keys in environment |
+| PostgreSQL integration | BLOCKED | No PostgreSQL server on this host |
+| Render deployment validation | BLOCKED | No Render CLI or access |
+
+### Changes Summary
+
+| File | Change |
+|---|---|
+| `fixengine/sandbox.py` | Added `--noconftest --override-ini=addopts=` to `LocalUnsafeRunner` pytest command to fix 11 test failures caused by external `conftest.py` discovery |
+| `fixengine/repo_context.py` | Replaced deprecated `os.path.commonprefix()` with inline `_tail_match_len()` function |
+| `VERIFICATION_REPORT.md` | Added this follow-up section |

@@ -189,7 +189,17 @@ def select(files: dict[str, str], traceback: str, budget_tokens: int) -> tuple[d
     for fpath, line, _fn in reversed(frames):      # innermost frame first
         candidates = [p for p in by_name.get(PurePosixPath(fpath).name, []) if not is_test_path(p)]
         # prefer the candidate whose tail matches the frame path
-        candidates.sort(key=lambda p: -len(os.path.commonprefix([p[::-1], fpath[::-1]])))
+        # Use os.path.commonpath on the reversed strings to find the longest common suffix
+        # (i.e. best tail match), which is equivalent to the old commonprefix on reversed strings
+        # but avoids the DeprecationWarning in Python 3.13+.
+        def _tail_match_len(p: str, ref: str) -> int:
+            p_rev, ref_rev = p[::-1], ref[::-1]
+            n = min(len(p_rev), len(ref_rev))
+            for i in range(n):
+                if p_rev[i] != ref_rev[i]:
+                    return i
+            return n
+        candidates.sort(key=lambda p: -_tail_match_len(p, fpath))
         if candidates and candidates[0] not in [x[0] for x in first]:
             first.append((candidates[0], line))
     order: list[tuple[str, int]] = list(first)
