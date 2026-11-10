@@ -26,26 +26,98 @@ STATUS_TEXT = {
 }
 
 
-def _bar(used: int, total: int) -> str:
-    pct = 0 if total <= 0 else min(100, round(100 * used / total))
-    tone = "#8ce4c0" if pct < 60 else ("#f0cf8a" if pct < 90 else "#ff8a7a")
-    return (f"<div style='height:8px;border-radius:6px;background:#ffffff14;overflow:hidden;margin:8px 0'>"
-            f"<div style='width:{pct}%;height:100%;background:{tone}'></div></div>")
+USAGE_CSS = """<style>
+.use{--u-g:#62e6a4;--u-v:#b06cff;--u-c:#ff4f6a;--u-a:#ffc857;--u-line:#3a2338;--u-card:#140b20}
+.use .u-hero{position:relative;display:grid;grid-template-columns:1fr auto;gap:24px;align-items:center;padding:28px;border-radius:24px;margin:10px 0 24px;
+  background:radial-gradient(600px 240px at 0% 0%,#b06cff33,transparent),radial-gradient(500px 260px at 100% 100%,#ff4f6a2b,transparent),#0f0818;border:1px solid var(--u-line);overflow:hidden}
+.use .u-hero h1{margin:6px 0 8px}.use .u-hero p{margin:0;max-width:620px}
+.use .u-total{display:grid;place-items:center;text-align:center;width:150px;height:150px;border-radius:50%;
+  background:conic-gradient(var(--u-g) calc(var(--p)*1%),#ffffff14 0);box-shadow:0 0 40px #62e6a422}
+.use .u-total>div{width:122px;height:122px;border-radius:50%;background:#0f0818;display:grid;place-items:center;align-content:center}
+.use .u-total b{font-size:36px;line-height:1;color:#fff}.use .u-total small{color:#a99dbb;font-size:12px;margin-top:4px}
+.use .u-tiers{display:grid;grid-template-columns:repeat(3,1fr);gap:16px}
+.use .u-tier{position:relative;padding:22px;border-radius:20px;background:linear-gradient(165deg,#1b0f2a,#0e0817);border:1px solid var(--u-line);overflow:hidden;
+  transition:transform .25s,box-shadow .25s}
+.use .u-tier:hover{transform:translateY(-3px);box-shadow:0 16px 40px #0008,0 0 0 1px var(--tc)}
+.use .u-tier:before{content:"";position:absolute;right:-60px;top:-60px;width:180px;height:180px;border-radius:50%;background:var(--tc);opacity:.16;filter:blur(30px)}
+.use .u-tier .top{display:flex;justify-content:space-between;align-items:flex-start;gap:12px}
+.use .u-tier .tag{font-size:11px;letter-spacing:.12em;text-transform:uppercase;color:var(--tc)}
+.use .u-tier h3{margin:4px 0 0;font-size:24px;color:#fff}
+.use .u-ring{flex:none;width:84px;height:84px;border-radius:50%;display:grid;place-items:center;background:conic-gradient(var(--tc) calc(var(--p)*1%),#ffffff12 0)}
+.use .u-ring span{width:66px;height:66px;border-radius:50%;background:#140b20;display:grid;place-items:center;align-content:center;color:#fff;font-weight:700;font-size:20px}
+.use .u-ring span small{display:block;font-size:10px;color:#a99dbb;font-weight:400;letter-spacing:.06em}
+.use .u-tier p{color:#c9bedb;font-size:14px;line-height:1.55;margin:12px 0 0}
+.use .u-tier .count{margin-top:14px;padding-top:12px;border-top:1px solid #ffffff12;color:#efe7ff;font-size:13.5px}
+.use .u-tier .count strong{color:var(--tc)}
+.use .u-pill{display:inline-block;font-size:11.5px;padding:3px 9px;border-radius:999px;background:#ffc85722;color:var(--u-a);border:1px solid #ffc85755;margin-top:8px}
+.use .u-h2{display:flex;align-items:center;gap:10px;margin:36px 0 6px}.use .u-h2 span{font-size:20px}
+.use .u-modes{display:grid;grid-template-columns:repeat(3,1fr);gap:14px;margin:14px 0}
+.use .u-mode{position:relative;display:block;cursor:pointer;padding:18px;border-radius:18px;background:var(--u-card);border:1px solid var(--u-line);transition:border-color .2s,background .2s,transform .2s}
+.use .u-mode:hover{transform:translateY(-2px);border-color:#5b3a73}
+.use .u-mode input{position:absolute;opacity:0;pointer-events:none}
+.use .u-mode .ic{font-size:24px}.use .u-mode b{display:block;margin:8px 0 4px;color:#fff;font-size:17px}.use .u-mode span.t{color:#b5a9c8;font-size:13.5px;line-height:1.55}
+.use .u-mode .chk{position:absolute;top:14px;right:14px;width:22px;height:22px;border-radius:50%;border:2px solid #4a2d60;display:grid;place-items:center;font-size:12px;color:transparent}
+.use .u-mode:has(input:checked){border-color:var(--u-g);background:linear-gradient(165deg,#10261e,#120a1b);box-shadow:0 0 0 1px #62e6a444}
+.use .u-mode:has(input:checked) .chk{border-color:var(--u-g);background:var(--u-g);color:#07130d}
+.use .u-mode:has(input:focus-visible){outline:2px solid var(--u-v);outline-offset:2px}
+.use .u-flow{display:grid;grid-template-columns:repeat(4,1fr);gap:0;margin:16px 0;counter-reset:f}
+.use .u-flow div{position:relative;padding:14px 16px 14px 18px;background:#120a1b;border:1px solid var(--u-line);margin-right:-1px;color:#c9bedb;font-size:13.5px;line-height:1.5}
+.use .u-flow div:first-child{border-radius:16px 0 0 16px}.use .u-flow div:last-child{border-radius:0 16px 16px 0}
+.use .u-flow b{display:block;color:#fff;margin-bottom:4px}.use .u-flow b:before{counter-increment:f;content:counter(f);display:inline-grid;place-items:center;width:20px;height:20px;
+  border-radius:50%;background:var(--u-v);color:#fff;font-size:11px;margin-right:8px}
+.use .u-packs{display:grid;grid-template-columns:repeat(2,1fr);gap:16px;margin:14px 0}
+.use .u-pack{display:flex;gap:16px;align-items:center;padding:20px;border-radius:20px;border:1px solid var(--u-line);background:linear-gradient(120deg,#1e0f2c,#120a1b)}
+.use .u-pack .big{flex:none;width:70px;height:70px;border-radius:18px;display:grid;place-items:center;align-content:center;background:var(--tc);color:#120a1b;font-weight:800;font-size:26px;line-height:1}
+.use .u-pack .big small{font-size:10px;font-weight:600;letter-spacing:.08em;text-transform:uppercase}
+.use .u-pack h3{margin:0 0 4px;color:#fff}.use .u-pack p{margin:0 0 10px;color:#b5a9c8;font-size:13.5px}
+.use .u-pack .row{display:flex;gap:8px;flex-wrap:wrap}
+.use .u-cases{display:flex;flex-direction:column;gap:10px;margin-top:14px}
+.use .u-case{display:grid;grid-template-columns:auto 1fr auto auto;gap:14px;align-items:center;padding:14px 16px;border-radius:16px;background:var(--u-card);border:1px solid var(--u-line)}
+.use .u-case .dot{width:10px;height:10px;border-radius:50%;background:var(--sc);box-shadow:0 0 10px var(--sc)}
+.use .u-case b{color:#fff}.use .u-case .st{font-size:12.5px;padding:4px 10px;border-radius:999px;color:var(--sc);border:1px solid var(--sc);background:#ffffff08;white-space:nowrap}
+.use .u-case .n{color:#a99dbb;font-size:13px;white-space:nowrap}
+.use .u-case details{grid-column:1/-1}.use .u-case pre{white-space:pre-wrap;overflow:auto;max-height:320px;background:#07040c;border-radius:12px;padding:12px;font-size:12.5px}
+.use .u-help{margin-top:14px;border-radius:18px;background:#0f0817;border:1px solid var(--u-line);padding:4px 18px}
+.use .u-help summary{cursor:pointer;padding:12px 0;color:#fff;font-weight:600}
+.use .u-empty{padding:30px;text-align:center;border-radius:18px;border:1px dashed #4a2d60;color:#a99dbb}
+.use .u-choice{padding:20px;border-radius:20px;margin:0 0 18px;border:1px solid #ffc85766;background:linear-gradient(120deg,#2a1f0c,#140b20);box-shadow:0 0 30px #ffc85718}
+.use .u-choice h3{margin:4px 0 8px;color:#fff}.use .u-choice .acts{display:flex;flex-wrap:wrap;gap:8px;margin-top:12px}
+.use .u-msg{padding:12px 16px;border-radius:14px;background:#10261e;border:1px solid #62e6a466;color:#d6ffe9;margin:0 0 16px}
+@media(max-width:860px){.use .u-hero{grid-template-columns:1fr;justify-items:start}.use .u-tiers,.use .u-modes,.use .u-packs{grid-template-columns:1fr}
+  .use .u-flow{grid-template-columns:1fr}.use .u-flow div{border-radius:0!important;margin:0 0 -1px}.use .u-flow div:first-child{border-radius:16px 16px 0 0!important}
+  .use .u-flow div:last-child{border-radius:0 0 16px 16px!important}.use .u-case{grid-template-columns:auto 1fr}.use .u-case .st,.use .u-case .n{grid-column:2}}
+</style>"""
+
+TIER_LOOK = {   # internal tier key -> (color, tag, blurb); the key itself never reaches the page
+    "haiku": ("#62e6a4", "Every case starts here", "Everyday fixes. This is where most bugs get solved."),
+    "sonnet": ("#b06cff", "Only if needed", "Deeper analysis for bugs that Normal could not solve."),
+    "opus": ("#ff4f6a", "Asks you first", "Maximum effort for the hardest bugs. Used rarely."),
+}
+CASE_COLOR = {"open": "#b06cff", "awaiting_choice": "#ffc857", "pr_opened": "#62e6a4", "needs_human": "#ff8a7a", "failed": "#ff8a7a",
+              "resolved": "#62e6a4"}
+MODE_ICON = {"auto": "⚡", "ask": "🙋", "economy": "🌱"}
+
+
+def _pct(used, total) -> int:
+    try:
+        return 0 if int(total) <= 0 else max(0, min(100, round(100 * int(used) / int(total))))
+    except (TypeError, ValueError):
+        return 0
 
 
 def _tier_card(q: dict) -> str:
     label = E(q["label"])
     if q.get("daily"):
-        return (f"<article class='card'><h3>{label}</h3><p class='muted'>Free, with a fair-use limit. Quality is basic.</p>"
-                f"{_bar(q['used'], q['total'])}<p>{E(q['used'])} of {E(q['total'])} used today</p></article>")
-    pack = f"<p class='muted'>Plus {E(q['pack_left'])} extra tries you bought.</p>" if q.get("pack_total") else ""
-    paused = "<span class='pill amber'>Busy right now</span>" if q.get("paused") else ""
-    blurb = {"haiku": "Everyday fixes. This is where most bugs get solved.",
-             "sonnet": "Deeper analysis for bugs that Normal could not solve.",
-             "opus": "Maximum effort for the hardest bugs. Used rarely."}[q["tier"]]
-    return (f"<article class='card'><div class='row'><h3>{label}</h3>{paused}</div><p class='muted'>{blurb}</p>"
-            f"{_bar(q['used'], q['total'])}<p>{E(q['used'])} of {E(q['total'])} tries used this month · "
-            f"<strong>{E(q['left'])} left</strong></p>{pack}</article>")
+        return (f"<article class='u-tier' style='--tc:#8f84a3'><div class='top'><div><div class='tag'>Free</div><h3>{label}</h3></div></div>"
+                f"<p>Free, with a fair-use limit. Quality is basic.</p><div class='count'>{E(q['used'])} of {E(q['total'])} used today</div></article>")
+    color, tag, blurb = TIER_LOOK.get(q.get("tier"), ("#b06cff", "", ""))
+    left_pct = 100 - _pct(q["used"], q["total"])
+    pack = f"<div class='count'>Plus <strong>{E(q['pack_left'])}</strong> extra tries you bought.</div>" if q.get("pack_total") else ""
+    paused = "<span class='u-pill'>Busy right now</span>" if q.get("paused") else ""
+    return (f"<article class='u-tier' style='--tc:{color}'><div class='top'><div><div class='tag'>{E(tag)}</div><h3>{label}</h3>{paused}</div>"
+            f"<div class='u-ring' style='--p:{left_pct}'><span>{E(q['left'])}<small>LEFT</small></span></div></div>"
+            f"<p>{E(blurb)}</p><div class='count'>{E(q['used'])} of {E(q['total'])} tries used this month · <strong>{E(q['left'])} left</strong></div>"
+            f"{pack}</article>")
 
 
 def _choice_card(c: dict, csrf: str) -> str:
@@ -53,53 +125,70 @@ def _choice_card(c: dict, csrf: str) -> str:
         return (f"<form method='post' action='/usage/choice' style='display:inline'>"
                 f"<input type='hidden' name='csrf' value='{E(csrf)}'><input type='hidden' name='choice_id' value='{E(c['id'])}'>"
                 f"<input type='hidden' name='choice' value='{E(value)}'>"
-                f"<button class='button{' primary' if primary else ''}' type='submit'>{E(text)}</button></form> ")
+                f"<button class='button{' primary' if primary else ''}' type='submit'>{E(text)}</button></form>")
     mode = fx_config.USER_MODE_NAMES.get(c["tier"], c["tier"])
-    return (f"<article class='card'><div class='eyebrow'>Your decision</div><h3>{E(mode)} mode</h3><p>{E(c['message'])}</p>"
-            f"<p>{btn('auto', 'Let the agent choose', True)}{btn('lower', 'Use a lower mode')}"
-            f"{btn('higher', 'Use a higher mode')}{btn('review', 'Send to human review')}</p></article>")
+    return (f"<article class='u-choice'><div class='eyebrow'>⏳ Your decision</div><h3>{E(mode)} mode</h3><p>{E(c['message'])}</p>"
+            f"<div class='acts'>{btn('auto', 'Let the agent choose', True)}{btn('lower', 'Use a lower mode')}"
+            f"{btn('higher', 'Use a higher mode')}{btn('review', 'Send to human review')}</div></article>")
 
 
 def usage_page(view: dict, csrf: str, msg: str = "") -> str:
-    msg_html = f"<div class='pill green' style='white-space:normal'>{E(msg)}</div>" if msg else ""
-    cards = "".join(_tier_card(q) for q in view["panel"] if q.get("tier") != "groq")   # the free model no longer fixes
+    msg_html = f"<div class='u-msg'>{E(msg)}</div>" if msg else ""
+    panel = [q for q in view["panel"] if q.get("tier") != "groq"]       # the free model no longer fixes
+    cards = "".join(_tier_card(q) for q in panel)
+    monthly = [q for q in panel if not q.get("daily")]
+    total = sum(int(q.get("total") or 0) for q in monthly)
+    left = sum(int(q.get("left") or 0) for q in monthly)
+    ring_pct = 0 if total <= 0 else round(100 * left / total)
     choices = "".join(_choice_card(c, csrf) for c in view["choices"])
     mode = view["mode"]
-    radios = "".join(
-        f"<label style='display:block;margin:10px 0'><input type='radio' name='mode' value='{k}'{' checked' if k == mode else ''}> "
-        f"<strong>{E(v[0])}</strong><br><span class='muted'>{E(v[1])}</span></label>" for k, v in MODE_HELP.items())
+    tiles = "".join(
+        f"<label class='u-mode'><input type='radio' name='mode' value='{k}'{' checked' if k == mode else ''}><span class='chk'>✓</span>"
+        f"<span class='ic'>{MODE_ICON.get(k, '•')}</span><b>{E(v[0])}</b><span class='t'>{E(v[1])}</span></label>" for k, v in MODE_HELP.items())
     rows = []
     for b in view["bugs"]:
-        action = ""
+        action, extra = "", ""
         if b["status"] == "pr_opened" and b["pr_url"]:
-            action = f"<a href='{E(b['pr_url'])}' target='_blank' rel='noopener'>Open fix</a>"
+            action = f"<a class='button' href='{E(b['pr_url'])}' target='_blank' rel='noopener'>Open fix</a>"
         elif b["status"] == "needs_human":
-            action = (f"<details><summary>Review report</summary><pre style='white-space:pre-wrap;overflow:auto'>{E(b['review_report'])}</pre></details>"
-                      f"<form method='post' action='/usage/retry'><input type='hidden' name='csrf' value='{E(csrf)}'>"
+            action = (f"<form method='post' action='/usage/retry'><input type='hidden' name='csrf' value='{E(csrf)}'>"
                       f"<input type='hidden' name='bug_id' value='{E(b['id'])}'><button class='button' type='submit'>Try again</button></form>")
-        rows.append(f"<tr><td>{E(b['project_name'])}</td><td>{E(STATUS_TEXT.get(b['status'], b['status']))}</td>"
-                    f"<td>{E(b['tries'])}</td><td>{action}</td></tr>")
-    table = ("<div class='table-wrap'><table class='table'><thead><tr><th>Project</th><th>Status</th><th>Tries</th><th></th></tr></thead>"
-             f"<tbody>{''.join(rows)}</tbody></table></div>") if rows else "<div class='empty'>No bugs worked on yet.</div>"
+            extra = f"<details><summary>Review report</summary><pre>{E(b['review_report'])}</pre></details>"
+        color = CASE_COLOR.get(b["status"], "#8f84a3")
+        tries = b.get("tries") or 0
+        rows.append(f"<div class='u-case' style='--sc:{color}'><span class='dot'></span><b>{E(b['project_name'])}</b>"
+                    f"<span class='st'>{E(STATUS_TEXT.get(b['status'], b['status']))}</span>"
+                    f"<span class='n'>{E(tries)} {'try' if str(tries) == '1' else 'tries'} {action}</span>{extra}</div>")
+    cases = f"<div class='u-cases'>{''.join(rows)}</div>" if rows else \
+        "<div class='u-empty'>🌙 No bugs worked on yet. When something breaks, it shows up here.</div>"
 
     def more(kind, text):
         return (f"<form method='post' action='/usage/more' style='display:inline'><input type='hidden' name='csrf' value='{E(csrf)}'>"
-                f"<input type='hidden' name='kind' value='{kind}'><button class='button' type='submit'>{E(text)}</button></form> ")
-    return (f"<section class='section'><p><a href='/dashboard'>← Projects</a></p><div class='eyebrow'>Fix usage</div>"
-            f"<h1>Your tries this month</h1>{msg_html}"
-            f"<p class='muted'>{E(plans.TRY_DEFINITION)} Tries reset on the 1st and buy attempts, not a guaranteed fix.</p>"
-            f"{choices}<div class='grid'>{cards}</div>"
-            f"<details class='card' style='margin-top:14px'><summary><b>How the agent uses your tries</b></summary>"
+                f"<input type='hidden' name='kind' value='{kind}'><button class='button' type='submit'>{E(text)}</button></form>")
+    return (f"{USAGE_CSS}<section class='section use'><p><a href='/dashboard'>← Projects</a></p>{msg_html}"
+            f"<div class='u-hero'><div><div class='eyebrow'>Fix usage</div><h1>Your tries this month</h1>"
+            f"<p class='muted'>{E(plans.TRY_DEFINITION)} Tries reset on the 1st and buy attempts, not a guaranteed fix.</p></div>"
+            f"<div class='u-total' style='--p:{ring_pct}'><div><b>{left}</b><small>of {total} tries left</small></div></div></div>"
+            f"{choices}<div class='u-tiers'>{cards}</div>"
+            f"<div class='u-flow'><div><b>Normal first</b>Every case starts with Normal. Most end here.</div>"
+            f"<div><b>High if needed</b>Takes over with everything Normal found.</div>"
+            f"<div><b>Extra after asking</b>Only with your OK, for the hardest cases.</div>"
+            f"<div><b>Free checks</b>Checking a push never uses a try.</div></div>"
+            f"<details class='u-help'><summary>How the agent uses your tries</summary>"
             f"<p class='muted'>{E(plans.MODE_SUMMARY)}</p><p class='muted'>{E(plans.WHY_STRONGER)}</p>"
             f"<p class='muted'>{E(plans.FAILED_FIX)}</p><p class='muted'>{E(plans.HUMAN_NEEDED)}</p>"
             f"<p><a href='/how-it-works#router'>See how the agent chooses an AI →</a></p></details>"
-            f"<h2>How should the agent behave?</h2><form method='post' action='/usage/mode'><input type='hidden' name='csrf' value='{E(csrf)}'>"
-            f"{radios}<button class='button primary' type='submit'>Save</button></form>"
-            f"<h2>Need more tries?</h2><p class='muted'>Buy a pack for ₹100 (added to this month), or ask and we will review it.</p>"
-            f"<p class='actions'><a class='button primary' href='/billing/pay?plan=pack_high'>Buy 5 High tries · ₹100</a>"
-            f"<a class='button primary' href='/billing/pay?plan=pack_extra'>Buy 3 Extra tries · ₹100</a>"
-            f"{more('high', 'Ask for more High tries')}{more('extra', 'Ask for more Extra tries')}</p>"
-            f"<h2>Recent bugs</h2>{table}</section>")
+            f"<h2 class='u-h2'><span>🎛</span>How should the agent behave?</h2>"
+            f"<form method='post' action='/usage/mode'><input type='hidden' name='csrf' value='{E(csrf)}'>"
+            f"<div class='u-modes'>{tiles}</div><button class='button primary' type='submit'>Save</button></form>"
+            f"<h2 class='u-h2'><span>➕</span>Need more tries?</h2><p class='muted'>Buy a pack for ₹100 (added to this month), or ask and we will review it.</p>"
+            f"<div class='u-packs'><article class='u-pack' style='--tc:#b06cff'><div class='big'>5<small>High</small></div><div>"
+            f"<h3>5 High tries · ₹100</h3><p>For bugs that need deeper analysis.</p><div class='row'>"
+            f"<a class='button primary' href='/billing/pay?plan=pack_high'>Buy 5 High tries · ₹100</a>{more('high', 'Ask for more High tries')}</div></div></article>"
+            f"<article class='u-pack' style='--tc:#ff4f6a'><div class='big'>3<small>Extra</small></div><div>"
+            f"<h3>3 Extra tries · ₹100</h3><p>The strongest engineer, for the hardest cases.</p><div class='row'>"
+            f"<a class='button primary' href='/billing/pay?plan=pack_extra'>Buy 3 Extra tries · ₹100</a>{more('extra', 'Ask for more Extra tries')}</div></div></article></div>"
+            f"<h2 class='u-h2'><span>🧾</span>Recent bugs</h2>{cases}</section>")
 
 
 ADMIN_CSS = """<style>

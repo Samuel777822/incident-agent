@@ -6,6 +6,17 @@ read code, could not see the live site, and pushed fixes that nothing had proven
 on-call engineer: understand the request, look at the real site, find the cause, fix it, prove it, push it, check the live site
 again, and tell the client honestly.
 
+## v4.3: Emails that get through, and the How it works / Usage pages redesigned (11 November 2026)
+
+* **Email:** every configured provider is tried in turn (Brevo, then Resend, then SMTP), and a busy or unreachable provider gets one
+  retry. EMAIL_FROM may be written as `Name <address>`, and quotes or spaces pasted around keys are ignored. Each email now has a text
+  and a plain HTML copy plus a reply-to address (contact@...), which looks less like spam. Every failed row in the admin "Email
+  status" table now says in plain words what to change and where (for example Brevo's "unrecognised IP address": Security,
+  Authorized IPs; a wrong key; an unapproved sender; an account Brevo has not activated yet).
+* **How it works:** the engineer section is interactive. Five clickable steps play a terminal replay of a real-looking case, followed
+  by the Normal, High and Extra ladder with what each run may cost, and the "code problem?" and "sure or not sure" outcomes.
+* **Usage:** progress rings for each mode and for the whole month, clickable mode tiles, pack cards and a cleaner list of recent bugs.
+
 ## v4.1: Haiku first, Auto mode decides "sure or not" (11 November 2026)
 
 * **Haiku 5.5 is the first engineer on every case, at full strength:** the whole code base (up to about 60K tokens, so Haiku stays

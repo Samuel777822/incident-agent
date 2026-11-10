@@ -221,30 +221,8 @@ def _playground_data(cfg: dict) -> str:
 
 
 def _algo_section(cfg: dict) -> str:
-    q = plans.quotas()
-    caps = (cfg.get("agent") or {}).get("max_inr_per_run") or {}
-    cap = (lambda t: f"about ₹{int(caps.get(t, 0))}" if isinstance(caps, dict) and caps.get(t) else "a fixed cap")
-    return f"""<section class='section' id='router'><div class='eyebrow'>The engineer</div><h2>How the agent fixes a problem</h2>
-<p class='lead'>An AI engineer works on a copy of your code the way a developer would: it reads everything, reproduces the problem,
-fixes the cause and runs your checks. It starts with the low-cost mode and calls a stronger one only when it has to.</p>
-<div class='grid'>
-<article class='card'><h3>1. Normal goes first</h3><p class='muted'>Every case starts with the <b>Normal</b> engineer. It reads your whole
-code base, the error, your live site and your recent commits. One run costs a few rupees (at most {cap('haiku')}).</p></article>
-<article class='card'><h3>2. Is it a code problem?</h3><p class='muted'>If the cause is outside your code (a missing key on your host, a
-database or sign-in setting, a service that is down) it stops and gives you simple numbered steps. No money is spent on stronger AI.</p></article>
-<article class='card'><h3>3. Fix and prove</h3><p class='muted'>It edits as much as the fix needs, runs your build and tests in the sandbox,
-and our own check runs again on the final change. Safety rules reject placeholder keys, fake clients, hidden errors and removed features.</p></article>
-<article class='card'><h3>4. Stronger only if needed</h3><p class='muted'>Only if Normal cannot finish does <b>High</b> take over (at most
-{cap('sonnet')} a run), starting from what Normal found. <b>Extra</b> ({cap('opus')}) is used last, and only after asking you.</p></article>
-<article class='card'><h3>5. Sure or not sure</h3><p class='muted'>In Auto mode a fix the agent is sure about (checks green, low risk, nothing
-for you to do) is pushed to your branch after your GitHub tests pass, then your live site is checked. Not sure? You get a pull request,
-the reason, and step-by-step instructions to merge it.</p></article>
-<article class='card'><h3>You stay in control</h3><p class='muted'>Pause or start any case, turn auto-start off, press "Not right? Let a stronger
-AI look", or "Undo this fix". On Usage you choose Auto, Ask me, or Economy (Normal only).</p></article>
-<article class='card'><h3>What a try is</h3><p class='muted'>{E(plans.TRY_DEFINITION)} Your plan includes {q['normal']} Normal, {q['high']} High and
-{q['extra']} Extra tries a month.</p></article>
-<article class='card'><h3>When a person is needed</h3><p class='muted'>{E(plans.HUMAN_NEEDED)}</p></article>
-</div></section>"""
+    import engineer_visual
+    return engineer_visual.section(cfg, plans.quotas(), plans.TRY_DEFINITION, plans.HUMAN_NEEDED)
 
 
 def user_page_html(cfg: dict | None = None) -> str:

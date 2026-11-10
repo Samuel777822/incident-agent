@@ -1925,8 +1925,9 @@ _ADMIN_MESSAGES = {
     "already_done": ("amber", "That request was already handled by someone else. The list below is up to date."),
     "not_found": ("red", "That customer no longer exists."),
     "bad_request": ("red", "That action was not valid."),
-    "test_email_ok": ("green", "Test email accepted by the provider for every admin. Check both inboxes."),
-    "test_email_failed": ("red", "Test email failed. See the Email status table below for the exact reason."),
+    "test_email_ok": ("green", "Test email accepted for every admin. Check both inboxes (and Spam once; if it is there, press Not spam). "
+                               "If the yellow 'reach the inbox' card is shown above, those DNS records are what moves mail out of spam."),
+    "test_email_failed": ("red", "Test email failed. See the Email status table below: the failed row says exactly what to change and where."),
     "ticket_closed": ("green", "Support ticket marked resolved and closed. Customer was sent a resolution email."),
     "ticket_updated": ("green", "Support ticket updated successfully."),
     "slot_granted": ("green", "One extra project slot added to that customer."),
@@ -2215,8 +2216,11 @@ def _admin_view(request):
     notif_rows = []
     for item in portal_db.recent_notifications(10):
         result = _pill("accepted", "green") if item["ok"] else _pill("failed", "red")
+        fix = "" if item["ok"] else notifications.explain(item["detail"] or "")
+        fix_html = (f"<div style='margin-top:6px;padding:8px 10px;border-radius:10px;background:#2a210c;border:1px solid #7a5a20;color:#f3e2b8'>"
+                    f"<b>How to fix:</b> {_escape(fix)}</div>") if fix else ""
         notif_rows.append(f"<tr><td><span title='{_escape(_fmt_time(item['created_at']))}'>{_escape(_ago(item['created_at']))}</span><br><small class='muted'>{_escape(_fmt_time(item['created_at']))}</small></td><td>{_escape(item['recipient'])}</td><td>{_escape(item['kind'])}</td>"
-                          f"<td>{result}<br><small class='muted'>{_escape(item['detail'])}</small></td></tr>")
+                          f"<td>{result}<br><small class='muted'>{_escape(item['detail'])}</small>{fix_html}</td></tr>")
     system = (f"<h2>System</h2><div class='stats'>{worker}{email_state}{payments_state}{_pill('Database: ' + portal_db.database_kind())}</div>"
               f"<form method='post' action='/admin' style='margin-top:12px'><input type='hidden' name='csrf' value='{csrf}'>"
               "<button class='button' name='action' value='send_test_email' type='submit'>Send test email to both admins</button></form>"
