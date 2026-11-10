@@ -150,6 +150,24 @@ def name_of(path: str) -> str:
     return PurePosixPath(path).name.lower()
 
 
+LIST_ITEM = r"""['"][^'"\n]{1,40}['"]"""
+LIST_LITERAL = re.compile(r"[\[(]\s*" + LIST_ITEM + r"(?:\s*,\s*" + LIST_ITEM + r")+\s*,?\s*[\])]")
+OPTION_VALUE = re.compile(r"^\w[\w .+&/-]{0,29}$")
+
+
+def list_values(line: str) -> list[str]:
+    """Simple values of a list / tuple literal on one line: ["NIV", "ESV", "NLT"] -> NIV, ESV, NLT.
+
+    Only real option lists count. Quoted HTML or code fragments ('<a class=', '</section>') are not options: counting them made
+    the rule reject ordinary layout edits in pages that build their HTML inside strings."""
+    out = []
+    for m in LIST_LITERAL.finditer(line):
+        vals = [v for v in QUOTED.findall(m.group(0)) if OPTION_VALUE.match(v.strip())]
+        if len(vals) >= 2:
+            out += vals
+    return out
+
+
 def agent_path_problem(path: str, *, existed: bool) -> str:
     """'' when the agent may write this file, else the reason. New test files are allowed (a reproduction); existing ones are not."""
     name = PurePosixPath(path).name.lower()
@@ -177,8 +195,21 @@ def _added_removed(old: str, new: str) -> tuple[list[str], list[str]]:
 
 
 def agent_change_problems(original: dict[str, str], changed: dict[str, str]) -> list[str]:
-    """Why the agent's final change must not go out ([] = acceptable). Pure function, unit-tested with the Bible-Well commits."""
+    """HARD blocks only: what must never go out ([] = acceptable). Secrets in code, protected files (secret, lock, CI, monitor,
+    existing tests), risky constructs, code that does not parse, absurd size. Judgement calls are warnings, see agent_change_warnings."""
+    return _agent_review(original, changed)[0]
+
+
+def agent_change_warnings(original: dict[str, str], changed: dict[str, str]) -> list[str]:
+    """Judgement calls the ENGINEER may make (it decides), but a person should see them before they go live: a removed option,
+    removed error reporting, a stub, a placeholder value, a value moved to an environment variable. Such a fix becomes a pull
+    request with these warnings written in plain words, instead of a silent push."""
+    return _agent_review(original, changed)[1]
+
+
+def _agent_review(original: dict[str, str], changed: dict[str, str]) -> tuple[list[str], list[str]]:
     problems: list[str] = []
+    warnings: list[str] = []
     if len(changed) > AGENT_MAX_FILES:
         problems.append(f"changes {len(changed)} files (limit {AGENT_MAX_FILES}); split the work or explain it to the owner")
     total = 0
@@ -205,23 +236,22 @@ def agent_change_problems(original: dict[str, str], changed: dict[str, str]) -> 
         if test_file:
             continue
         if PLACEHOLDER.search(add_text) and not PLACEHOLDER.search(rem_text) and name_of(path) not in prompts.EXAMPLE_ENV:
-            problems.append(f"{path}: replaces a real value with a placeholder (that breaks the site; keep the real value)")
+            warnings.append(f"{path}: puts a placeholder where a real value was (if the real value is needed, the site breaks)")
         lost = [m.group(1) for line in removed for m in LONG_LITERAL.finditer(line) if m.group(1) not in new]
         if lost and ENV_READ.search(add_text):
-            problems.append(f"{path}: moves a hard-coded key/value into an environment variable the host may not have. Front-end keys "
-                            "(Supabase anon, Firebase web config, Stripe publishable) are public by design: keep them, or use needs_owner")
+            warnings.append(f"{path}: moves a value from the code into an environment variable; your host must have that variable set")
         if STUB_WORD.search(add_text) and not STUB_WORD.search(old):
-            problems.append(f"{path}: adds a stub / fake / mock object; fix the real cause instead of pretending the service works")
+            warnings.append(f"{path}: adds a stub / fake object instead of the real service")
         lost_reports = len(ERROR_REPORT.findall(rem_text)) - len(ERROR_REPORT.findall(add_text))
         if lost_reports > 0:
-            problems.append(f"{path}: removes error reporting (console.error / throw / logging) without replacing it; that hides the problem")
-        old_options = {q for line in removed if len(QUOTED.findall(line)) >= 2 for q in QUOTED.findall(line)}
-        gone = sorted(q for q in old_options if q.strip() and f'"{q}"' not in new and f"'{q}'" not in new)
+            warnings.append(f"{path}: removes error reporting (console.error / throw / logging)")
+        old_options = {q for line in removed for q in list_values(line)}
+        gone = sorted(q for q in old_options if f'"{q}"' not in new and f"'{q}'" not in new)
         if gone:
-            problems.append(f"{path}: removes option(s) {', '.join(repr(g) for g in gone[:4])}; do not remove features to avoid an error")
+            warnings.append(f"{path}: removes {', '.join(repr(g) for g in gone[:4])} from a list (check that this was intended)")
     if total > AGENT_MAX_LINES:
         problems.append(f"changes about {total} lines (limit {AGENT_MAX_LINES})")
-    return problems
+    return problems, warnings
 
 
 def agent_risk_notes(changed: dict[str, str]) -> list[str]:

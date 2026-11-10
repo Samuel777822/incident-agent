@@ -65,12 +65,22 @@ APP = {"src/supabase.js": f"const supabaseKey = '{KEY}'\nexport const supabase =
     ("placeholder key (0113612)", {"src/supabase.js": "const supabaseKey = 'public-anon-key'\nexport const supabase = createClient(url, supabaseKey)\n"}, "placeholder"),
     ("key to a missing env var (fcd300a)", {"src/supabase.js": "const supabaseKey = import.meta.env.VITE_SUPABASE_ANON_KEY\nexport const supabase = createClient(url, supabaseKey)\n"}, "environment variable"),
     ("fake client (89866aa)", {"src/supabase.js": APP["src/supabase.js"] + "// stub client so it does not crash\nconst stub = {}\n"}, "stub"),
-    ("removes NIV (bfe1a7f)", {"src/App.jsx": APP["src/App.jsx"].replace('"NIV", ', "")}, "removes option"),
-    ("monitor file", {"incident-agent-monitor.cjs": "x"}, "monitor"),
+    ("removes NIV (bfe1a7f)", {"src/App.jsx": APP["src/App.jsx"].replace('"NIV", ', "")}, "'NIV'"),
 ])
-def test_every_harmful_bible_well_commit_is_rejected(name, change, expect):
-    problems = validator.agent_change_problems(APP, change)
-    assert problems and expect in " ".join(problems), (name, problems)
+def test_judgement_calls_are_allowed_but_flagged_for_the_owner(name, change, expect):
+    """The engineer decides (it may delete things when that is right), but the owner sees each judgement call before it goes live."""
+    assert validator.agent_change_problems(APP, change) == [], name
+    warnings = validator.agent_change_warnings(APP, change)
+    assert warnings and expect in " ".join(warnings), (name, warnings)
+
+
+def test_hard_limits_stay_refused():
+    assert "monitor" in " ".join(validator.agent_change_problems(APP, {"incident-agent-monitor.cjs": "x"}))
+    assert "existing test" in " ".join(validator.agent_change_problems({"tests/test_a.py": "x"}, {"tests/test_a.py": "y"}))
+    assert validator.agent_change_problems(APP, {"src/App.jsx": "const k = 'sk-ant-" + "a" * 30 + "'\n"})
+    html_old = {"web_app.py": 'x = ("<section class=a>", "<a class=b>", "</section>")\n'}
+    html_new = {"web_app.py": 'x = ("<div class=c>", "<a class=b>", "</div>")\n'}
+    assert validator.agent_change_problems(html_old, html_new) == [] and validator.agent_change_warnings(html_old, html_new) == []
 
 
 def test_an_honest_fix_and_a_new_reproduction_test_pass():
@@ -105,14 +115,10 @@ def test_the_engineer_reads_edits_runs_checks_and_finishes(tmp_path):
     assert [s["tool"] for s in res.steps][:2] == ["read_file", "search_code"] and res.cost_usd == pytest.approx(0.05)
 
 
-def test_a_harmful_finish_is_refused_and_the_engineer_hands_it_to_the_owner(tmp_path):
+def test_the_engineer_may_make_a_judgement_call_and_can_still_hand_it_to_the_owner(tmp_path):
     ws = _ws(tmp_path, APP)
     t = FakeTransport([
         reply(call("web_search", query="is the supabase anon key secret")),
-        reply(call("edit_file", path="src/supabase.js", old_text=f"'{KEY}'", new_text="import.meta.env.VITE_SUPABASE_ANON_KEY")),
-        reply(call("run_checks")),
-        reply(call("finish_fixed", understanding="u", root_cause="r", changes_summary="c", client_message="m", verification=[], owner_steps=[],
-                   risk="low", project_notes="")),
         reply(call("needs_owner", what_is_wrong="Your Supabase project blocks the Google sign-in return address.",
                    why="Google sends people back to an address Supabase does not allow.",
                    steps=["Open supabase.com and sign in", "Authentication > URL Configuration > add https://bible.example to Redirect URLs"],
@@ -123,9 +129,35 @@ def test_a_harmful_finish_is_refused_and_the_engineer_hands_it_to_the_owner(tmp_
     ws.close()
     assert res.outcome == "needs_owner" and len(res.data["steps"]) == 2
     everything = json.dumps(t.calls[-1]["messages"])
-    assert "not allowed" in everything and "environment variable" in everything
     assert "supabase.com/docs" in everything                                        # the web search answer came back with its source
     assert any(c.get("extra", {}).get("plugins") for c in t.calls)                 # through OpenRouter's web plugin
+    ws2 = _ws(tmp_path / "b", APP)
+    t2 = FakeTransport([
+        reply(call("edit_file", path="src/App.jsx", old_text='"NIV", ', new_text="")),
+        reply(call("run_checks")),
+        reply(call("finish_fixed", understanding="u", root_cause="the NIV source is gone for good", changes_summary="removed NIV on purpose",
+                   client_message="NIV is no longer offered by the API, so it was removed.", verification=[], owner_steps=[], risk="low",
+                   project_notes="")),
+    ])
+    res2 = agent.Engineer(transport=t2, workspace=ws2, cfg=fx_config.load(), runner=OkRunner(), profile=sandbox.Profile(language="static")).run(
+        [{"type": "text", "text": "x"}])
+    ws2.close()
+    assert res2.outcome == "fixed"                                                    # its decision stands
+
+
+def test_a_judgement_call_goes_to_a_pull_request_with_the_warning(tmp_path, monkeypatch):
+    monkeypatch.setenv("AGENT_DIRECT_PUSH", "1")
+    fix = [reply(call("edit_file", path="pricing.py", old_text="price * pct / 10\n", new_text="price * pct / 100\n")),
+           reply(call("write_file", path="helpers.py", content="# stub payment client used while the real one is down\nclass Stub:\n    pass\n")),
+           reply(call("run_checks")),
+           reply(call("finish_fixed", understanding="u", root_cause="r", changes_summary="c", client_message="m", verification=[],
+                      owner_steps=[], risk="low", project_notes=""))]
+    engine, transports, prs, pid = _engine(tmp_path, monkeypatch, {"haiku": fix}, mode="auto")
+    sent = []
+    monkeypatch.setattr(engine, "_start_github_proof", lambda claimed, project, bug, win: sent.append(win) or "github_testing")
+    H.make_incident(pid)
+    assert engine.handle_incident(H.claim()) == "github_testing"
+    assert "stub" in sent[0]["hold_reason"] and sent[0]["hold_reason"].startswith("the agent is not sure")
 
 
 def test_paused_budget_and_secret_files(tmp_path):

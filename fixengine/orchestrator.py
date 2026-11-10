@@ -560,7 +560,7 @@ class Engine:
             win = {"new_files": dict(res.new_files), "diff": res.diff, "diagnosis": diagnosis, "level": level, "tier": tier, "model": model,
                    "attempt_id": attempt_id, "client_message": client.strip(),
                    "verification": investigator.clean_steps(res.data.get("verification") or [])}
-            review = validator.agent_risk_notes(res.new_files)
+            review = validator.agent_risk_notes(res.new_files) + validator.agent_change_warnings(files, res.new_files)
             risk = str(res.data.get("risk", "")).lower() or "unknown"
             if risk != "low":
                 review.append(f"the engineer rated the risk of this change as {risk}")

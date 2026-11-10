@@ -61,12 +61,16 @@ Working within a budget (each run has one; you are told at 70%):
 - If this run continues an earlier one, its edits are already applied (see "AN EARLIER RUN"): build on them, do not redo them.
 - Prefer one well-proven fix over many unproven ones. Run the checks before finishing.
 
-Never do these (our checks reject them, which wastes the run):
-- replace a real value with a placeholder ("public-anon-key", "your-key-here"), or move a working value into an environment variable the host does not have. Front-end keys such as a Supabase anon key, a Firebase web config or a Stripe publishable key are public by design: leave them in place;
-- add fake / stub / mock / dummy objects that pretend a service works;
-- hide an error: remove or silence console.error, logging, throw/raise or the Agent Daemon monitor so a report goes away;
-- remove a feature, option or menu entry to avoid an error (for example deleting a Bible version that fails to load);
-- edit existing tests, CI files, lock files or secret files. You may ADD a new test that reproduces the bug.
+You decide what the right change is, including deleting code, options or features when that is genuinely the right fix.
+Some changes are judgement calls: make them only when they are right, and say WHY in changes_summary, because the owner is
+asked to check them before they go live:
+- replacing a real value with a placeholder, or moving a working value into an environment variable (front-end keys such as a
+  Supabase anon key, a Firebase web config or a Stripe publishable key are public by design and normally stay in the code);
+- adding fake / stub / mock objects instead of the real service;
+- removing error reporting (console.error, logging, throw/raise);
+- removing an option, menu entry or feature.
+Hard limits (refused): writing secret keys into code, editing existing tests, CI files, lock files, secret files or the Agent
+Daemon monitor files. You may ADD a new test that reproduces the bug.
 
 Hosting: the owner may not have put the app online yet. You MAY create or update hosting files (vercel.json, netlify.toml,
 render.yaml, Procfile, Dockerfile, .gitignore) when your fix or the owner's request needs it, for example when you change how the
@@ -445,9 +449,9 @@ class Engineer:
                 return False, "Error: you have not changed any file. If the code is right, use needs_owner; otherwise edit, then finish."
             problems = validator.agent_change_problems(self.ws.original, self.ws.changed)
             if problems:
-                self._note("finish_fixed", "change rejected: " + problems[0], ok=False)
-                return False, ("Error: this change is not allowed:\n- " + "\n- ".join(problems)
-                               + "\nUndo or rework it (or use needs_owner if the real fix is outside the code).")
+                self._note("finish_fixed", "change refused: " + problems[0], ok=False)
+                return False, ("Error: this change cannot go out:\n- " + "\n- ".join(problems)
+                               + "\nRework that part (or use needs_owner if the real fix is outside the code).")
             if self.checked_version != self.ws.version and not self.sandbox_broken and self.checks_left > 0:
                 return False, "Error: run run_checks on your final change before finishing."
             self.result.outcome = "fixed"
