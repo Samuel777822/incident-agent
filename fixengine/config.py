@@ -96,11 +96,14 @@ DEFAULTS: dict = {
     "agent": {
         "max_steps": 45,
         "max_seconds": 1500,
-        "max_inr_per_run": 90.0,        # about $1 of OpenRouter credit per run; Opus gets its own run
+        # Rupees ONE run may spend, per model. Haiku runs cost a few rupees, so it always goes first.
+        "max_inr_per_run": {"haiku": 15.0, "sonnet": 90.0, "opus": 120.0},
+        # Whole code base in the first message up to this many characters (Haiku's price rises above 100K prompt tokens).
+        "full_code_chars": {"haiku": 240000, "sonnet": 450000, "opus": 450000},
         "max_check_runs": 5,
         "max_page_visits": 5,
         "max_web_searches": 6,
-        "effort": {"sonnet": "high", "opus": "high"},
+        "effort": {"haiku": "high", "sonnet": "high", "opus": "high"},
     },
     "ask_timeout_minutes": 30,
     "sandbox": {

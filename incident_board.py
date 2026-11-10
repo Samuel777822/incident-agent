@@ -315,6 +315,9 @@ def guide_html(inc: dict, project_id: str, csrf: str, pr_url: str) -> str:
         body = live.split(chr(10), 1)[1].strip() if chr(10) in live else live
         parts.append("<div class='guide'><b>What you need to do</b><div class='guide-text'>" + _e(body).replace(chr(10), "<br>") + "</div>"
                      + _post_button(base + "/reply", csrf, "I did it, check again", primary=True, extra={"text": "I did the steps. Please check again."})
+                     + (_post_button(base + "/escalate", csrf, "Not right? Let a stronger AI look")
+                        + "<p class='guide-line'>If you think this IS a problem in your code, the next stronger model reads everything "
+                          "again with what was found so far (costs a little more).</p>" if inc.get("fx_can_escalate") else "")
                      + "</div>")
     elif pr_url and status in ("diagnosed", "pr_opened", "needs_human") and stage not in ("verifying", "verified", "reverted"):
         parts.append(

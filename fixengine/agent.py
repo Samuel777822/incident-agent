@@ -281,17 +281,24 @@ def usage_numbers(usage: dict) -> tuple[int, int, int, float]:
     return tin, tout, cached, cost
 
 
+def _tier_of(model: str) -> str:
+    low = str(model or "").lower()
+    return "haiku" if "haiku" in low else "opus" if "opus" in low else "sonnet"
+
+
 # ---- the engineer ---------------------------------------------------------------------------------------------------------------------
 class Engineer:
     def __init__(self, *, transport: OpenRouterTransport, workspace: Workspace, cfg: dict, runner=None, profile=None,
                  site_url: str = "", investigate=None, commits=None, commit_show=None, web_model: str = "",
-                 should_stop=None, on_step=None, usd_inr: float = 85.0):
+                 should_stop=None, on_step=None, usd_inr: float = 85.0, max_inr: float | None = None):
         self.t = transport
         self.ws = workspace
         acfg = cfg.get("agent") or {}
         self.max_steps = int(acfg.get("max_steps", 45))
         self.max_seconds = int(acfg.get("max_seconds", 1500))
-        self.max_inr = float(acfg.get("max_inr_per_run", 150.0))
+        cap = acfg.get("max_inr_per_run", 90.0)
+        tier_cap = cap.get(_tier_of(transport.model), 90.0) if isinstance(cap, dict) else cap
+        self.max_inr = float(max_inr if max_inr is not None else tier_cap)
         self.max_checks = int(acfg.get("max_check_runs", 5))
         self.max_pages = int(acfg.get("max_page_visits", 5))
         self.max_searches = int(acfg.get("max_web_searches", 6))

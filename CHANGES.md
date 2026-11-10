@@ -6,6 +6,22 @@ read code, could not see the live site, and pushed fixes that nothing had proven
 on-call engineer: understand the request, look at the real site, find the cause, fix it, prove it, push it, check the live site
 again, and tell the client honestly.
 
+## v4.1: Haiku first, Auto mode decides "sure or not" (11 November 2026)
+
+* **Haiku 5.5 is the first engineer on every case, at full strength:** the whole code base (up to about 60K tokens, so Haiku stays
+  in its cheapest price band), every tool, high reasoning effort, at most about Rs 15 per run (estimated Rs 3-10 for a normal
+  case). It stops there when it fixes the problem, writes steps for the owner, or asks a question.
+* **Sonnet takes over only when Haiku does not finish** with a fix that passes the checks, starting from what Haiku found
+  (about Rs 90 cap per run). **Opus last**, once, and only after asking the owner with the buttons on the case card.
+* **No free model in fixing.** Free OpenRouter models allow about 50 requests a day (one engineer run uses 20-40), may log prompts
+  (customer code), and their patches were the weakest.
+* **Auto mode: sure pushes, not sure asks.** Sure = our sandbox passed the final change, the engineer ran the checks on it, it rated
+  the risk low, and nothing is left for the owner. Then the fix goes straight to the branch (GitHub tests first, live check after,
+  automatic undo when the site gets worse). Anything else becomes a pull request whose reason starts "the agent is not sure: ...".
+  No extra reviewer model is paid on this path.
+* **"Not right? Let a stronger AI look"** on "Needs you" cases: the next stronger model (Haiku -> Sonnet -> Opus) reads everything
+  again with what was found so far. You decide when to spend more.
+
 ## v4: the engineer (11 November 2026)
 
 Why: on Bible-Well the old engine replaced a working Supabase key with `'public-anon-key'` (8 Nov), then pushed seven patches in 36

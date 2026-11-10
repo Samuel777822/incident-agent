@@ -3489,6 +3489,9 @@ def _with_fx_paths(incidents):
         paths = fx_api.paths_for_incidents([i.get("id") for i in incidents])
         out = [{**i, "fx_path": fx_ui.mode_path(paths[i["id"]]["tiers"])} if paths.get(i.get("id"), {}).get("tiers") else i for i in incidents]
         for inc in out:
+            if inc.get("stage") == "needs_you" or str(inc.get("live_result") or "").startswith("NEEDS YOU"):
+                bug = fx_store.get_bug_by_incident(inc["id"])
+                inc["fx_can_escalate"] = bool(_next_tier(bug))
             if inc.get("status") == "awaiting_choice":
                 bug = fx_store.get_bug_by_incident(inc["id"])
                 choice = fx_store.waiting_choice_for_bug(bug["id"]) if bug else None
@@ -3592,6 +3595,15 @@ def _page_case_action(request, project_id, incident_id, action):
         return _redirect(back + "?case=started#case-" + incident_id)
     from fixengine import store as fx_store
     bug = fx_store.get_bug_by_incident(incident_id)
+    if action == "escalate":
+        nxt = _next_tier(bug)
+        if not bug or not nxt:
+            return _redirect(back + "?case=escalate_none#case-" + incident_id)
+        fx_store.set_flag(f"agent_start:{bug['id']}", nxt)
+        fx_store.add_client_reply(incident_id, "The owner thinks this IS a problem in the code. Look again, deeper.")
+        fx_store.update_bug(bug["id"], status="open", closed_at=None, stop_reason="")
+        portal_db.reopen_incident_with_reply(incident_id, project_id, "Not right: let a stronger AI look")
+        return _redirect(back + "?case=escalated#case-" + incident_id)
     if action == "merged":
         import site_probe
         if not site_probe.safe_url(project.get("app_url") or ""):
@@ -3652,7 +3664,22 @@ def _page_project_cases(request, project_id, action):
     return _redirect(f"/projects/{project_id}?case={'auto_on' if on else 'auto_off'}")
 
 
+def _next_tier(bug) -> str:
+    """The next stronger engineer after the last one that worked on this case ('' after Extra mode)."""
+    if not bug:
+        return ""
+    from fixengine import store as fx_store
+    order = ("haiku", "sonnet", "opus")
+    used = [a["tier"] for a in fx_store.list_attempts(bug["id"]) if a["tier"] in order and a["result"] != "system_fault"]
+    if not used:
+        return "sonnet"
+    i = order.index(used[-1])
+    return order[i + 1] if i + 1 < len(order) else ""
+
+
 CASE_FLASH = {
+    "escalated": ("green", "OK. A stronger AI model is taking another look, starting from what was found so far."),
+    "escalate_none": ("amber", "The strongest model already looked at this case. Reply on the case to tell it what it got wrong."),
     "paused": ("amber", "Paused. The agent stops working on this case and spends nothing until you press Start."),
     "started": ("green", "Started. The agent picks this case up in a few seconds."),
     "paused_all": ("amber", "All open cases are paused. Start the ones you want the agent to work on."),
@@ -4365,7 +4392,7 @@ def _dispatch(request: Request) -> Response:
     match = re.fullmatch(r"/projects/([0-9a-f-]{36})/site-url", request.path)
     if match:
         return _page_site_url(request, match.group(1))
-    match = re.fullmatch(r"/projects/([0-9a-f-]{36})/incidents/([0-9a-f-]{36})/(pause|resume|merged|undo)", request.path)
+    match = re.fullmatch(r"/projects/([0-9a-f-]{36})/incidents/([0-9a-f-]{36})/(pause|resume|merged|undo|escalate)", request.path)
     if match:
         return _page_case_action(request, match.group(1), match.group(2), match.group(3))
     match = re.fullmatch(r"/projects/([0-9a-f-]{36})/(pause-all|auto-start)", request.path)
@@ -4482,7 +4509,7 @@ def _timeline_html(incident_id: str) -> str:
         steps = []
     if not steps:
         return ""
-    names = {"sonnet": "High", "opus": "Extra"}
+    names = {"haiku": "Normal", "sonnet": "High", "opus": "Extra"}
     rows = "".join(f"<li class='{'' if s.get('ok', True) else 'bad'}'><span class='muted'>{_escape(names.get(s.get('tier'), s.get('tier', '')))}</span> "
                    f"{_escape(s.get('what', ''))}</li>" for s in steps[-80:])
     return ("<article class='card'><h2>What the engineer did</h2><p class='muted'>Every step of its work on your code, newest last.</p>"

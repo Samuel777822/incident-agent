@@ -194,30 +194,32 @@ FIX = [reply(call("read_file", path="pricing.py")),
                   risk="low", project_notes="Python shop, prices in pricing.py"))]
 
 
-def test_a_case_is_fixed_by_the_engineer_proven_in_our_sandbox_and_sent_as_a_pull_request(tmp_path, monkeypatch):
-    engine, transports, prs, pid = _engine(tmp_path, monkeypatch, {"sonnet": list(FIX)})
+def test_haiku_fixes_it_and_no_stronger_model_is_paid(tmp_path, monkeypatch):
+    engine, transports, prs, pid = _engine(tmp_path, monkeypatch, {"haiku": list(FIX)})
     inc = H.make_incident(pid)
     assert engine.handle_incident(H.claim()) == "pr_opened"
-    assert "pct / 100" in prs[0]["new_files"]["pricing.py"] and "opus" not in transports        # Sonnet fixed it; Opus never ran
+    assert "pct / 100" in prs[0]["new_files"]["pricing.py"]
+    assert "sonnet" not in transports and "opus" not in transports                             # Haiku fixed it: nothing else ran
     bug = store.get_bug_by_incident(inc)
     tiers = [(a["tier"], a["result"]) for a in store.list_attempts(bug["id"])]
-    assert tiers == [("sonnet", "pass")] and "groq" not in json.dumps(tiers)                     # no free-model / Haiku ladder
+    assert tiers == [("haiku", "pass")] and "groq" not in json.dumps(tiers)                      # no free model in fixing
+    assert transports["haiku"].calls[0]["messages"][1]["content"][2]["text"].count("===== FILE:") >= 2   # Haiku got the whole code
     assert store.get_flag(f"notes:{pid}") == "Python shop, prices in pricing.py"                # remembered for the next case
     assert [s["tool"] for s in store.gh_state(bug["id"])["agent_log"]][:3] == ["read_file", "edit_file", "run_checks"]
 
 
-def test_when_sonnet_gives_up_opus_gets_one_run_with_what_sonnet_found(tmp_path, monkeypatch):
+def test_when_haiku_cannot_finish_sonnet_takes_over_with_what_haiku_found(tmp_path, monkeypatch):
     engine, transports, prs, pid = _engine(tmp_path, monkeypatch, {
-        "sonnet": [reply(call("give_up", reason="could not find it", findings="the discount maths in pricing.py looks wrong"))],
-        "opus": list(FIX)})
+        "haiku": [reply(call("give_up", reason="could not find it", findings="the discount maths in pricing.py looks wrong"))],
+        "sonnet": list(FIX)})
     H.make_incident(pid)
-    assert engine.handle_incident(H.claim()) == "pr_opened"
-    opus_brief = json.dumps(transports["opus"].calls[0]["messages"][1]["content"])
-    assert "AN EARLIER RUN ON THIS CASE" in opus_brief and "discount maths" in opus_brief
+    assert engine.handle_incident(H.claim()) == "pr_opened" and "opus" not in transports
+    sonnet_brief = json.dumps(transports["sonnet"].calls[0]["messages"][1]["content"])
+    assert "AN EARLIER RUN ON THIS CASE" in sonnet_brief and "discount maths" in sonnet_brief
 
 
 def test_not_a_code_problem_ends_with_beginner_steps_and_no_more_models(tmp_path, monkeypatch):
-    engine, transports, prs, pid = _engine(tmp_path, monkeypatch, {"sonnet": [reply(call(
+    engine, transports, prs, pid = _engine(tmp_path, monkeypatch, {"haiku": [reply(call(
         "needs_owner", what_is_wrong="The site cannot reach its database because a key is missing on Vercel.",
         why="The code asks Vercel for VITE_SUPABASE_ANON_KEY and Vercel has none.",
         steps=["Open vercel.com > your project > Settings > Environment Variables", "Name: VITE_SUPABASE_ANON_KEY. Value: copy the anon public "
@@ -227,10 +229,18 @@ def test_not_a_code_problem_ends_with_beginner_steps_and_no_more_models(tmp_path
     assert engine.handle_incident(H.claim()) == "needs_owner"
     row = portal_db.get_incident_row(inc)
     assert row["live_result"].startswith("NEEDS YOU") and "1. Open vercel.com" in row["live_result"] and "How to check it worked" in row["live_result"]
-    assert "opus" not in transports and not prs
+    assert "sonnet" not in transports and "opus" not in transports and not prs
     import incident_board
-    card = incident_board.guide_html(row, pid, "tok", "")
-    assert "What you need to do" in card and "I did it, check again" in card
+    card = incident_board.guide_html({**row, "fx_can_escalate": True}, pid, "tok", "")
+    assert "What you need to do" in card and "I did it, check again" in card and "Let a stronger AI look" in card
+    # the owner disagrees: the next run starts at Sonnet (no Haiku again), with the owner's words
+    bug = store.get_bug_by_incident(inc)
+    store.set_flag(f"agent_start:{bug['id']}", "sonnet")
+    store.add_client_reply(inc, "The owner thinks this IS a problem in the code. Look again, deeper.")
+    portal_db.reopen_incident_with_reply(inc, pid, "Not right")
+    transports["sonnet"] = FakeTransport(list(FIX))
+    assert engine.handle_incident(H.claim()) == "pr_opened"
+    assert len(transports["haiku"].calls) == 1 and "Look again, deeper" in json.dumps(transports["sonnet"].calls[0]["messages"][1]["content"])
 
 
 def test_an_unsafe_fix_is_never_sent_even_if_the_model_insists(tmp_path, monkeypatch):
@@ -239,7 +249,7 @@ def test_an_unsafe_fix_is_never_sent_even_if_the_model_insists(tmp_path, monkeyp
            reply(call("finish_fixed", understanding="", root_cause="", changes_summary="", client_message="", verification=[], owner_steps=[],
                       risk="low", project_notes="")),
            reply(call("give_up", reason="my only idea was a stub", findings=""))]
-    engine, transports, prs, pid = _engine(tmp_path, monkeypatch, {"sonnet": bad, "opus": [reply(call("give_up", reason="no", findings=""))]})
+    engine, transports, prs, pid = _engine(tmp_path, monkeypatch, {"haiku": bad, "sonnet": list(bad), "opus": [reply(call("give_up", reason="no", findings=""))]})
     H.make_incident(pid)
     assert engine.handle_incident(H.claim()) == "needs_human" and not prs
 
@@ -311,3 +321,33 @@ def test_undo_this_fix_puts_the_files_back(web_env, monkeypatch):
     monkeypatch.setattr(git_ops, "revert_files", lambda project, **kw: calls.append(kw) or "ok")
     _, headers, _ = _request(f"/projects/{project_id}/incidents/{inc['id']}/undo", method="POST", cookie=cookie, form={"csrf": csrf})
     assert "case=undone" in str(headers) and calls[0]["paths"] == ["pricing.py"] and calls[0]["base_sha"] == "b" * 40
+
+
+# ============================================================================================ Auto mode: sure pushes, not sure asks
+def _auto(tmp_path, monkeypatch, risk):
+    monkeypatch.setenv("AGENT_DIRECT_PUSH", "1")
+    fix = list(FIX[:-1]) + [reply(call("finish_fixed", understanding="u", root_cause="r", changes_summary="c", client_message="m",
+                                       verification=[], owner_steps=[], risk=risk, project_notes=""))]
+    engine, transports, prs, pid = _engine(tmp_path, monkeypatch, {"haiku": fix}, mode="auto")
+    sent = []
+    monkeypatch.setattr(engine, "_start_github_proof", lambda claimed, project, bug, win: sent.append(win) or "github_testing")
+    H.make_incident(pid)
+    assert engine.handle_incident(H.claim()) == "github_testing"
+    return sent[0]
+
+
+def test_auto_mode_pushes_a_sure_fix(tmp_path, monkeypatch):
+    win = _auto(tmp_path, monkeypatch, "low")
+    assert not win.get("hold_reason")                 # checks green, low risk, nothing for the owner: straight to the branch
+
+
+def test_auto_mode_sends_an_unsure_fix_to_a_pull_request_with_the_reason(tmp_path, monkeypatch):
+    win = _auto(tmp_path, monkeypatch, "medium")
+    assert win["hold_reason"].startswith("the agent is not sure") and "risk of this change as medium" in win["hold_reason"]
+
+
+def test_budgets_haiku_runs_are_cheap_by_design(cfg):
+    caps = cfg["agent"]["max_inr_per_run"]
+    assert caps["haiku"] <= 20 < caps["sonnet"] and cfg["agent"]["effort"]["haiku"] == "high"
+    eng = agent.Engineer(transport=FakeTransport([], model="anthropic/claude-haiku-5.5"), workspace=None, cfg=cfg)
+    assert eng.max_inr == caps["haiku"]

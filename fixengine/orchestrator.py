@@ -300,7 +300,10 @@ class Engine:
         return "needs_owner"
 
     # ---- v4: the engineer (Claude with tools on the real repository) ---------------------------------------------------------
-    AGENT_TIERS = ("sonnet", "opus")
+    AGENT_TIERS = ("haiku", "sonnet", "opus")      # cheapest first; the next model starts with what the previous one found
+    STAGE_TEXT = {"haiku": "The engineer (Normal mode) is reading your code and the evidence",
+                  "sonnet": "A stronger engineer (High mode) is taking over, with what the first one found",
+                  "opus": "The strongest engineer (Extra mode) is taking over, with everything found so far"}
 
     def _agent_ready(self) -> bool:
         if os.getenv("FIX_AGENT_MODE", "1").strip().lower() in ("0", "false", "no", "off"):
@@ -317,12 +320,15 @@ class Engine:
         return fx_agent.OpenRouterTransport(self.adapters[tier].model, effort=effort)
 
     def _agent_work(self, claimed, project, bug, event, root, files, profile, message, traceback_text, commits, ctx) -> str:
-        """Sonnet works the case as an engineer; Opus gets ONE run when Sonnet does not finish with a proven fix. No ladder of weak
-        models, no guessing: a run ends with a fix that passed the checks, instructions for the owner, one question, or an honest stop."""
+        """Haiku works the case first, at full strength (whole code base, every tool). Only when it does not finish with a fix that
+        passes the checks does Sonnet take over (with what Haiku found), then Opus once, after asking the owner. A run that ends with
+        steps for the owner or a question stops the case there: no stronger model is paid for it unless the owner asks for one."""
         incident_id, project_id, user_id = claimed["incident_id"], claimed["project_id"], project["user_id"]
         gh_round = int(store.gh_state(bug["id"]).get("round", 0))
         reason = "the engineer could not find a safe fix"
-        for tier in self.AGENT_TIERS:
+        start = store.get_flag(f"agent_start:{bug['id']}", "")
+        tiers = self.AGENT_TIERS[self.AGENT_TIERS.index(start):] if start in self.AGENT_TIERS else self.AGENT_TIERS
+        for tier in tiers:
             bug = store.get_bug(bug["id"])
             if bug["user_pinned_tier"] == "__review__":
                 return self._finish_review(claimed, project, bug, store.list_attempts(bug["id"]), event, "you chose human review")
@@ -338,18 +344,18 @@ class Engine:
                     return self._fault_wait(claimed, bug, gate.message, min(900, max(60, gate.wait_seconds or 900)), quiet=True)
                 reason = gate.message or reason
                 continue
-            warned = self._maybe_warn(claimed, project, bug, tier)
-            if warned:
-                return warned
-            _stage(incident_id, "thinking", "The engineer is reading your code and the evidence" if tier == "sonnet"
-                   else "A stronger engineer (Extra mode) is taking over, with what the first one found", tier)
+            if tier != "haiku" and tier != start:   # Haiku costs a few rupees; a model you asked for is not asked about again
+                warned = self._maybe_warn(claimed, project, bug, tier)
+                if warned:
+                    return warned
+            _stage(incident_id, "thinking", self.STAGE_TEXT.get(tier, "The engineer is working"), tier)
             result = self._agent_try(claimed, project, bug, tier, gate.pack_try, files, root, profile, message, traceback_text,
                                      commits, ctx, info)
             self.guard.check_alerts()
             kind, payload = result
             if kind == "pass":
                 payload["from_push"] = claimed.get("source") == "push"
-                hold = self._push_policy(claimed, project, bug, payload, ctx)
+                hold = str(payload.get("force_review") or "")      # "not sure" -> a pull request with the reason; "sure" -> Auto pushes
                 if hold:
                     payload["hold_reason"] = hold
                 if self._direct_push(project, claimed):
@@ -361,7 +367,7 @@ class Engine:
                 return self._ask_client(claimed, project, bug, payload)
             if kind == "paused":
                 return "paused"
-            if kind == "model_fault" and tier == self.AGENT_TIERS[-1]:
+            if kind == "model_fault" and tier == tiers[-1]:
                 return self._fault_wait(claimed, bug, payload, 300)
             reason = str(payload)[:300] or reason
         bug = store.get_bug(bug["id"])
@@ -399,7 +405,8 @@ class Engine:
             request_text=request_text, incident_text=incident_text, evidence_text=shown_evidence, live_text=ctx.get("live_text", ""),
             case_reports=ctx.get("reports") or [], replies=ctx.get("replies") or [], baseline=bug.get("baseline_output") or "",
             notes=store.get_flag(f"notes:{project_id}", ""), history=history, commits=recent, project_map=ctx.get("map", ""),
-            code=fx_agent.code_dump(files), previous=previous)
+            code=fx_agent.code_dump(files, int(((self.cfg.get("agent") or {}).get("full_code_chars") or {}).get(tier, fx_agent.FULL_CODE_CHARS))),
+            previous=previous)
 
         def on_step(what: str) -> None:
             _stage(incident_id, "working", what[:280], tier)
@@ -482,12 +489,17 @@ class Engine:
                    "attempt_id": attempt_id, "client_message": client.strip(),
                    "verification": investigator.clean_steps(res.data.get("verification") or [])}
             review = validator.agent_risk_notes(res.new_files)
-            if str(res.data.get("risk", "")).lower() == "high":
-                review.append("the engineer rated this change as high risk")
+            risk = str(res.data.get("risk", "")).lower() or "unknown"
+            if risk != "low":
+                review.append(f"the engineer rated the risk of this change as {risk}")
+            if sres.system_fault:
+                review.append("our sandbox could not test it")
+            if res.checks_passed is not True:
+                review.append("the engineer could not run the checks on its final change")
             if owner_steps:
                 review.append("you also have to do something yourself (see the steps)")
             if review:
-                win["force_review"] = "; ".join(review)
+                win["force_review"] = "the agent is not sure: " + "; ".join(review)
             return ("pass", win)
         if res.outcome == "needs_owner":
             d = res.data
