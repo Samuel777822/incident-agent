@@ -453,7 +453,8 @@ def test_admin_architecture_is_admin_only_and_the_simulator_uses_the_real_router
     assert _request("/admin/architecture", cookie=cookie)[0].startswith("404")
     _, _, admin = make_session("admin1@example.com")
     st, _, body = _request("/admin/architecture", cookie=admin)
-    assert st == "200 OK" and "Model adapters" in body and "How the router decides" in body and "BaseAdapter.call" in body and "Memoization" in body
+    assert st == "200 OK" and "The engineer (model architecture)" in body and "How the engineer works" in body
+    assert "Old engine (fallback only" in body and "BaseAdapter.call" in body and "Memoization" in body       # old router kept for reference
     st, _, out = _request("/admin/architecture?simulate=1&bug_class=hard&free_tries=3&haiku_tries=2", cookie=admin)
     data = json.loads(out)
     assert data["action"] in ("sonnet", "opus", "stop") and data["options"]

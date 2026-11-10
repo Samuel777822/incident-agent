@@ -798,6 +798,24 @@ HOMEPAGE_CSS = """
 """
 
 
+def _arch_section() -> str:
+    """The general architecture, right under the hero: how a connected repository is watched, tested and fixed."""
+    try:
+        import arch_diagrams
+        diagram = arch_diagrams.general_diagram()
+        css, script = arch_diagrams.CSS, arch_diagrams.SCRIPT
+    except Exception:
+        return ""
+    return ("<section id='architecture' style='margin:0 auto 70px;max-width:1200px'>"
+            "<div style='text-align:center;margin-bottom:18px'><div class='section-tag'>THE ARCHITECTURE</div>"
+            "<h2 class='section-headline'>How Agent Daemon looks after your code</h2>"
+            "<p class='section-sub' style='margin:auto;max-width:760px'>Connect a GitHub repository once. Every push is tested in a sandbox; "
+            "when something breaks, an AI engineer reads your code, fixes the cause and proves it, starting with the low-cost Normal mode. "
+            "Not a code problem? You get simple step-by-step instructions. Press play, or tap any box.</p></div>"
+            f"<style>{css}</style>{diagram}<script>{script}</script>"
+            "<p style='text-align:center;margin-top:14px'><a class='button' href='/how-it-works'>Read how it works, step by step</a></p></section>")
+
+
 def render_homepage_html() -> str:
     """Returns the complete, high-converting redesigned homepage markup."""
     html = """
@@ -834,6 +852,9 @@ def render_homepage_html() -> str:
     <div class="proof-item"><span style="color:#6fe0b0;font-weight:700">{ICON_CHECK}</span> <span>1-Day Free Trial Available</span></div>
   </div>
 </section>
+
+<!-- ARCHITECTURE (second thing every visitor sees) -->
+{ARCH_SECTION}
 
 <!-- LIVE PRODUCT VISUALIZATION (HERO COMPONENT) -->
 <section style="margin-bottom:70px" id="live-demo">
@@ -1412,6 +1433,7 @@ def render_homepage_html() -> str:
         ("{ICON_PLAY}", ICON_PLAY),
         ("{ICON_ARROW}", ICON_ARROW),
         ("{HOME_JS_INLINE}", HOME_JS),
+        ("{ARCH_SECTION}", _arch_section()),
     ]:
         html = html.replace(token, icon)
     return html

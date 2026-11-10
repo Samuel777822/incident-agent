@@ -1,10 +1,10 @@
 """Animated SVG flow diagrams for the architecture pages (no libraries, no external assets).
 
   general_diagram()          every process and how it connects: connect -> public-repo check -> install monitor ->
-                             heartbeat -> error detection -> sandbox -> diagnosis -> model adapters -> fix -> tests -> PR,
+                             heartbeat -> error detection -> sandbox -> understand -> the engineer -> fix -> tests -> PR,
                              plus the push guard and the first scan. Shown to everyone (/how-it-works) and to admins.
-  model_diagram(cfg)         the model-adapter layer: router -> guard -> adapters -> providers -> normalizer, the automatic
-                             fallback policy and what the router weighs. Admins only (/admin/architecture).
+  model_diagram(cfg)         the engineer: case -> Normal / High / Extra -> guard -> tools -> sandbox / browser / GitHub ->
+                             harm rules -> sure (push) or not sure (pull request), and "never a silent stop". Admins only.
 
 Each diagram is drawn twice: a wide layout for desktops/tablets and a tall one for phones (CSS picks one). Arrows show the
 direction of data with an animated flowing dash, nodes glow, every node is a button that explains itself, and
@@ -258,93 +258,90 @@ def general_diagram() -> str:
             "Arrows show which way the data flows.</p></div></div>")
 
 
-# ====================================================================================================== model adapters (admin)
+# ====================================================================================================== the engineer (model architecture)
 def _model_desktop(cfg: dict) -> str:
     p = "md"
-    models = cfg.get("models", {})
+    om = cfg.get("openrouter_models", {}) or {}
+    caps = (cfg.get("agent") or {}).get("max_inr_per_run") or {}
+    cap = lambda t: f"≤ ₹{int(caps.get(t, 0))} a run" if isinstance(caps, dict) and caps.get(t) else "run limit"
     body = []
-    body.append(_node(p, "pipeline", 20, 210, 200, 196, "magenta", "⚙", "Fix pipeline", "Engine._attempt()",
-                      "Builds the prompt from the error, the relevant files and the short history, then asks ONE model.",
-                      ("Analyze the error", "Pick relevant files", "Ask for a patch")))
-    body.append(_node(p, "routerm", 268, 210, 214, 196, "violet", "🧭", "Model router", "router.decide()",
-                      "Expected-cost dynamic program plus business rules. Pure function; every decision is logged.",
-                      ("Cheapest likely mode", "Business rules", "Skip paused tiers", "Escalate on failure", "Log every decision")[:4]))
-    body.append(_edge(p, "M222,308 L264,308", "violet", "request", 243, 298))
-    # guard bar
+    body.append(_node(p, "pipeline", 20, 190, 200, 236, "magenta", "⚙", "The case", "orchestrator",
+                      "Everything the engineer starts with: the whole code base (when it fits), the error or your request, the live "
+                      "site, recent commits (its own earlier fixes marked), the other reports of the same case and what earlier runs found.",
+                      ("Whole code base", "Error / your request", "Live site + commits", "Earlier findings")))
+    body.append(_node(p, "routerm", 268, 190, 214, 236, "violet", "🧭", "Who works on it", "Normal → High → Extra",
+                      "Normal (Claude Haiku) works every case first. A run that reaches its limit is continued with its edits kept. "
+                      "Only if Normal cannot finish does High (Sonnet) take over with what was found; Extra (Opus) last, after asking you.",
+                      ("Normal first", "Continue, keep edits", "High if needed", "Extra: asks you")))
+    body.append(_edge(p, "M222,308 L264,308", "violet", "case", 243, 298))
     body.append("<g class='dn' tabindex='0' role='button' data-k='guard' data-title='Guard' data-text='Before any money is spent: tries "
-                "left this month, pack tries, per-bug and per-user caps, the global budget level, the kill switch, paused tiers, rate "
-                "limits and cool-downs.' aria-label='Guard'><rect class='box' x='512' y='70' width='34' height='520' rx='12' "
+                "left this month, the run limit, the case limit (then it asks you Keep going), the global budget, paused modes (explained, "
+                "never silent), rate limits.' aria-label='Guard'><rect class='box' x='512' y='70' width='34' height='520' rx='12' "
                 f"fill='url(#{p}-g-amber)' stroke='{C['amber']}' stroke-width='2' filter='url(#{p}-glow)'/>"
-                "<text class='t' transform='translate(535,330) rotate(-90)' text-anchor='middle' style='font-size:13px'>GUARD · quota · budget · kill switch</text></g>")
+                "<text class='t' transform='translate(535,330) rotate(-90)' text-anchor='middle' style='font-size:13px'>GUARD · tries · run and case limits</text></g>")
     body.append(_edge(p, "M484,308 L508,308", "violet"))
-    rows = [("groq", "GroqAdapter", "OpenAI-style chat", "Groq", f"Low effort\n{models.get('groq', '')}"),
-            ("haiku", "AnthropicAdapter", "Messages API + cache", "Anthropic", f"Normal\n{models.get('haiku', '')}"),
-            ("sonnet", "AnthropicAdapter", "Messages API + cache", "Anthropic", f"High\n{models.get('sonnet', '')}"),
-            ("opus", "AnthropicAdapter", "Messages API + cache", "Anthropic", f"Extra\n{models.get('opus', '')}"),
-            ("or", "OpenRouterAdapter", "OpenAI-compatible", "OpenRouter", "any mode, one key\nFIXENGINE_PROVIDER")]
+    rows = [("read", "Read · search", "list, read, search code", "Your code", "a copy, secrets never read"),
+            ("edit", "Edit · write", "any size the fix needs", "Working copy", "hosting files too (then a PR)"),
+            ("run", "Run checks", "install · build · test · start", "Sandbox server", "no secrets, no network in tests"),
+            ("live", "Live site", "open pages, click", "Real browser", "public pages only"),
+            ("web", "History · web", "git log, diffs, web search", "GitHub · OpenRouter web", "own fixes marked")]
     body.append(f"<rect x='570' y='58' width='450' height='548' rx='18' fill='none' stroke='{C['violet']}' stroke-opacity='.45' stroke-width='1.5'/>")
-    body.append("<text class='lane' x='586' y='84'>Adapters → providers</text>")
-    for i, (tier, adapter, fmt, prov, sub) in enumerate(rows):
+    body.append("<text class='lane' x='586' y='84'>The engineer's tools → where they act</text>")
+    for i, (k, tool, sub, where, wsub) in enumerate(rows):
         y = 100 + i * 100
         body.append(_edge(p, f"M548,{y + 40} L584,{y + 40}", "violet"))
-        body.append(_node(p, f"ad-{tier}", 588, y, 176, 80, "violet", "⇄", adapter, fmt,
-                          f"{adapter}: translates our request into the {prov} format ({fmt}). Same call signature for every provider; "
-                          "a missing key means the mode is unavailable, never an error.", title_size=13))
+        body.append(_node(p, f"ad-{k}", 588, y, 176, 80, "violet", "🛠", tool, sub,
+                          f"{tool}: {sub}. The model asks for a tool; our code runs it and returns the result as data (never as instructions).",
+                          title_size=13))
         body.append(_edge(p, f"M766,{y + 40} L812,{y + 40}", "violet"))
-        body.append(_node(p, f"pv-{tier}", 816, y, 190, 80, "cyan", "☁", prov, sub,
-                          f"{prov}: {sub.replace(chr(10), ' · ')}. Model ids come from fixengine/config.py and can be changed with environment variables (FIXENGINE_MODEL_<MODE>).",
-                          title_size=14))
+        body.append(_node(p, f"pv-{k}", 816, y, 190, 80, "cyan", "☁", where, wsub, f"{where}: {wsub}.", title_size=14))
         body.append(_edge(p, f"M1008,{y + 40} C1040,{y + 40} 1040,308 1068,308", "green", style="slow"))
-    body.append(_node(p, "norm", 1072, 210, 182, 196, "cyan", "≋", "Normalizer", "ModelResult",
-                      "Every provider's answer becomes the same ModelResult: text, tokens in/out, cache reads and the model that "
-                      "really answered. Costs go to the ledger; secrets are redacted.",
-                      ("Same shape", "Tokens + ₹ cost", "Redact secrets", "1 ledger row")))
-    # fallback
-    body.append(_node(p, "fallback", 300, 640, 250, 70, "amber", "⚠", "Fallback policy", "automatic",
-                      "Groq 413/429 → smaller model. Bad key, unknown model or provider rule → that mode pauses and the router "
-                      "picks the next best one. 3 outages → provider rests 10 minutes. Nothing is retried blindly."))
-    body.append(_edge(p, "M796,606 L796,675 L554,675", "amber", "model error: not found · retired · down", 690, 664, "dashed"))
-    body.append(_edge(p, "M300,675 L250,675 L250,420 L330,420 L330,410", "amber", "switch to next best mode", 258, 560, "dashed", "start"))
-    # result back to the pipeline
-    body.append(_edge(p, "M1163,408 L1163,760 L120,760 L120,410", "green", "", 0, 0))
-    body.append(f"<rect x='420' y='742' width='430' height='36' rx='18' fill='#0d1f17' stroke='{C['green']}' stroke-width='2' filter='url(#{p}-glow)'/>"
-                "<text class='t' x='635' y='766' text-anchor='middle' style='font-size:14px'>✅ Patch → policy check → sandbox proof → PR</text>")
-    # what the router weighs
-    factors = [("🎯", "Bug class", "easy · medium · hard"), ("🔢", "Tries left", "monthly quota"), ("💰", "Budget level", "global B"),
-               ("📈", "Success odds", "learned from ledger"), ("⏱", "Cost per try", "tokens × price"), ("↺", "Past attempts", "progress?")]
+    body.append(_node(p, "norm", 1072, 190, 182, 236, "cyan", "≋", "Harm rules", "checked by our code",
+                      "Every final change is checked: no placeholder keys, no fake clients, no hidden errors, no removed features, no "
+                      "edits to tests, CI, lock or secret files. Then our OWN sandbox run on the final files.",
+                      ("No placeholders", "No stubs, no hiding", "No removed features", "Our sandbox again")))
+    body.append(_node(p, "fallback", 300, 640, 250, 70, "amber", "⚠", "Never a silent stop", "automatic",
+                      "Run limit → the same model continues with its edits. Case limit → you get Keep going. A model that is down → "
+                      "the next one. A mode that cannot be used → the card says why and what to do."))
+    body.append(_edge(p, "M796,606 L796,675 L554,675", "amber", "limit reached · model down · mode off", 690, 664, "dashed"))
+    body.append(_edge(p, "M300,675 L250,675 L250,440 L330,440 L330,430", "amber", "continue or next model", 258, 560, "dashed", "start"))
+    body.append(_edge(p, "M1163,428 L1163,760 L120,760 L120,430", "green", "", 0, 0))
+    body.append(f"<rect x='330' y='742' width='610' height='36' rx='18' fill='#0d1f17' stroke='{C['green']}' stroke-width='2' filter='url(#{p}-glow)'/>"
+                "<text class='t' x='635' y='766' text-anchor='middle' style='font-size:14px'>✅ Sure → GitHub tests → push → live check · Not sure → pull request</text>")
+    factors = [("🧠", "Normal", om.get("haiku", "Claude Haiku") + f" · {cap('haiku')}"), ("🧠", "High", om.get("sonnet", "Claude Sonnet") + f" · {cap('sonnet')}"),
+               ("🧠", "Extra", om.get("opus", "Claude Opus") + f" · {cap('opus')}"), ("🧾", "Not a code problem", "step-by-step for you"),
+               ("❓", "Missing info", "one question to you"), ("↩", "Went live", "Undo this fix")]
     body.append(f"<rect x='20' y='800' width='1234' height='70' rx='16' fill='#120a1b' stroke='{C['magenta']}' stroke-opacity='.6'/>")
-    for i, (ico, t, s) in enumerate(factors):
+    for i, (ico, t, sub) in enumerate(factors):
         x = 40 + i * 205
         body.append(f"<text class='ico' x='{x}' y='842'>{ico}</text><text class='t' x='{x + 30}' y='832' style='font-size:13px'>{E(t)}</text>"
-                    f"<text class='s' x='{x + 30}' y='850'>{E(s)}</text>")
-    # legend
+                    f"<text class='s' x='{x + 30}' y='850'>{E(sub[:30])}</text>")
     body.append(f"<g transform='translate(1060,40)'><rect width='194' height='92' rx='12' fill='#120a1bcc' stroke='#3a2338'/>"
-                f"<path d='M14,24 h34' stroke='{C['violet']}' stroke-width='3'/><text class='s' x='58' y='28'>Request (to model)</text>"
-                f"<path d='M14,50 h34' stroke='{C['green']}' stroke-width='3'/><text class='s' x='58' y='54'>Response (from model)</text>"
-                f"<path d='M14,76 h34' stroke='{C['amber']}' stroke-width='3' stroke-dasharray='5 5'/><text class='s' x='58' y='80'>Fallback (on failure)</text></g>")
-    return _svg(p, "0 0 1274 884", "".join(body), "Agent Daemon model adapter architecture")
+                f"<path d='M14,24 h34' stroke='{C['violet']}' stroke-width='3'/><text class='s' x='58' y='28'>Engineer asks</text>"
+                f"<path d='M14,50 h34' stroke='{C['green']}' stroke-width='3'/><text class='s' x='58' y='54'>Result comes back</text>"
+                f"<path d='M14,76 h34' stroke='{C['amber']}' stroke-width='3' stroke-dasharray='5 5'/><text class='s' x='58' y='80'>Never a silent stop</text></g>")
+    return _svg(p, "0 0 1274 884", "".join(body), "Agent Daemon model adapter architecture: the engineer")
 
 
 def _model_mobile(cfg: dict) -> str:
-    models = cfg.get("models", {})
-    steps = [("lane", "Every model call"),
-             ("node", "pipeline", "magenta", "⚙", "Fix pipeline", "Engine._attempt()", "Builds the prompt and asks one model."),
-             ("node", "routerm", "violet", "🧭", "Model router", "cheapest likely mode", "Expected-cost DP + business rules; logged."),
-             ("node", "guard", "amber", "🛡", "Guard", "quota · budget · kill switch", "Refuses before any money is spent."),
-             ("node", "ad", "violet", "⇄", "Adapter", "Groq · Anthropic · OpenRouter", "Translates to the provider's format."),
-             ("node", "pv", "cyan", "☁", "Provider", f"{models.get('haiku', '')} …", "The model answers with text only."),
-             ("note", "fallback", "amber", "⚠", "Fallback policy", "pause mode → next best", "Errors pause a mode; the router picks the next.", "on error"),
-             ("node", "norm", "cyan", "≋", "Normalizer", "ModelResult + ₹ cost", "Same shape for every provider; ledger row."),
-             ("node", "proof", "green", "✅", "Policy + sandbox", "proof → PR", "The patch must pass the same sandbox check.")]
-    return _vertical("mm", steps, title="Agent Daemon model adapter architecture (phone layout)")
+    steps = [("lane", "Every case"),
+             ("node", "pipeline", "magenta", "⚙", "The case", "code · error · live site", "The whole code base, your request and the evidence."),
+             ("node", "routerm", "violet", "🧭", "Who works on it", "Normal → High → Extra", "Normal first; continues on its limit; stronger only if needed."),
+             ("node", "guard", "amber", "🛡", "Guard", "tries · run and case limits", "Refuses before money is spent; asks you to Keep going."),
+             ("node", "ad", "violet", "🛠", "The engineer's tools", "read · edit · run · live · web", "It works like a developer on a copy of your code."),
+             ("node", "pv", "cyan", "☁", "Where they act", "sandbox · browser · GitHub", "No secrets anywhere; results come back as data."),
+             ("note", "fallback", "amber", "⚠", "Never a silent stop", "continue · next model · ask you", "Limits and outages never end a case silently.", "on a limit"),
+             ("node", "norm", "cyan", "≋", "Harm rules", "then our own sandbox", "No placeholders, stubs, hidden errors or removed features."),
+             ("node", "proof", "green", "✅", "Sure or not sure", "push or pull request", "Sure: pushed after GitHub tests. Not sure: a pull request.")]
+    return _vertical("mm", steps, title="Agent Daemon model adapter architecture: the engineer (phone layout)")
 
 
-M_ORDER = ["pipeline", "routerm", "guard", "ad-haiku", "ad", "pv-haiku", "pv", "fallback", "norm", "proof"]
+M_ORDER = ["pipeline", "routerm", "guard", "ad-read", "ad", "pv-read", "pv", "fallback", "norm", "proof"]
 
 
 def model_diagram(cfg: dict) -> str:
     return (f"<div class='dg-wrap' data-order='{','.join(M_ORDER)}'><div class='arch-controls'><button class='button primary dg-play' "
             f"type='button'>▶ Play the flow</button><span class='dg-narr arch-narr' aria-live='polite'></span></div><div class='dg'><div class='dg-desk'>{_model_desktop(cfg)}</div>"
             f"<div class='dg-mobile'>{_model_mobile(cfg)}</div></div>"
-            "<div class='dg-detail' aria-live='polite'><h3>Tap any box</h3><p>Requests go through the router, the guard and one "
-            "adapter; answers come back through the normalizer. Yellow dashed lines are the automatic fallback.</p></div></div>")
+            "<div class='dg-detail' aria-live='polite'><h3>Tap any box</h3><p>The case goes to the Normal engineer first, through the "
+            "guard; the engineer uses its tools, the harm rules check the result. Yellow dashed lines: never a silent stop.</p></div></div>")

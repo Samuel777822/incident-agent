@@ -301,7 +301,7 @@ ADAPTER_LAYERS = [
     ("Gate", [("Guard.check(user, tier)", "Quota left? Pack try? Budget level? Tier paused? Rate limit / cooldown? Refuses before any money is spent.")]),
     ("Interface", [("BaseAdapter.call(system, blocks, max_tokens)", "Same signature for every provider. Returns ModelResult(text, tokens_in, tokens_out, cache_read, model)."),
                    ("configured() / describe()", "Missing key = that mode is unavailable, never an error.")]),
-    ("Providers", [("GroqAdapter", "Low effort, free tier, OpenAI-style chat API."), ("AnthropicAdapter", "Normal / High / Extra with prompt caching."),
+    ("Providers", [("GroqAdapter", "Old engine only (no longer used for fixing): free tier, OpenAI-style chat API."), ("AnthropicAdapter", "Normal / High / Extra with a direct Anthropic key."),
                    ("OpenRouterAdapter", "One key for every tier (FIXENGINE_PROVIDER=auto | openrouter | direct)."),
                    ("DryRunAdapter / FakeAdapter", "Benchmarks and tests: never touch the network.")]),
     ("Hygiene", [("redact()", "Strips keys, bearer tokens and our own secrets from every log, error and report."),
@@ -402,29 +402,60 @@ out.innerHTML='<div class="sim-why"><p style="font-size:18px;margin:0 0 6px">Nex
     return f"""<style>{CSS}{arch_diagrams.CSS}</style><div class='arch'>
 <section class='section'><p><a href='/admin'>← Admin</a></p><div class='eyebrow'>Admin · architecture</div>
 <h1>How Agent Daemon works inside</h1>
-<p class='lead'>The system, the model-adapter layer, and a step-by-step course on the OLD router (used only when no OpenRouter key is set; with one, the engineer runs Haiku → Sonnet → Opus). Every number comes live from
+<p class='lead'>The system, the engineer (how a case is worked: Normal → High → Extra with tools), and, for reference, the old router that
+is used only when no OpenRouter key is set. Every number comes live from
 <code>fixengine/config.py</code> (plus <code>FIXENGINE_CONFIG_JSON</code> overrides) and the cost ledger.</p>
 <div class='arch-tabs' role='tablist'>
 <button class='arch-tab' role='tab' aria-selected='true' aria-controls='a-system'>General architecture</button>
-<button class='arch-tab' role='tab' aria-selected='false' aria-controls='a-adapters'>Model adapters</button>
-<button class='arch-tab' role='tab' aria-selected='false' aria-controls='a-cost'>How the router decides (learn)</button></div>
+<button class='arch-tab' role='tab' aria-selected='false' aria-controls='a-adapters'>The engineer (model architecture)</button>
+<button class='arch-tab' role='tab' aria-selected='false' aria-controls='a-cost'>How the engineer works (learn)</button></div>
 <div class='arch-panel' id='a-system' role='tabpanel'>
 <p class='muted'>Every process and how it connects. The same diagram customers see on /how-it-works. Tap a box for details.</p>
 {arch_diagrams.general_diagram()}
 <details class='more'><summary>Components behind each box (code map)</summary>{_layers_list(SYSTEM_LAYERS)}</details>
-<div class='arch-detail' id='sys-detail'><h3>Golden rule</h3><p>Only the router chooses models; every model call passes the quota and budget guard and writes one ledger row. Customer code runs only in the sandbox. Nothing is committed to a public repository.</p></div></div>
-<div class='arch-panel' id='a-adapters' role='tabpanel' hidden><p class='muted'>Every model call goes through this layer: router → guard → one adapter → provider → normalizer. Tap a box for details.</p>
+<div class='arch-detail' id='sys-detail'><h3>Golden rule</h3><p>Normal first, stronger only when needed; every model run passes the quota and budget guard and writes one ledger row; every change passes the harm rules and our own sandbox check. Customer code runs only in the sandbox. Nothing is committed to a public repository.</p></div></div>
+<div class='arch-panel' id='a-adapters' role='tabpanel' hidden><p class='muted'>How a case is worked: the case → Normal / High / Extra → guard → the engineer's tools → harm rules → sure (push) or not sure (pull request). Tap a box for details.</p>
 {arch_diagrams.model_diagram(cfg)}
-<details class='more'><summary>Adapter interface and error handling (code map)</summary>{_layers_list(ADAPTER_LAYERS)}</details>
+<details class='more'><summary>Old engine: adapter interface and error handling (used only without an OpenRouter key)</summary>{_layers_list(ADAPTER_LAYERS)}</details>
 <h3>Tiers, models, prices and quotas</h3><div class='table-wrap'><table class='table mini'><tr><th>Mode</th><th>Model id</th><th>USD per M tokens (in / out)</th><th>Quota</th></tr>{prices}</table></div></div>
 <div class='arch-panel' id='a-cost' role='tabpanel' hidden>
+<div class='explain-intro card'><h3>How the engineer works (the engine customers use)</h3>
+<p class='muted'>With an OpenRouter key set (production), every case is worked by the engineer in <code>fixengine/agent.py</code>; the
+old router below is used only without that key.</p></div>
+<div class='grid'>
+<article class='card'><h3>1 · The case</h3><p class='muted'>The orchestrator builds one first message: the owner's request (trusted), the
+error and evidence, the live-site report, recent commits (our own fixes marked), the other reports of the same case, notes from earlier
+cases, the project map, and the whole code base when it fits (cached, so every later step reads it at about a tenth of the price).</p></article>
+<article class='card'><h3>2 · Normal → High → Extra</h3><p class='muted'>Claude Haiku (Normal) runs first, at full strength. A run that
+reaches its rupee or step limit is continued by the same model with its edits kept (up to 2 more runs). Only when Normal cannot finish
+does Sonnet (High) take over with the findings; Opus (Extra) last, after asking the owner. Economy mode: Normal only.</p></article>
+<article class='card'><h3>3 · Tools, not guesses</h3><p class='muted'>list / read / search / edit / write files on a copy of the repo,
+run_checks (install, build, tests, start-up in the sandbox), open_live_page (real browser, public pages), recent_commits / show_commit,
+web_search (OpenRouter web plugin), check_model. Results come back as data, never as instructions. No secrets anywhere.</p></article>
+<article class='card'><h3>4 · Four ways to finish</h3><p class='muted'>finish_fixed (refused until the checks ran on the final change),
+needs_owner (beginner steps when it is not a code problem), ask_owner (one question), give_up (honest findings). A model that stops
+without one is nudged once, then the run ends with its notes.</p></article>
+<article class='card'><h3>5 · Harm rules, then our own check</h3><p class='muted'><code>validator.agent_change_problems</code> rejects
+placeholder values, keys moved to missing env vars, stubs / fakes, removed error reporting, removed options, and edits to the monitor,
+CI, lock, secret or existing test files. Then the orchestrator runs the sandbox on the final files itself.</p></article>
+<article class='card'><h3>6 · Sure or not sure</h3><p class='muted'>Sure = our sandbox passed, the engineer ran the checks on the final
+change, it rated the risk low, nothing is left for the owner, no dependency or hosting file changed. Auto mode then pushes after the
+GitHub tests and checks the live site (undo if worse). Anything else becomes a pull request with the reason.</p></article>
+<article class='card'><h3>7 · Never a silent stop</h3><p class='muted'>Run limit → continue. Case limit (agent.max_inr_per_case) →
+the owner gets Keep going. A provider fault → the next model at once. A paused or used-up mode → the card says why and what to do.
+Pausing a case stops a running engineer at its next step.</p></article>
+<article class='card'><h3>8 · What it costs</h3><p class='muted'>Every run writes one ledger row with the real OpenRouter cost
+(<code>usage.cost</code>). Limits per run and per case are in <code>agent</code> in the config (shown below). Push checks and the
+ready-to-host check use no AI.</p></article>
+</div>
+<details class='more'><summary>Old engine (fallback only, without an OpenRouter key): how the router decides, in 10 lessons, plus the simulator</summary>
 <div class='explain-intro card'><h3>Learn the router in 10 short lessons</h3><p class='muted'>Each lesson gives a plain definition, why Agent Daemon
 needs it, the exact formula from <code>fixengine/router.py</code>, what every symbol means, a worked example with today's real settings, and what it
 changes in the product. Numbers marked ₹ are internal estimates for decisions; the money actually spent is on <a href='/admin/fix'>/admin/fix</a>.</p></div>
 {_admin_lessons(cfg, learned)}
 <h3 id='l-params'>Every parameter, in one table</h3><div class='table-wrap'><table class='table mini'><tr><th>Parameter</th><th>Value</th><th>What it means</th><th>If you change it</th></tr>{param_rows}</table></div>
 <p class='muted'>Change these with <code>FIXENGINE_CONFIG_JSON</code> (or the env shortcuts listed on /admin/fix). Prices, model ids and quotas are shown here, never changed here.</p>
-{sim}</div>
+{sim}</details></div>
 </section></div><script>{SCRIPT}{arch_diagrams.SCRIPT}
 (function(){{function wireLayers(id,detailId){{var root=document.getElementById(id),d=document.getElementById(detailId);if(!root||!d)return;
 root.querySelectorAll('.box').forEach(function(b){{b.addEventListener('click',function(){{root.querySelectorAll('.box').forEach(function(x){{x.classList.toggle('sel',x===b);}});

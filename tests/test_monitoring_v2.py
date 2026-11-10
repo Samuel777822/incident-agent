@@ -731,7 +731,7 @@ def test_architecture_diagrams_show_every_process_and_respect_roles(web_env):
     _, _, admin_cookie = make_session("admin1@example.com")
     st, _, admin = _request("/admin/architecture", cookie=admin_cookie)
     assert st == "200 OK" and "Agent Daemon general architecture" in admin and "Agent Daemon model adapter architecture" in admin
-    for part in ("GroqAdapter", "AnthropicAdapter", "OpenRouterAdapter", "Normalizer", "Fallback policy", "GUARD"):
+    for part in ("Who works on it", "Normal → High → Extra", "Harm rules", "Never a silent stop", "GUARD", "OpenRouterAdapter"):
         assert part in admin, part
 
 

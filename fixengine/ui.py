@@ -1,6 +1,6 @@
 """HTML for the usage page (customers) and the budget page (admins). Pure functions: no I/O, everything escaped.
 
-Plain words only (plan 8): modes are Low effort / Normal / High / Extra, never model names, and costs are never
+Plain words only (plan 8): modes are Normal / High / Extra, never model names, and costs are never
 shown to customers as rupees-per-try. Admins see rupees.
 """
 from __future__ import annotations
@@ -149,10 +149,10 @@ def _protection_rows(d: dict) -> str:
          "Extra is paused for plan tries. Customers who bought an Extra pack can still use it.", "Extra",
          "Extra is the most expensive mode per attempt, so it is paused first.", "Optional: top up credits and raise the limit."),
         (4, f"{int(pr['fractions'][3] * 100)}% of the limit", _rs(pr["levels"][3]),
-         "High is paused too (pack tries still work). Normal and Low effort continue, so bugs are still worked on.", "High, Extra",
+         "High is paused too (pack tries still work). Normal continues, so cases are still worked on.", "High, Extra",
          "Keeps the month inside the limit while the cheap modes keep serving customers.", "Yes, if you want High/Extra back this month."),
         (5, f"Reserve floor ({int(pr['reserve_fraction'] * 100)}% of credits)", _rs(pr["reserve_floor"]),
-         "Every paid mode stops, including bought packs. Only Low effort (free) runs. Customers see a 'busy' message.",
+         "Every AI mode stops, including bought packs. Push checks (no AI) continue. Customers see a 'busy' message.",
          "Normal, High, Extra", "Protects the last part of the prepaid credits so the provider account never runs dry mid-fix.",
          "Yes: top up provider credits, then update FIXENGINE_CREDITS_INR / FIXENGINE_BUDGET_INR."),
     ]
@@ -229,7 +229,7 @@ def admin_page(d: dict, csrf: str, msg: str = "") -> str:
     level_text = {0: "All normal: every mode is available.", 1: "Past 50%: admins were emailed, customers unaffected.",
                   2: "Past 80%: extra-try requests now wait for you.", 3: "Past 90%: Extra is paused (packs still work).",
                   4: "At the limit: High and Extra are paused (packs still work).",
-                  5: "Reserve floor: only Low effort runs."}.get(d["level"], d["level_name"])
+                  5: "Reserve floor: no AI runs; push checks continue."}.get(d["level"], d["level_name"])
 
     def post(action, fields, label, cls="", confirm=""):
         inner = "".join(f"<input type='hidden' name='{E(k)}' value='{E(v)}'>" for k, v in fields.items())
@@ -260,7 +260,7 @@ def admin_page(d: dict, csrf: str, msg: str = "") -> str:
                    "<th>Modes affected</th><th>Why it exists</th><th>Do you need to act?</th></tr></thead>"
                    f"<tbody>{_protection_rows(d)}</tbody></table></div>"
                    "<p class='muted'>All of this is automatic and checked before every AI call. Each threshold emails both admins once per month. "
-                   "The highlighted row is where spending is now. Low effort (free) is never paused by the budget.</p>")
+                   "The highlighted row is where spending is now. Push checks use no AI and are never paused by the budget.</p>")
 
     # ---- F1. mode switches
     pauses = ""
@@ -319,8 +319,8 @@ def admin_page(d: dict, csrf: str, msg: str = "") -> str:
     history = (f"<div class='table-wrap'><table class='table'><thead><tr><th>Month</th><th>Attempts</th><th>Successful fixes</th>"
                f"<th>Tracked AI spend</th></tr></thead><tbody>{hist_rows}</tbody></table></div>")
     q = cfg["quotas"]
-    settings = [("Monthly tries per customer", f"Normal {q['haiku']} · High {q['sonnet']} · Extra {q['opus']} · Low effort {cfg['groq_daily_cap']}/day",
-                 "FIXENGINE_CONFIG_JSON → quotas / groq_daily_cap"),
+    settings = [("Monthly tries per customer", f"Normal {q['haiku']} · High {q['sonnet']} · Extra {q['opus']} (per month)",
+                 "FIXENGINE_CONFIG_JSON → quotas"),
                 ("Monthly spending limit B", _rs(budget), "FIXENGINE_BUDGET_INR"),
                 ("Prepaid credits", _rs(pr["credits"]), "FIXENGINE_CREDITS_INR"),
                 ("Per-bug cap", f"{_rs(cfg['caps']['per_bug_cost_inr'])} or {cfg['caps']['per_bug_max_tries']} tries", "FIXENGINE_PER_BUG_CAP_INR"),
