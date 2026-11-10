@@ -2388,12 +2388,12 @@ def monitor_state(project: dict, beats: list[dict] | None = None) -> dict:
                     "detail": "Press Install monitoring below.", "last_checkin": "", "server_side": bool(server_kinds)}
         if installed_age is not None and installed_age > MONITOR_FIRST_CHECKIN_GRACE_SECONDS:
             return {"state": "never_checked_in", "tone": "red", "headline": "Never checked in",
-                    "detail": "The monitor was installed but has not checked in once. Usually the app has not been re-deployed since "
-                              "the monitoring pull request was merged, or the pull request is still open.",
+                    "detail": "Why: the monitor lives inside your app and only reports while the app is running online. If your app is not hosted (deployed) anywhere yet, it can never check in. That is not an error: push checks and your own reports to the agent work without it. If your app IS online: it was not re-deployed after monitoring was added. Open your host "
+                              "(Vercel, Render, Netlify ...), press Redeploy, then open your site once.",
                     "last_checkin": "", "server_side": bool(server_kinds)}
         return {"state": "waiting_first", "tone": "amber", "headline": "Waiting for the first check-in",
-                "detail": "Merge the monitoring pull request (if it is still open) and re-deploy your app. The first check-in "
-                          "arrives within 30 seconds of the app starting.", "last_checkin": "", "server_side": bool(server_kinds)}
+                "detail": "Why: the monitor lives inside your app and only reports while the app is running online. If your app is not hosted (deployed) anywhere yet, it can never check in. That is not an error: push checks and your own reports to the agent work without it. When your app is online: re-deploy it (and merge the monitoring pull request if one is still "
+                          "open), then open your site once. The first check-in arrives within 30 seconds.", "last_checkin": "", "server_side": bool(server_kinds)}
     if age <= MONITOR_OFFLINE_SECONDS:
         return {"state": "online", "tone": "green", "headline": "Live", "detail": "", "last_checkin": last, "server_side": bool(server_kinds)}
     if not server_kinds and not server_beats:

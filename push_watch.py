@@ -106,7 +106,7 @@ def install_webhook(project: dict, token: str) -> dict:
         with httpx.Client(headers=headers, timeout=httpx.Timeout(20, connect=8)) as client:
             hooks = client.get(f"{api}/hooks", params={"per_page": 100})
             if hooks.status_code in (401, 403, 404):
-                return {"ok": False, "error": "GitHub did not allow this token to manage webhooks (it needs the repo scope and admin rights on the repository)."}
+                return {"ok": False, **webhook_refusal(client, api, hooks)}
             existing = next((h for h in (hooks.json() if hooks.status_code == 200 else [])
                              if str((h.get("config") or {}).get("url", "")).rstrip("/") == url), None)
             body = {"name": "web", "active": True, "events": ["push"], "config": config}
@@ -449,3 +449,36 @@ def clean_repository(project: dict, token: str) -> dict:
     finally:
         headers["Authorization"] = ""
     return done
+
+
+
+def webhook_refusal(client, api: str, resp) -> dict:
+    """Why GitHub refused to let us add the webhook, in a form the page can explain to a beginner.
+
+    why: not_admin (the token's account is a collaborator, not an admin: GitHub only lets admins manage webhooks)
+         no_scope  (a classic token without the 'repo' scope)
+         unknown
+    Hosting has nothing to do with it: the webhook is GitHub calling Agent Daemon, the customer's app does not need to be online."""
+    out = {"why": "unknown", "owner": "", "repo": "", "role": "",
+           "error": "GitHub did not allow this token to manage webhooks (it needs the repo scope and admin rights on the repository)."}
+    scopes = {s.strip() for s in str(resp.headers.get("x-oauth-scopes") or "").split(",") if s.strip()}
+    try:
+        info = client.get(api)
+        data = info.json() if info.status_code == 200 else {}
+        if not scopes:
+            scopes = {s.strip() for s in str(info.headers.get("x-oauth-scopes") or "").split(",") if s.strip()}
+    except (httpx.HTTPError, ValueError):
+        data = {}
+    perms = data.get("permissions") or {}
+    out["owner"] = str((data.get("owner") or {}).get("login") or "")[:100]
+    out["repo"] = str(data.get("full_name") or "")[:200]
+    if perms:
+        out["role"] = "admin" if perms.get("admin") else ("write" if perms.get("push") else "read")
+    if perms and not perms.get("admin"):
+        out["why"] = "not_admin"
+        out["error"] = ("Your GitHub account is a collaborator on this repository, not an admin, and GitHub only lets admins add a "
+                        "webhook.")
+    elif scopes and not ({"repo", "admin:repo_hook", "write:repo_hook"} & scopes):
+        out["why"] = "no_scope"
+        out["error"] = "The GitHub token is missing the 'repo' permission, which is needed to add a webhook."
+    return out

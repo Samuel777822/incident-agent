@@ -2738,8 +2738,10 @@ def _start_push_watch(project_id: str, user_id: str, project: dict, token: str) 
     return {"webhook": hook, "queued": queued}
 
 
-def _push_summary(result: dict) -> str:
+def _push_summary(result: dict, project: dict | None = None) -> str:
     hook = result.get("webhook") or {}
+    if not hook.get("ok") and hook.get("why") in ("not_admin", "no_scope"):
+        return _webhook_help(hook, result, project or {})
     if hook.get("ok"):
         first = "<p class='muted'>We are testing your latest commit now. Watch it on the dashboard.</p>" if result.get("queued") else ""
         return ("<div class='card'><h3>Push guard is on</h3><p class='muted'>A GitHub webhook was added. Every push to your branch is "
@@ -2856,7 +2858,7 @@ def _activation_summary(result: dict, project: dict) -> str:
     if result.get("install") is not None:
         html_out += _install_summary(result["install"], project["id"])
     if result.get("push") is not None:
-        html_out += _push_summary(result["push"])
+        html_out += _push_summary(result["push"], project)
     return html_out
 
 
@@ -3024,7 +3026,7 @@ def _page_project_push_action(request, project_id, action):
         hook = push_watch.install_webhook(project, token)
         token = ""
         portal_db.audit(project_id, "push_webhook", {"ok": hook.get("ok"), "error": hook.get("error", "")[:200]})
-        return _response(_push_summary({"webhook": hook}) + f"<p><a class='button primary' href='/projects/{_escape(project_id)}'>Back to the project</a></p>", request)
+        return _response(_push_summary({"webhook": hook}, project) + f"<p><a class='button primary' href='/projects/{_escape(project_id)}'>Back to the project</a></p>", request)
     head = push_watch.branch_head(project)
     if not head or not head.get("sha"):
         return _response("<div class='alert'>GitHub did not return the latest commit. Check the token on this page, then try again.</div>"
@@ -4514,3 +4516,40 @@ def _timeline_html(incident_id: str) -> str:
                    f"{_escape(s.get('what', ''))}</li>" for s in steps[-80:])
     return ("<article class='card'><h2>What the engineer did</h2><p class='muted'>Every step of its work on your code, newest last.</p>"
             f"<ol class='timeline' style='margin:0;padding-left:20px;line-height:1.7'>{rows}</ol></article>")
+
+
+def _webhook_help(hook: dict, result: dict, project: dict) -> str:
+    """'Push guard is on (polling)' for a beginner: what happened, that nothing is broken, what happens now, and the steps
+    to get instant checks. Answers the questions a beginner actually asks (is it because my app is not online?)."""
+    repo = hook.get("repo") or f"{project.get('repo_owner', '')}/{project.get('repo_name', '')}"
+    owner = hook.get("owner") or project.get("repo_owner", "")
+    pid = _escape(project.get("id", ""))
+    if hook.get("why") == "not_admin":
+        what = (f"Your GitHub account is a <b>collaborator</b> on <b>{_escape(repo)}</b>, not an <b>admin</b>. GitHub only lets admins add a "
+                "webhook (the instant \"you have a new push\" message). Nothing is broken.")
+        steps = ("<ol class='steps-plain'>"
+                 f"<li>Ask <b>{_escape(owner)}</b> (the owner) to open <a href='https://github.com/{_escape(repo)}/settings/access' target='_blank' "
+                 "rel='noopener'>the repository's Collaborators page</a> on GitHub.</li>"
+                 "<li>Next to your name, they change the role to <b>Admin</b>.</li>"
+                 f"<li>Come back to <a href='/projects/{pid}'>this project</a> and press <b>Reconnect webhook</b> in Settings.</li></ol>"
+                 f"<p class='muted'>Or: <b>{_escape(owner)}</b> connects the repository to Agent Daemon with their own GitHub token.</p>")
+    else:
+        what = ("The GitHub token you gave us is missing the <b>repo</b> permission, which GitHub needs before a webhook can be added. "
+                "Nothing is broken.")
+        steps = ("<ol class='steps-plain'><li>Open <a href='https://github.com/settings/tokens' target='_blank' rel='noopener'>github.com/settings/tokens</a> "
+                 "and press <b>Generate new token (classic)</b>.</li><li>Tick <b>repo</b> and <b>workflow</b>, press <b>Generate token</b> and copy it.</li>"
+                 f"<li>On <a href='/projects/{pid}'>this project</a>, paste it under <b>Update GitHub token</b>, then press <b>Reconnect webhook</b>.</li></ol>")
+    tested = ("We are testing your latest commit right now: install, build, tests and start-up in our sandbox. No AI is used (and nothing is "
+              "spent) unless something fails; if it does, the engineer starts fixing it by itself.") if result.get("queued") else (
+              "Your pushes are tested in our sandbox (install, build, tests, start-up). No AI is used unless something fails.")
+    site = project.get("app_url") or ""
+    hosting = ("<p class='muted'><b>Is this because my app is not online?</b> No. The webhook is GitHub talking to Agent Daemon; your app does "
+               "not need to be online for it. " + ("" if site else "Being online matters only for the live checks (opening your site, "
+               "error reports from visitors). Your site address is not set yet: when the app is live, add it under <b>Live site address</b> "
+               "on the project page.") + "</p>")
+    return ("<div class='card'><h3>Your project is connected. Push checks run every few minutes</h3>"
+            f"<p>{what}</p>"
+            "<p><b>What happens now:</b> the agent looks at your branch for new commits every 3 minutes instead of being told instantly, "
+            f"so every push is still tested, just a few minutes later. {tested}</p>"
+            "<p><b>You can also</b> tell the agent what to fix in your own words: use <b>Tell the agent what's broken</b> on the project page.</p>"
+            f"<p><b>Want instant checks?</b> (optional)</p>{steps}{hosting}</div>")

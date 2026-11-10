@@ -351,3 +351,34 @@ def test_budgets_haiku_runs_are_cheap_by_design(cfg):
     assert caps["haiku"] <= 20 < caps["sonnet"] and cfg["agent"]["effort"]["haiku"] == "high"
     eng = agent.Engineer(transport=FakeTransport([], model="anthropic/claude-haiku-5.5"), workspace=None, cfg=cfg)
     assert eng.max_inr == caps["haiku"]
+
+
+# ============================================================================================ webhook refused: say why, in plain words
+def _github(perms, scopes="repo, workflow"):
+    def handler(request):
+        if request.url.path.endswith("/hooks"):
+            return httpx.Response(404, json={"message": "Not Found"}, headers={"x-oauth-scopes": scopes})
+        return httpx.Response(200, json={"full_name": "samuel/shop-api", "owner": {"login": "samuel"}, "permissions": perms},
+                              headers={"x-oauth-scopes": scopes})
+    return httpx.Client(transport=httpx.MockTransport(handler))
+
+
+def test_webhook_refusal_says_collaborator_not_admin_or_missing_permission():
+    import push_watch
+    api = "https://api.github.com/repos/samuel/shop-api"
+    with _github({"admin": False, "push": True}) as c:
+        out = push_watch.webhook_refusal(c, api, c.get(api + "/hooks"))
+    assert out["why"] == "not_admin" and out["owner"] == "samuel" and out["role"] == "write" and "collaborator" in out["error"]
+    with _github({"admin": True, "push": True}, scopes="read:user") as c:
+        out = push_watch.webhook_refusal(c, api, c.get(api + "/hooks"))
+    assert out["why"] == "no_scope" and "repo" in out["error"]
+
+
+def test_the_page_explains_it_for_a_beginner():
+    import web_app
+    hook = {"ok": False, "why": "not_admin", "owner": "samuel", "repo": "samuel/shop-api", "error": "x"}
+    html = web_app._push_summary({"webhook": hook, "queued": True}, {"id": "p1", "repo_owner": "samuel", "repo_name": "shop-api", "app_url": ""})
+    for text in ("collaborator", "not an <b>admin</b>", "Nothing is broken", "every 3 minutes", "No AI is used",
+                 "Is this because my app is not online?", "Collaborators page", "change the role to <b>Admin</b>", "Reconnect webhook",
+                 "Tell the agent what's broken", "Live site address"):
+        assert text in html, text
