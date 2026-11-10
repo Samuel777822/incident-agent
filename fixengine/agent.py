@@ -52,6 +52,15 @@ You work on a real checkout of their repository through tools. Work like a senio
 5. Fix the cause, completely. Any size is allowed when it is needed; keep the existing style and libraries. Then run_checks again.
 6. Finish with exactly one of: finish_fixed, needs_owner, ask_owner (one specific question only the owner can answer), give_up (be honest about what you found).
 
+Working within a budget (each run has one; you are told at 70%):
+- Fix as you go. As soon as you know a fix, make the edit; a run that ends with findings but no edits wastes the owner's money.
+- A broad request ("check everything", "the UI is terrible", "make it better"): do NOT try to read the whole app first. Pick the 3 to 5
+  most important concrete problems you can confirm, fix them, run_checks, finish_fixed, and list the other problems you saw in
+  client_message as separate next requests the owner can send.
+- Large files: use search_code and read_file with line ranges; do not re-read code that is already in the first message.
+- If this run continues an earlier one, its edits are already applied (see "AN EARLIER RUN"): build on them, do not redo them.
+- Prefer one well-proven fix over many unproven ones. Run the checks before finishing.
+
 Never do these (our checks reject them, which wastes the run):
 - replace a real value with a placeholder ("public-anon-key", "your-key-here"), or move a working value into an environment variable the host does not have. Front-end keys such as a Supabase anon key, a Firebase web config or a Stripe publishable key are public by design: leave them in place;
 - add fake / stub / mock / dummy objects that pretend a service works;
@@ -344,7 +353,7 @@ class Engineer:
         messages = [{"role": "system", "content": SYSTEM_PROMPT}, {"role": "user", "content": brief}]
         tools = tool_specs()
         started = time.time()
-        nudged = budget_warned = False
+        nudged = budget_warned = hinted = False
         try:
             for _step in range(self.max_steps):
                 if self.should_stop():
@@ -353,12 +362,18 @@ class Engineer:
                 over_budget = self.spent_inr() >= self.max_inr or time.time() - started > self.max_seconds
                 if over_budget and budget_warned:
                     self.result.outcome = "budget"
-                    self.result.data = {"reason": f"the run reached its limit (Rs {self.spent_inr():.0f} or {int(time.time() - started)} s)"}
+                    self.result.data = {"reason": f"the run reached its limit (Rs {self.spent_inr():.0f} or {int(time.time() - started)} s)",
+                                        "findings": self._findings(messages)}
                     return self._finish()
                 if over_budget:
                     budget_warned = True
-                    messages.append({"role": "user", "content": "Budget for this run is used up. Finish NOW with one of finish_fixed "
-                                     "(only if you already ran the checks), needs_owner, ask_owner or give_up."})
+                    messages.append({"role": "user", "content": "This run's budget is used up. Finish NOW: if you made a fix, run_checks "
+                                     "and finish_fixed with it (list everything else you found in client_message). Otherwise needs_owner, "
+                                     "ask_owner or give_up with your findings. Your edits are kept for the next run either way."})
+                elif not hinted and self.spent_inr() >= 0.7 * self.max_inr:
+                    hinted = True
+                    messages.append({"role": "user", "content": "About 70% of this run's budget is used. Wrap up: make the most important "
+                                     "fix now (edit, then run_checks), then finish. List what is left in client_message."})
                 reply = self.t.complete(messages, tools)
                 self._add_usage(reply["usage"])
                 msg = reply["message"]
@@ -401,10 +416,16 @@ class Engineer:
                     results.append(self._tool_msg(call, out))
                 messages.extend(results)
             self.result.outcome = "budget"
-            self.result.data = {"reason": f"the run used all {self.max_steps} steps without finishing"}
+            self.result.data = {"reason": f"the run used all {self.max_steps} steps without finishing", "findings": self._findings(messages)}
             return self._finish()
         except AgentFault:
             raise
+
+    @staticmethod
+    def _findings(messages: list[dict]) -> str:
+        """What the model said along the way (its own notes), for the next run to start from."""
+        notes = [str(m.get("content") or "").strip() for m in messages if m.get("role") == "assistant" and str(m.get("content") or "").strip()]
+        return "\n".join(notes[-6:])[-3000:]
 
     @staticmethod
     def _tool_msg(call: dict, text: str) -> dict:

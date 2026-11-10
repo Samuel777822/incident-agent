@@ -214,7 +214,7 @@ def render_board(project_id: str, incidents: list, mode: str, csrf: str = "") ->
         if stage.get("detail"):
             meta.insert(0, "<b>" + _e(stage["detail"][:200]) + "</b>")
         live = str(inc.get("live_result") or "")
-        if live and not live.startswith("NEEDS YOU"):
+        if live and not live.startswith(("NEEDS YOU", "BUDGET:")):
             meta.insert(0, "<b>" + _e(live.splitlines()[0][:220]) + "</b>")
         if category:
             meta.append(_e(category + (f" · {confidence} confidence" if confidence else "")))
@@ -311,7 +311,12 @@ def guide_html(inc: dict, project_id: str, csrf: str, pr_url: str) -> str:
     if status == "paused":
         parts.append("<p class='guide-line'>This case is paused. The agent does nothing (and spends nothing) until you start it.</p>"
                      + _post_button(base + "/resume", csrf, "Start this case", primary=True))
-    if stage == "needs_you" or live.startswith("NEEDS YOU"):
+    if live.startswith("BUDGET:"):
+        parts.append("<div class='guide'><b>Keep going?</b><div class='guide-text'>" + _e(live[7:].strip()) + "</div>"
+                     + _post_button(base + "/keepgoing", csrf, "Keep going", primary=True)
+                     + _post_button(base + "/reply", csrf, "Send to human review", extra={"text": "Please send this case to human review."})
+                     + "</div>")
+    elif stage == "needs_you" or live.startswith("NEEDS YOU"):
         body = live.split(chr(10), 1)[1].strip() if chr(10) in live else live
         parts.append("<div class='guide'><b>What you need to do</b><div class='guide-text'>" + _e(body).replace(chr(10), "<br>") + "</div>"
                      + _post_button(base + "/reply", csrf, "I did it, check again", primary=True, extra={"text": "I did the steps. Please check again."})

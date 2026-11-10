@@ -139,7 +139,7 @@ def test_paused_budget_and_secret_files(tmp_path):
     t2 = FakeTransport([reply(call("list_files"), cost=1.0), reply(call("list_files"), cost=1.0)])
     res2 = agent.Engineer(transport=t2, workspace=ws, cfg=c).run([{"type": "text", "text": "x"}])
     ws.close()
-    assert res2.outcome == "budget" and "Budget for this run is used up" in json.dumps(t2.calls[1]["messages"])
+    assert res2.outcome == "budget" and "budget is used up" in json.dumps(t2.calls[1]["messages"])
 
 
 def test_openrouter_transport_sends_tools_and_reports_no_credit_plainly():
@@ -348,7 +348,7 @@ def test_auto_mode_sends_an_unsure_fix_to_a_pull_request_with_the_reason(tmp_pat
 
 def test_budgets_haiku_runs_are_cheap_by_design(cfg):
     caps = cfg["agent"]["max_inr_per_run"]
-    assert caps["haiku"] <= 20 < caps["sonnet"] and cfg["agent"]["effort"]["haiku"] == "high"
+    assert caps["haiku"] < caps["sonnet"] < caps["opus"] and caps["haiku"] <= 40 and cfg["agent"]["effort"]["haiku"] == "high"
     eng = agent.Engineer(transport=FakeTransport([], model="anthropic/claude-haiku-5.5"), workspace=None, cfg=cfg)
     assert eng.max_inr == caps["haiku"]
 
@@ -427,3 +427,49 @@ def test_project_page_says_not_online_and_offers_host_ready(web_env):
     assert "reported=1" in str(headers)
     inc = portal_db.list_incidents(project_id)[0]
     assert inc["signature"].startswith("user_report:")
+
+
+# ============================================================================================ never a silent stop
+def test_a_run_that_hits_its_limit_is_continued_with_its_edits(tmp_path, monkeypatch):
+    run1 = [reply(call("edit_file", path="pricing.py", old_text="price * pct / 10\n", new_text="price * pct / 100\n"), cost=0.002),
+            reply(call("list_files"), cost=0.002), reply(call("list_files"), cost=0.002)]
+    run2 = [reply(call("run_checks"), cost=0.002),
+            reply(call("finish_fixed", understanding="u", root_cause="divides by 10", changes_summary="divide by 100", client_message="Fixed.",
+                       verification=[], owner_steps=[], risk="low", project_notes=""), cost=0.002)]
+    engine, transports, prs, pid = _engine(tmp_path, monkeypatch, {"haiku": run1 + run2})
+    engine.cfg["agent"]["max_inr_per_run"] = {"haiku": 0.3, "sonnet": 0.3, "opus": 0.3}
+    H.make_incident(pid)
+    assert engine.handle_incident(H.claim()) == "pr_opened"
+    assert "pct / 100" in prs[0]["new_files"]["pricing.py"] and "sonnet" not in transports
+    second_brief = json.dumps(transports["haiku"].calls[3]["messages"][1]["content"])
+    assert "ALREADY APPLIED" in second_brief and "pricing.py" in second_brief
+
+
+def test_the_case_cap_asks_keep_going_instead_of_stopping(tmp_path, monkeypatch):
+    engine, transports, prs, pid = _engine(tmp_path, monkeypatch, {"haiku": list(FIX)})
+    engine.cfg["agent"]["max_inr_per_case"] = 0.0
+    inc = H.make_incident(pid)
+    assert engine.handle_incident(H.claim()) == "awaiting_client" and not transports.get("haiku", FakeTransport([])).calls
+    row = portal_db.get_incident_row(inc)
+    assert row["live_result"].startswith("BUDGET:")
+    import incident_board
+    card = incident_board.guide_html(row, pid, "tok", "")
+    assert "Keep going" in card and "Send to human review" in card
+
+
+def test_an_unavailable_stronger_mode_is_explained_with_the_fix(tmp_path, monkeypatch):
+    engine, transports, prs, pid = _engine(tmp_path, monkeypatch, {"haiku": [reply(call("give_up", reason="too big", findings="the forms overlap"))]})
+    store.set_flag("pause_sonnet", "1")
+    store.set_flag("pause_opus", "1")
+    inc = H.make_incident(pid)
+    assert engine.handle_incident(H.claim()) == "needs_human"
+    why = store.get_bug_by_incident(inc)["stop_reason"] + store.get_bug_by_incident(inc)["review_report"]
+    assert "High mode was not used because it is switched off right now" in why and "OpenRouter" in why
+
+
+def test_the_report_box_teaches_how_to_write_a_request():
+    import ui_flow
+    card = ui_flow.report_card_html("p", "tok")
+    for text in ("How to write a request the engineer can act on", "One problem (or one change) per request", "What you did",
+                 "copied word for word", "Leave out", "Too broad"):
+        assert text in card, text

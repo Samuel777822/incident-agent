@@ -326,17 +326,24 @@ class Engine:
         incident_id, project_id, user_id = claimed["incident_id"], claimed["project_id"], project["user_id"]
         gh_round = int(store.gh_state(bug["id"]).get("round", 0))
         reason = "the engineer could not find a safe fix"
+        unavailable: list[str] = []
+        acfg = self.cfg.get("agent") or {}
         start = store.get_flag(f"agent_start:{bug['id']}", "")
         tiers = self.AGENT_TIERS[self.AGENT_TIERS.index(start):] if start in self.AGENT_TIERS else self.AGENT_TIERS
         if store.get_mode(user_id) == "economy" and start not in ("sonnet", "opus"):
             tiers = tuple(t for t in tiers if t == "haiku")      # Economy: only the Normal engineer, never High or Extra
         for tier in tiers:
+          for run_no in range(int(acfg.get("continuations", 2)) + 1):
             bug = store.get_bug(bug["id"])
             if bug["user_pinned_tier"] == "__review__":
                 return self._finish_review(claimed, project, bug, store.list_attempts(bug["id"]), event, "you chose human review")
-            info = "agent:" + prompts.info_hash(tier, str(len(ctx.get("replies") or [])), str(gh_round), str(bug.get("baseline_failing")))
+            info = "agent:" + prompts.info_hash(tier, str(len(ctx.get("replies") or [])), str(gh_round), str(bug.get("baseline_failing")),
+                                                f"run{run_no}")
             if any(a["info_hash"] == info and a["result"] != "system_fault" for a in store.list_attempts(bug["id"])):
-                continue                          # this model already worked on exactly this situation
+                continue                          # this model already did this run on exactly this situation
+            cap = float(acfg.get("max_inr_per_case", 250.0)) + float(store.get_flag(f"case_extra:{bug['id']}", "0") or 0)
+            if float(bug.get("spent_inr") or 0) >= cap:
+                return self._ask_keep_going(claimed, project, bug, cap)
             pause = self.guard.project_paused(project_id)
             if pause:
                 return self._fault_wait(claimed, bug, pause, 900)
@@ -344,13 +351,14 @@ class Engine:
             if not gate.ok:
                 if gate.code in ("rate", "cooldown"):
                     return self._fault_wait(claimed, bug, gate.message, min(900, max(60, gate.wait_seconds or 900)), quiet=True)
-                reason = gate.message or reason
-                continue
+                unavailable.append(self._why_unavailable(tier, gate))
+                break
             if tier != "haiku" and tier != start:   # Haiku costs a few rupees; a model you asked for is not asked about again
                 warned = self._maybe_warn(claimed, project, bug, tier)
                 if warned:
                     return warned
-            _stage(incident_id, "thinking", self.STAGE_TEXT.get(tier, "The engineer is working"), tier)
+            _stage(incident_id, "thinking", self.STAGE_TEXT.get(tier, "The engineer is working") if run_no == 0 else
+                   f"Still working: continuing where the last run stopped (part {run_no + 1}), with its edits kept", tier)
             result = self._agent_try(claimed, project, bug, tier, gate.pack_try, files, root, profile, message, traceback_text,
                                      commits, ctx, info)
             self.guard.check_alerts()
@@ -372,8 +380,45 @@ class Engine:
             if kind == "model_fault" and tier == tiers[-1]:
                 return self._fault_wait(claimed, bug, payload, 300)
             reason = str(payload)[:300] or reason
+            if kind != "continue":
+                break                             # this model is done: the next, stronger one takes over
         bug = store.get_bug(bug["id"])
+        if unavailable:
+            reason = (reason.rstrip(". ") + ". " + " ".join(unavailable))[:1500]
         return self._finish_review(claimed, project, bug, store.list_attempts(bug["id"]), event, reason)
+
+    @staticmethod
+    def _why_unavailable(tier: str, gate) -> str:
+        """Why a stronger mode was not used, in plain words, with what to do about it. Never just 'paused'."""
+        name = {"haiku": "Normal", "sonnet": "High", "opus": "Extra"}.get(tier, tier)
+        if gate.code == "paused":
+            return (f"{name} mode was not used because it is switched off right now: it pauses itself after a problem with the AI provider "
+                    "(for example no credit left on OpenRouter) or when an admin pauses it. Fix: check the OpenRouter credit, then an admin "
+                    f"resumes {name} in Admin, Spending protection. Then reply on this case (for example: try again).")
+        if gate.code == "exhausted":
+            return f"{name} mode was not used because this month's {name} tries are used up. Fix: add a pack on the Usage page, then reply on this case (for example: try again)."
+        if gate.code in ("busy", "ceiling", "budget"):
+            return f"{name} mode was not used because the spending limit was reached ({gate.message}). It continues next month or after a pack."
+        return f"{name} mode was not used: {gate.message or 'it is not available right now'}."
+
+    def _ask_keep_going(self, claimed, project, bug, cap: float) -> str:
+        """The case reached its spending cap: ASK the owner, with a button. Never a silent stop."""
+        incident_id = claimed["incident_id"]
+        spent = float(bug.get("spent_inr") or 0)
+        more = float((self.cfg.get("agent") or {}).get("max_inr_per_case", 250.0))
+        text = (f"BUDGET: The agent has spent about Rs {spent:.0f} on this case (the limit is Rs {cap:.0f}) and is not finished. "
+                f"Its work so far is kept. Press Keep going to let it continue (up to about Rs {more:.0f} more), or send the case to "
+                "human review. Tip: a smaller, specific request is cheaper and gets done faster.")
+        store.update_bug(bug["id"], status="awaiting_client")
+        store.park_incident(incident_id, claimed["project_id"], waiting_for_choice=True)
+        try:
+            portal_db.set_live_result(incident_id, text)
+        except Exception:
+            pass
+        _stage(incident_id, "waiting_user", f"Spending limit for this case reached (about Rs {spent:.0f}). Keep going?")
+        notify.user_question(project["user_id"], project["name"], claimed["project_id"], incident_id,
+                             f"The agent reached the spending limit for this case (about Rs {spent:.0f}). Keep going?")
+        return "awaiting_client"
 
     def _agent_try(self, claimed, project, bug, tier, pack_try, files, root, profile, message, traceback_text, commits, ctx, info):
         incident_id, project_id = claimed["incident_id"], claimed["project_id"]
@@ -393,6 +438,10 @@ class Engine:
                         f"What it found: {last['diagnosis'][:1200]}")
         if bug.get("strong_diagnosis"):
             previous += "\nEarlier diagnosis: " + str(bug["strong_diagnosis"])[:1500]
+        carried = sorted((store.gh_state(bug["id"]).get("wip_files") or {}).keys())
+        if carried:
+            previous += ("\nThe earlier run's edits are ALREADY APPLIED in your working copy (do not redo them): " + ", ".join(carried[:20])
+                         + ". Read those files to see the current state, finish the work, run_checks and finish.")
         try:
             history = "\n".join(f"- {h.get('when', '')[:10]} {h.get('signature', '')[:80]} -> {h.get('root_cause', '')[:200]}"
                                 for h in portal_db.project_history(project_id))
@@ -422,6 +471,12 @@ class Engine:
             return row.get("status") == "paused"
 
         ws = fx_agent.Workspace(root, files)
+        wip = store.gh_state(bug["id"]).get("wip_files") or {}
+        for rel, text in wip.items():
+            try:
+                ws.write(fx_agent.Workspace.clean(rel), str(text))      # an earlier run's edits: kept, not redone
+            except (ValueError, OSError):
+                pass
         try:
             eng = fx_agent.Engineer(
                 transport=transport, workspace=ws, cfg=self.cfg, runner=self.runner, profile=profile, site_url=ctx.get("site", ""),
@@ -454,6 +509,21 @@ class Engine:
             store.set_flag(f"notes:{project_id}", notes[:3000])
         common = dict(tokens_in=res.tokens_in, tokens_out=res.tokens_out, cache_read=res.cache_read, cost_inr=cost, model=model,
                       patch_json=json.dumps(sorted(res.new_files))[:20000])
+        if res.outcome in ("fixed", "needs_owner", "question"):
+            st = store.gh_state(bug["id"])
+            if st.pop("wip_files", None) is not None:
+                store.save_gh_state(bug["id"], st)
+        if res.outcome == "budget":
+            st = store.gh_state(bug["id"])
+            if res.new_files:
+                st["wip_files"] = dict(res.new_files)
+            store.save_gh_state(bug["id"], st)
+            findings = str(res.data.get("findings") or "")
+            store.finish_attempt(attempt_id, result="unusable", error_summary=("stopped at the run limit; continuing. " + str(res.data.get("reason", "")))[:300],
+                                 diagnosis=findings[:500], **common)
+            if findings:
+                store.update_bug(bug["id"], strong_diagnosis=findings[:1500])
+            return ("continue", "the run reached its limit; the next run continues with its edits and findings")
         if res.outcome == "fixed":
             problems = validator.agent_change_problems(files, res.new_files)
             if problems:

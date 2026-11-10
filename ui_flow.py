@@ -39,7 +39,21 @@ def report_card_html(project_id: str, csrf: str) -> str:
             "<textarea name='text' rows='3' maxlength='1500' required placeholder='What is not working, and where?'></textarea>"
             "<div class='field'><label>Page where it happens (optional)</label>"
             "<input name='page' maxlength='300' placeholder='https://your-site.com/isaiah/1 or /isaiah/1'></div>"
-            "<button class='button primary' type='submit'>Send to the agent</button></form></article>")
+            "<button class='button primary' type='submit'>Send to the agent</button></form>"
+            "<details class='more report-tips'><summary>How to write a request the engineer can act on</summary>"
+            "<p><b>One problem (or one change) per request.</b> A specific request is fixed faster and costs less than "
+            "<i>“check everything and fix the UI”</i>, which the engineer has to split up itself.</p>"
+            "<p><b>Include:</b></p><ol>"
+            "<li><b>Where:</b> the page or address (put it in the box above), or the button, form or screen.</li>"
+            "<li><b>What you did:</b> the steps, for example <i>“I pressed Continue with Google and picked my account”</i>.</li>"
+            "<li><b>What happened:</b> exactly what you saw, with any error text copied word for word.</li>"
+            "<li><b>What you expected instead</b>, or for a change: what the result should look like when it is done.</li>"
+            "<li><b>Since when</b>, if you know (after a push, after changing a setting).</li></ol>"
+            "<p><b>Leave out:</b> passwords and keys (never paste them), guesses about the code, and many problems in one request.</p>"
+            "<p><b>Good:</b> <i>“On /login, pressing Continue with Google and picking my account brings me back to /login instead of the "
+            "dashboard. It worked last week.”</i><br><b>Good:</b> <i>“On the project page the Sign up and Sign in boxes overlap on a phone. "
+            "Make them stack with space between them.”</i><br><b>Too broad:</b> <i>“Check everything and fix the UI.”</i> "
+            "(Send the problems one by one instead.)</p></details></article>")
 
 
 def new_feature_banner_html() -> str:

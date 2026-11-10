@@ -97,7 +97,11 @@ DEFAULTS: dict = {
         "max_steps": 45,
         "max_seconds": 1500,
         # Rupees ONE run may spend, per model. Haiku runs cost a few rupees, so it always goes first.
-        "max_inr_per_run": {"haiku": 15.0, "sonnet": 90.0, "opus": 120.0},
+        "max_inr_per_run": {"haiku": 40.0, "sonnet": 120.0, "opus": 160.0},
+        # A run that reaches its limit is CONTINUED (same model, its edits kept) up to this many times before a stronger model.
+        "continuations": 2,
+        # Spending on one case before the owner is asked "Keep going?" (never a silent stop). Each "Keep going" adds this again.
+        "max_inr_per_case": 250.0,
         # Whole code base in the first message up to this many characters (Haiku's price rises above 100K prompt tokens).
         "full_code_chars": {"haiku": 240000, "sonnet": 450000, "opus": 450000},
         "max_check_runs": 5,

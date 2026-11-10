@@ -3597,6 +3597,15 @@ def _page_case_action(request, project_id, incident_id, action):
         return _redirect(back + "?case=started#case-" + incident_id)
     from fixengine import store as fx_store
     bug = fx_store.get_bug_by_incident(incident_id)
+    if action == "keepgoing":
+        if bug:
+            from fixengine import config as fx_cfg
+            more = float((fx_cfg.load().get("agent") or {}).get("max_inr_per_case", 250.0))
+            fx_store.set_flag(f"case_extra:{bug['id']}", str(float(fx_store.get_flag(f"case_extra:{bug['id']}", "0") or 0) + more))
+            fx_store.update_bug(bug["id"], status="open", closed_at=None, stop_reason="")
+        portal_db.set_live_result(incident_id, "")
+        portal_db.reopen_incident_with_reply(incident_id, project_id, "Keep going: the owner allowed more spending on this case")
+        return _redirect(back + "?case=started#case-" + incident_id)
     if action == "escalate":
         nxt = _next_tier(bug)
         if not bug or not nxt:
@@ -4394,7 +4403,7 @@ def _dispatch(request: Request) -> Response:
     match = re.fullmatch(r"/projects/([0-9a-f-]{36})/site-url", request.path)
     if match:
         return _page_site_url(request, match.group(1))
-    match = re.fullmatch(r"/projects/([0-9a-f-]{36})/incidents/([0-9a-f-]{36})/(pause|resume|merged|undo|escalate)", request.path)
+    match = re.fullmatch(r"/projects/([0-9a-f-]{36})/incidents/([0-9a-f-]{36})/(pause|resume|merged|undo|escalate|keepgoing)", request.path)
     if match:
         return _page_case_action(request, match.group(1), match.group(2), match.group(3))
     match = re.fullmatch(r"/projects/([0-9a-f-]{36})/host-ready", request.path)
