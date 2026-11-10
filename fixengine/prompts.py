@@ -15,7 +15,8 @@ from .adapters import Block
 
 # Every file type the engine may read as source and the model may edit. Web (HTML/CSS) and Java were added in plan v3.
 CODE_EXT = {".py", ".js", ".jsx", ".ts", ".tsx", ".mjs", ".cjs", ".java", ".html", ".htm", ".css", ".scss", ".vue", ".svelte"}
-MANIFESTS = {"requirements.txt", "pyproject.toml", "package.json", "setup.cfg", "Procfile", "render.yaml",
+MANIFESTS = {"requirements.txt", "pyproject.toml", "package.json", "setup.cfg", "Procfile", "render.yaml", "Dockerfile", "vercel.json",
+             "netlify.toml", "fly.toml", "railway.json", "docker-compose.yml", ".gitignore", ".env.example", ".env.sample",
              "tsconfig.json", "pom.xml", "build.gradle", "build.gradle.kts", "settings.gradle", "settings.gradle.kts"}
 EXCLUDED_DIRS = {".git", ".github", ".idea", "__pycache__", ".venv", "venv", "node_modules", "dist", "build", ".next",
                  ".fx_deps", ".pytest_cache", "site-packages", "coverage", ".mypy_cache", "target", "out", ".gradle", ".fx_out",
@@ -44,8 +45,14 @@ def estimate_tokens(text: str) -> int:
     return max(1, len(text) // 4)
 
 
+EXAMPLE_ENV = {".env.example", ".env.sample", ".env.template", ".env.dist"}
+
+
 def is_secret_path(path: str) -> bool:
-    return bool(SECRET_FILE.search(PurePosixPath(path).name))
+    name = PurePosixPath(path).name
+    if name.lower() in EXAMPLE_ENV:
+        return False                      # lists the NAMES of the settings an app needs; never the values
+    return bool(SECRET_FILE.search(name))
 
 
 def contains_secret(text: str) -> bool:

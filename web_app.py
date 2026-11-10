@@ -3110,7 +3110,7 @@ def _page_project(request, project_id):
             f"<form method='post'><input type='hidden' name='csrf' value='{csrf}'><input type='hidden' name='paused' value='{'no' if paused else 'yes'}'><button class='button {'primary' if paused else 'danger'}' type='submit'>{button}</button></form></div>"
             f"<div class='stats'><span class='pill {'amber' if paused else css}'>{'Paused' if paused else _escape(state)}</span>"
             f"<span class='pill'>{_escape(WATCH_LABELS.get(watch, watch))}</span><span class='pill'>{_escape(MODE_LABELS.get(project['mode'], project['mode']))}</span>"
-            f"{checkin}</div>{flash}{ui_flow.flow_diagram_html()}{monitor_panel}"
+            f"{checkin}</div>{flash}{_hosting_card(project, request)}{ui_flow.flow_diagram_html()}{monitor_panel}"
             f"{ui_flow.report_card_html(project_id, _csrf(request))}"
             f"{_push_checks_html(project, request)}"
             f"<h2>Bugs and fixes</h2>{_cases_toolbar(project, request)}{table}<h2>Settings</h2><section class='grid'>{''.join(cards)}</section></section>")
@@ -4397,6 +4397,9 @@ def _dispatch(request: Request) -> Response:
     match = re.fullmatch(r"/projects/([0-9a-f-]{36})/incidents/([0-9a-f-]{36})/(pause|resume|merged|undo|escalate)", request.path)
     if match:
         return _page_case_action(request, match.group(1), match.group(2), match.group(3))
+    match = re.fullmatch(r"/projects/([0-9a-f-]{36})/host-ready", request.path)
+    if match:
+        return _page_host_ready(request, match.group(1))
     match = re.fullmatch(r"/projects/([0-9a-f-]{36})/(pause-all|auto-start)", request.path)
     if match:
         return _page_project_cases(request, match.group(1), match.group(2))
@@ -4553,3 +4556,66 @@ def _webhook_help(hook: dict, result: dict, project: dict) -> str:
             f"so every push is still tested, just a few minutes later. {tested}</p>"
             "<p><b>You can also</b> tell the agent what to fix in your own words: use <b>Tell the agent what's broken</b> on the project page.</p>"
             f"<p><b>Want instant checks?</b> (optional)</p>{steps}{hosting}</div>")
+
+
+def _hosting_card(project: dict, request) -> str:
+    """Is the app online? If not: say so plainly, say what still works, and how to get it online. Plus the ready-to-host checklist."""
+    import hostready
+    hr = hostready.load(project["id"])
+    online = bool(project.get("app_url"))
+    csrf = _escape(_csrf(request))
+    pid = _escape(project["id"])
+    parts = []
+    if not online:
+        parts.append("<h3>Your app is not online yet. That is fine</h3>"
+                     "<p>Because it is not hosted, the <b>live</b> checks cannot run: the monitor cannot check in, and the agent cannot open your "
+                     "site to see a problem or check its own fix. <b>Everything else works from your GitHub repository:</b></p><ul>"
+                     "<li>Every push is installed, built, tested and started in our sandbox. If something breaks, the engineer fixes it.</li>"
+                     "<li>Tell the agent anything below (\"the login page crashes\", \"add a dark mode button\") and it works on your code.</li>"
+                     "<li>Want to put it online? The checklist and the steps are right here.</li></ul>")
+    if hr:
+        rows = "".join(f"<li class='hr-{_escape(f['level'])}'><b>{_escape(f['title'])}.</b> {_escape(f['fix'])}</li>" for f in hr.get("findings", []))
+        verdict = ("Ready to host: nothing blocks a first deploy." if hr.get("ready") else
+                   "Not ready yet: the items in red would make the first deploy fail.")
+        parts.append(f"<h4>Ready to host? <span class='muted'>({_escape(hr.get('kind', 'app'))}, best on {_escape(hr.get('host', ''))})</span></h4>"
+                     f"<p>{_escape(verdict)}</p>" + (f"<ul class='hr-list'>{rows}</ul>" if rows else ""))
+        if any(f.get("code") and f.get("level") in ("error", "warn") for f in hr.get("findings", [])):
+            parts.append(f"<form method='post' action='/projects/{pid}/host-ready' style='display:inline'><input type='hidden' name='csrf' value='{csrf}'>"
+                         "<button class='button primary' type='submit'>Make it host-ready</button></form> "
+                         "<span class='muted'>The engineer fixes the items above in your code and sends you a pull request.</span>")
+        if not online and hr.get("steps"):
+            steps = "".join(f"<li>{_escape(s)}</li>" for s in hr["steps"])
+            parts.append(f"<details class='more'><summary>How to put it online on {_escape(hr.get('host', ''))} (about 5 minutes)</summary>"
+                         f"<ol class='steps-plain'>{steps}</ol></details>")
+    elif not online:
+        parts.append("<p class='muted'>The ready-to-host checklist appears after the first test of your code (a few minutes after connecting).</p>")
+    if not parts:
+        return ""
+    style = ("<style>.hr-list{margin:6px 0 12px 18px;padding:0}.hr-list li{margin:5px 0}.hr-error b{color:#ff9aa8}.hr-warn b{color:#ffdc91}"
+             ".hr-info b{color:#b8c9df}.steps-plain{margin:8px 0 0 20px}.steps-plain li{margin:5px 0}</style>")
+    return style + "<article class='card hosting-card'>" + "".join(parts) + "</article>"
+
+
+def _page_host_ready(request, project_id):
+    gate = _require_access(request)
+    if gate:
+        return gate
+    if request.method != "POST" or not _csrf_valid(request):
+        return _response("<div class='alert'>This form expired. Refresh and try again.</div>", request, "403 Forbidden")
+    project = portal_db.get_project(project_id, request.session["user_id"])
+    if not project:
+        return _response("<h1>Project not found</h1>", request, "404 Not Found")
+    import hostready
+    hr = hostready.load(project_id)
+    if not hr:
+        return _redirect(f"/projects/{project_id}?reported=short")
+    text = hostready.request_text(hr)
+    evidence = {"kind": "user_report", "owner_report": text}
+    signature = "user_report:" + hashlib.sha1(("host-ready" + text).lower().encode("utf-8")).hexdigest()[:12]
+    if portal_db.recent_open_report(project_id, signature, minutes=60):
+        return _redirect(f"/projects/{project_id}?reported=dup")
+    portal_db.ingest_event(project_id, timestamp=datetime.now(timezone.utc).isoformat(timespec="seconds"), level="ERROR",
+                           message="[user report] Make it host-ready", traceback="[evidence] " + json.dumps(evidence) + "\n",
+                           signature=signature)
+    portal_db.audit(project_id, "host_ready_requested", {"findings": len(hr.get("findings", []))})
+    return _redirect(f"/projects/{project_id}?reported=1")

@@ -382,3 +382,48 @@ def test_the_page_explains_it_for_a_beginner():
                  "Is this because my app is not online?", "Collaborators page", "change the role to <b>Admin</b>", "Reconnect webhook",
                  "Tell the agent what's broken", "Live site address"):
         assert text in html, text
+
+
+# ============================================================================================ ready to host (no hosting needed to work)
+def test_ready_to_host_finds_the_usual_deploy_blockers(tmp_path):
+    import hostready
+    files = {"package.json": json.dumps({"dependencies": {"express": "4"}, "scripts": {}}),
+             "server.js": "const app = require('express')()\napp.listen(3000)\nfetch('http://localhost:3000/api')\nconst k = process.env.STRIPE_KEY\n",
+             "incident_agent_monitor.py": "import os\nos.getenv('AGENT_DAEMON_DISABLE')\n"}
+    for p, t in {**files, ".env": "STRIPE_KEY=sk_live_x"}.items():
+        (tmp_path / p).write_text(t, encoding="utf-8")
+    r = hostready.assess(tmp_path, files)
+    titles = " | ".join(f["title"] for f in r["findings"])
+    assert r["host"] == "Render" and not r["ready"]
+    for t in ("no start command", "fixed port", "calls localhost", ".env file with secrets", "not written down"):
+        assert t in titles, t
+    assert "Python dependencies" not in titles and r["env"] == ["STRIPE_KEY"]          # our own monitor file is ignored
+    assert "Start Command: npm start" not in " ".join(r["steps"]) and "render.com" in r["steps"][0]
+    assert "process.env.PORT" in hostready.request_text(r) or "PORT" in hostready.request_text(r)
+
+
+def test_the_engineer_may_create_hosting_files_but_they_go_to_a_pull_request():
+    from fixengine import prompts as P
+    assert validator.agent_path_problem("vercel.json", existed=False) == "" and validator.agent_path_problem("Procfile", existed=True) == ""
+    assert "hosted" in validator.agent_risk_notes({"render.yaml": "x"})[0]
+    assert not P.is_secret_path(".env.example") and P.is_secret_path(".env") and P.is_secret_path(".env.local")
+    assert validator.agent_change_problems({}, {".env.example": "OPENROUTER_API_KEY=your-key-here\n"}) == []
+    assert "CI" in validator.agent_path_problem(".github/workflows/x.yml", existed=True)
+
+
+def test_project_page_says_not_online_and_offers_host_ready(web_env):
+    import hostready
+    from test_v3_web import _setup
+    from test_web_app import _request
+    _user, csrf, cookie, project_id = _setup()
+    _, _, page = _request(f"/projects/{project_id}", cookie=cookie)
+    assert "Your app is not online yet. That is fine" in page and "Everything else works from your GitHub repository" in page
+    hostready.save(project_id, {"kind": "front-end (Vite)", "host": "Vercel", "ready": False, "env": ["VITE_X"],
+                                "findings": [{"level": "error", "title": "The code calls localhost", "fix": "use /api", "code": True}],
+                                "steps": ["Open vercel.com and sign in with GitHub."]})
+    _, _, page = _request(f"/projects/{project_id}", cookie=cookie)
+    assert "Ready to host?" in page and "Make it host-ready" in page and "How to put it online on Vercel" in page
+    _, headers, _ = _request(f"/projects/{project_id}/host-ready", method="POST", cookie=cookie, form={"csrf": csrf})
+    assert "reported=1" in str(headers)
+    inc = portal_db.list_incidents(project_id)[0]
+    assert inc["signature"].startswith("user_report:")

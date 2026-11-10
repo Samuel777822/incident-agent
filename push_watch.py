@@ -279,6 +279,11 @@ def run_check(check: dict, *, runner=None, snapshot=None, cfg: dict | None = Non
             portal_db.set_push_check_stage(check["id"], "detecting")
             from fixengine import repo_context
             files = repo_context.scan_repo(root, max_files=int(cfg["sandbox"]["max_repo_files"]))["files"]
+            try:
+                import hostready
+                hostready.save(check["project_id"], hostready.assess(root, files))
+            except Exception:
+                LOG.exception("ready-to-host check of %s failed", check["sha"][:7])
             profile = sandbox.detect_profiles(root, files)
             stacks = sandbox.stack_summary(profile)
             if getattr(profile, "language", "none") == "none":

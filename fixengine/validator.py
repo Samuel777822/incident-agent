@@ -142,6 +142,12 @@ ERROR_REPORT = re.compile(r"(console\.(?:error|warn)\s*\(|\blogger\.(?:error|exc
 QUOTED = re.compile(r"""['"]([^'"\n]{1,40})['"]""")
 BUILD_FILES = {"package.json", "requirements.txt", "pyproject.toml", "pom.xml", "build.gradle", "tsconfig.json", "vite.config.js",
                "vite.config.ts", "next.config.js", "webpack.config.js"}
+HOSTING_FILES = {"dockerfile", "procfile", "render.yaml", "vercel.json", "netlify.toml", "fly.toml", "railway.json", "app.yaml",
+                 "docker-compose.yml", ".gitignore"}
+
+
+def name_of(path: str) -> str:
+    return PurePosixPath(path).name.lower()
 
 
 def agent_path_problem(path: str, *, existed: bool) -> str:
@@ -157,8 +163,6 @@ def agent_path_problem(path: str, *, existed: bool) -> str:
         return f"{path} is part of the Agent Daemon monitor: it must not be changed to make a report go away"
     if existed and is_test_path(path):
         return f"{path} is an existing test: tests are not edited (add a NEW test to reproduce the bug)"
-    if name in ("dockerfile", "procfile", "render.yaml", "vercel.json", "netlify.toml", ".gitignore"):
-        return f"{path} is a deployment file: not changed automatically"
     return ""
 
 
@@ -200,7 +204,7 @@ def agent_change_problems(original: dict[str, str], changed: dict[str, str]) -> 
                 problems.append(f"{path}: would not parse (line {exc.lineno})")
         if test_file:
             continue
-        if PLACEHOLDER.search(add_text) and not PLACEHOLDER.search(rem_text):
+        if PLACEHOLDER.search(add_text) and not PLACEHOLDER.search(rem_text) and name_of(path) not in prompts.EXAMPLE_ENV:
             problems.append(f"{path}: replaces a real value with a placeholder (that breaks the site; keep the real value)")
         lost = [m.group(1) for line in removed for m in LONG_LITERAL.finditer(line) if m.group(1) not in new]
         if lost and ENV_READ.search(add_text):
@@ -222,4 +226,6 @@ def agent_change_problems(original: dict[str, str], changed: dict[str, str]) -> 
 
 def agent_risk_notes(changed: dict[str, str]) -> list[str]:
     """Not forbidden, but a person should look first (the change goes to a pull request, not straight to the live branch)."""
-    return [f"{p} changes a dependency or build setting" for p in changed if PurePosixPath(p).name.lower() in BUILD_FILES]
+    notes = [f"{p} changes a dependency or build setting" for p in changed if name_of(p) in BUILD_FILES]
+    notes += [f"{p} changes how your app is hosted" for p in changed if name_of(p) in HOSTING_FILES]
+    return notes
