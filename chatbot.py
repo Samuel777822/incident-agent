@@ -31,23 +31,26 @@ A. Push guard (new, recommended): when you connect a repository we add a GitHub 
    Green: the commit gets a green "Agent Daemon / push check" status on GitHub. Red: an incident opens and the agent starts fixing it.
    If the webhook cannot be added, the worker checks the branch every few minutes instead.
 B. Live error watch (classic): a tiny client in the running app reports crashes; the same fix pipeline takes over.
-The fix pipeline: a free first look, then the agent picks an economical mode (Normal, High or Extra). The model only returns text;
-our code applies the patch and the SAME sandbox check must pass. The fix goes to a new agent-daemon/fix-... branch with a pull request.
+The fix pipeline: an AI engineer (Claude) works on a real copy of the code with tools: it reads the whole code base, runs the build
+and tests in the sandbox, opens the live site, reads git history and can search the web. Normal mode works every case first (a few
+rupees); High takes over only if Normal cannot finish; Extra only after asking the owner. Safety rules in our code reject harmful
+changes (placeholder keys, fake clients, hidden errors, removed features), and our own sandbox re-checks the final change.
+When the cause is not in the code (a missing key on the host, a database or sign-in setting), the agent says so and gives the
+owner simple numbered steps.
 Agent modes per project:
    - Report only: explains the problem, no code changes.
    - Pull request: opens a pull request with the fix for you to merge.
-   - Auto: merges the pull request automatically once the sandbox proves the fix and GitHub checks are green, so the fixed version is on GitHub.
+   - Auto: when the agent is sure (checks green, low risk, nothing for the owner to do) it pushes the fix straight to the branch after
+     GitHub's tests pass, checks the live site and undoes the fix if the site got worse; when it is not sure it opens a pull request
+     and says why. Every case card explains what to do and has buttons: Pause, Start, "I merged it, check my site", "Undo this fix".
 The dashboard shows live what the agent is doing (downloading, testing in the sandbox, writing a fix in a given mode, pushing, merging),
 which mode is working and how many tries are left.
 
 HOW THE AGENT CHOOSES AN AI (explain it in plain words first):
-Agent Daemon compares the available AI models and chooses an economical option to fix the bug. When a weaker AI cannot solve it,
-the agent moves to a stronger one and passes on what it learned. It always starts with free attempts and gives Normal at least two
-attempts before High or Extra, and it never goes past the customer's tries or the per-bug limits.
-Two different numbers appear on /how-it-works: "Cost of this AI attempt" (what one attempt costs) and "Estimated total cost to resolve
-the bug" (that attempt plus what may follow if it fails). The ₹30 "person steps in" value there is internal only and is NEVER charged.
-The calculator's success chances are starting estimates, not proven rates, and its usage slider is a demonstration, not the user's account.
-Only if someone asks for the technical name: an expected-cost dynamic program, like Dijkstra's cheapest-route idea for uncertain steps.
+Every case starts with the Normal engineer (Claude Haiku), which costs a few rupees per run. If it fixes the problem, writes steps for
+the owner or asks a question, the case stops there. Only if it cannot finish does High (Claude Sonnet) take over, starting from what
+Normal found; Extra (Claude Opus) is used last and only after asking the owner. There is no free model in fixing. On a "needs you"
+case the owner can press "Not right? Let a stronger AI look". The agent never goes past the customer's tries or the per-case limits.
 
 DEFINITIONS (use exactly these meanings):
 - Try: @@TRY@@
@@ -59,7 +62,7 @@ DEFINITIONS (use exactly these meanings):
 PRICING & PLANS:
 - Free Trial: 1 day of full access upon admin approval.
 - Paid Monthly: @@MONTHLY@@ for 30 days. Paid Yearly: @@YEARLY@@ for 365 days (about @@YEARLY_PM@@ a month, saves @@SAVING@@).
-- Every plan includes, every month: 30 Normal tries, 6 High tries and 3 Extra tries (exact: @@QUOTAS@@), plus Low effort on fair use.
+- Every plan includes, every month: 30 Normal tries, 6 High tries and 3 Extra tries (exact: @@QUOTAS@@).
   Quotas reset monthly and do not roll over. Technical faults on our side never count as a try.
 - Projects: @@PROJECTS@@.
 - Add-ons: a @@PACK@@ pack adds @@PACK_HIGH@@ High or @@PACK_EXTRA@@ Extra tries for the current month; an extra project is @@SLOT@@ once.
@@ -223,8 +226,9 @@ def answer_visitor_query(user_text: str, history: list[dict] | None = None) -> s
     if any(k in text_lower for k in ("how does it work", "how it works", "what is", "features", "github", "push", "deploy", "algorithm", "router")):
         return (
             "Every time you push to GitHub, Agent Daemon installs, builds, tests and starts your code in a sandbox. If something breaks, "
-            "the agent writes a fix, proves it with the same check, and pushes it back as a pull request (merged automatically in Auto mode). "
-            "The agent picks an economical AI that is likely to fix the bug and moves to a stronger one only when needed. "
+            "an AI engineer reads your code, fixes the cause and proves it with the same check. In Auto mode a fix it is sure about is pushed "
+            "to your branch; otherwise you get a pull request with instructions. The low-cost Normal engineer goes first and a stronger one "
+            "takes over only when needed. When the cause is not in your code, you get simple step-by-step instructions. "
             "The interactive diagram is at /how-it-works."
         )
 

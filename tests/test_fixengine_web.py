@@ -28,8 +28,9 @@ def test_usage_page_uses_plain_mode_names_and_never_model_names(web_env):
     user_id, cookie = _login()
     status, _, body = _request("/usage", cookie=cookie)
     assert status == "200 OK"
-    for text in ("Your tries this month", "Low effort", "Normal", "High", "Extra", "0 of 30", "0 of 6", "0 of 3"):
+    for text in ("Your tries this month", "Normal", "High", "Extra", "0 of 30", "0 of 6", "0 of 3"):
         assert text in body
+    assert "Low effort" not in body          # v4.1: the free model no longer fixes anything, so it is not shown
     for hidden in ("claude-", "haiku", "sonnet", "opus", "gpt-oss"):
         assert hidden not in body.lower()
 

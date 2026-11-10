@@ -15,10 +15,10 @@ import plans
 E = lambda v: html.escape(str(v if v is not None else ""), quote=True)
 
 MODE_HELP = {
-    "auto": ("Auto", "The agent picks the cheapest mode that works and escalates when it must. It asks you at the plan's warning points, "
-                     "and continues with the cheapest sensible option if you do not answer in 30 minutes."),
+    "auto": ("Auto", "The Normal engineer works every case first. Only if it cannot finish does High take over; Extra only after "
+                     "asking you. If you do not answer a question in 30 minutes, the agent continues with the cheaper option."),
     "ask": ("Ask me", "The agent pauses and asks you at every warning point, and waits as long as it takes."),
-    "economy": ("Economy", "The agent stays in Low effort and Normal and never uses High or Extra. Hard bugs go to human review."),
+    "economy": ("Economy", "Only the Normal engineer works on your cases; High and Extra are never used. What Normal cannot finish goes to human review."),
 }
 STATUS_TEXT = {
     "open": "Working on it", "awaiting_choice": "Waiting for your decision", "pr_opened": "Fix proposed",
@@ -62,7 +62,7 @@ def _choice_card(c: dict, csrf: str) -> str:
 
 def usage_page(view: dict, csrf: str, msg: str = "") -> str:
     msg_html = f"<div class='pill green' style='white-space:normal'>{E(msg)}</div>" if msg else ""
-    cards = "".join(_tier_card(q) for q in view["panel"])
+    cards = "".join(_tier_card(q) for q in view["panel"] if q.get("tier") != "groq")   # the free model no longer fixes
     choices = "".join(_choice_card(c, csrf) for c in view["choices"])
     mode = view["mode"]
     radios = "".join(

@@ -58,7 +58,7 @@ def customer_reason(reason: str, action: str = "") -> str:
     """Translate a router decision (written for admins) into one plain sentence for the customer's dashboard."""
     r = (reason or "").lower()
     if r.startswith("free first"):
-        return "Starting with a free attempt"
+        return "Starting with a quick first look"
     if "floor" in r or "third haiku" in r:
         return "Normal gets at least two attempts before a stronger AI is considered"
     if "drop back" in r or "after the drop-back" in r:
@@ -192,10 +192,10 @@ def stack_chips(stacks_json: str | list) -> str:
 
 
 def quota_strip(panel: list[dict]) -> str:
-    """Four compact meters: Normal / High / Extra this month and Low effort today."""
-    order = {"haiku": 0, "sonnet": 1, "opus": 2, "groq": 3}
+    """Three compact meters: Normal / High / Extra this month (the free model is no longer used for fixing)."""
+    order = {"haiku": 0, "sonnet": 1, "opus": 2}
     cells = []
-    for q in sorted(panel, key=lambda r: order.get(r.get("tier"), 9)):
+    for q in sorted((r for r in panel if r.get("tier") in order), key=lambda r: order.get(r.get("tier"), 9)):
         total = max(1, int(q.get("total") or 0))
         left = max(0, int(q.get("left") if q.get("left") is not None else total - int(q.get("used") or 0)))
         pct = min(100, round(100 * left / total))

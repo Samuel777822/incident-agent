@@ -328,6 +328,8 @@ class Engine:
         reason = "the engineer could not find a safe fix"
         start = store.get_flag(f"agent_start:{bug['id']}", "")
         tiers = self.AGENT_TIERS[self.AGENT_TIERS.index(start):] if start in self.AGENT_TIERS else self.AGENT_TIERS
+        if store.get_mode(user_id) == "economy" and start not in ("sonnet", "opus"):
+            tiers = tuple(t for t in tiers if t == "haiku")      # Economy: only the Normal engineer, never High or Extra
         for tier in tiers:
             bug = store.get_bug(bug["id"])
             if bug["user_pinned_tier"] == "__review__":

@@ -1,7 +1,7 @@
 """Interactive architecture pages.
 
-  /how-it-works          everyone: the two flows (push guard, live error watch), the router algorithm in plain words with a small
-                         playground, and what each dashboard stage means.
+  /how-it-works          everyone: the two flows (push guard, live error watch), how the AI engineer works (Normal first, stronger
+                         only if needed, steps for the owner when it is not a code problem), and what each dashboard stage means.
   /admin/architecture    admins only: system components, the model-adapter layer, the exact cost function with the live numbers
                          from fixengine/config.py, and a router simulator that calls the real router (router.decide) on the server.
 
@@ -104,10 +104,10 @@ PUSH_FLOW = [
     ("detect", "Find every project", "We download exactly that commit and find each part: Python, JavaScript/TypeScript, Java, plain HTML/CSS. Mixed repos get one check per part.", "multi-language"),
     ("sandbox", "Test it in the sandbox", "For every part: install → build / type-check → tests → start-up. A fresh container each time, no secrets, no network while tests run.", "free · no AI"),
     ("verdict", "Green or red?", "Green: the commit gets a ✓ on GitHub and you can deploy. Red: the commit gets a ✗ and the agent starts fixing it.", "commit status"),
-    ("router", "Choose an AI", "The agent compares the available AI modes and picks an economical one that is likely to fix this bug. It starts with free attempts and moves to a stronger AI only when it needs to.", "economical choice"),
-    ("model", "AI writes a small patch", "The model only reads the relevant files and the error, and only returns text. It cannot run anything or touch GitHub.", "text in, text out"),
-    ("policy", "Safety rules", "Our code checks the patch: at most 5 files and 120 lines, never tests, CI files, build configs, dependencies or secrets.", "policy gate"),
-    ("retest", "Same check, patched code", "The patched repo goes through the exact check that failed. Not green? Nothing is pushed: the agent tries again with what it learned, possibly with a stronger AI.", "proof"),
+    ("router", "The engineer starts", "The low-cost Normal engineer takes the case first. It reads your whole code, the error and your recent commits, and decides whether this is a code problem at all.", "Normal first"),
+    ("model", "It works like a developer", "It searches and reads files, edits them, runs your build and tests in the sandbox and can open your live site. Not a code problem? It writes you step-by-step instructions instead.", "tools, no secrets"),
+    ("policy", "Safety rules", "Our code checks the change: no placeholder keys, fake clients, hidden errors or removed features; never tests, CI, lock, deploy or secret files.", "harm rules"),
+    ("retest", "Our own check", "We run the sandbox on the final change ourselves. Not green? Nothing is pushed: a stronger engineer takes over with what was found.", "proof"),
     ("pushfix", "Push the fix to GitHub", "A test branch <code>agent-daemon/fix-…</code>. Your GitHub tests run on it; failures go back to the AI (3 rounds). Auto mode then pushes the fix to your branch; Pull request mode opens a pull request for you.", "tests · push"),
 ]
 LIVE_FLOW = [
@@ -115,14 +115,16 @@ LIVE_FLOW = [
     ("report", "Error reported", "A tiny monitor in the app (added automatically for Python, Node.js and web pages) sends the error, the stack trace and failed API answers to Agent Daemon. It also checks in every 30 seconds.", "/ingest"),
     ("group", "Grouped into an incident", "Repeats of the same error become one incident with a count, so you are not spammed.", "dedupe"),
     ("repro", "Reproduce in the sandbox", "We download your branch and run the same install → build → tests → start-up check to see what fails today.", "baseline"),
-    ("router2", "Choose an AI, fix, re-test", "Exactly the same fix loop as the push guard: economical AI first, safety rules, proof in the sandbox.", "shared engine"),
+    ("router2", "The engineer fixes it", "Exactly the same engineer as for pushes: Normal first, safety rules, our own sandbox check, a stronger engineer only if needed.", "shared engine"),
     ("pushfix2", "Fix pushed back", "Auto mode pushes it to your branch once the sandbox and your GitHub tests pass; Pull request mode opens a pull request. The next deploy carries the fix.", "tests · push"),
 ]
 STAGES = [
     ("Caught · waiting in line", "A push broke or a live error came in. The job is in the queue."),
     ("Downloading your code", "The worker is fetching that commit from GitHub."),
     ("Reproducing in the sandbox", "Install → build → tests → start-up on the current code, to see exactly what fails."),
-    ("Normal / High / Extra mode is writing a fix", "The AI model of that mode is working on a patch. The pill shows how many tries of it you have left."),
+    ("The engineer is working on it", "Normal, High or Extra mode is reading, running checks or editing. The line under it says what it is doing right now; the case page lists every step."),
+    ("Needs you", "The cause is outside your code. The card shows simple steps; press \"I did it, check again\" when you are done."),
+    ("Paused by you", "Nothing happens and nothing is spent until you press Start."),
     ("Testing the fix in the sandbox", "The patched code is going through the same check."),
     ("Waiting for your decision", "You reached a warning point. Open Usage to choose: let the agent decide, pick a mode, or send it to human review."),
     ("Pushing the fix to GitHub", "Sending the fix to a test branch on GitHub."),
@@ -220,56 +222,29 @@ def _playground_data(cfg: dict) -> str:
 
 def _algo_section(cfg: dict) -> str:
     q = plans.quotas()
-    r = cfg["router"]
-    return f"""<section class='section' id='router'><div class='eyebrow'>Choosing an AI</div><h2>How the agent decides which AI to use</h2>
-<p class='lead'>Agent Daemon compares the available AI models and chooses an economical option to fix your bug. When a weaker AI cannot
-solve it, the agent can move to a stronger one.</p>
+    caps = (cfg.get("agent") or {}).get("max_inr_per_run") or {}
+    cap = (lambda t: f"about ₹{int(caps.get(t, 0))}" if isinstance(caps, dict) and caps.get(t) else "a fixed cap")
+    return f"""<section class='section' id='router'><div class='eyebrow'>The engineer</div><h2>How the agent fixes a problem</h2>
+<p class='lead'>An AI engineer works on a copy of your code the way a developer would: it reads everything, reproduces the problem,
+fixes the cause and runs your checks. It starts with the low-cost mode and calls a stronger one only when it has to.</p>
 <div class='grid'>
-<article class='card'><h3>The four modes</h3><p class='muted'><b>Low effort</b> is a free first look. <b>Normal</b> handles most everyday bugs.
-<b>High</b> is a stronger AI for bugs Normal could not fix. <b>Extra</b> is the strongest, kept for the hardest bugs. You never need to pick one:
-the agent does, unless you want to.</p></article>
+<article class='card'><h3>1. Normal goes first</h3><p class='muted'>Every case starts with the <b>Normal</b> engineer. It reads your whole
+code base, the error, your live site and your recent commits. One run costs a few rupees (at most {cap('haiku')}).</p></article>
+<article class='card'><h3>2. Is it a code problem?</h3><p class='muted'>If the cause is outside your code (a missing key on your host, a
+database or sign-in setting, a service that is down) it stops and gives you simple numbered steps. No money is spent on stronger AI.</p></article>
+<article class='card'><h3>3. Fix and prove</h3><p class='muted'>It edits as much as the fix needs, runs your build and tests in the sandbox,
+and our own check runs again on the final change. Safety rules reject placeholder keys, fake clients, hidden errors and removed features.</p></article>
+<article class='card'><h3>4. Stronger only if needed</h3><p class='muted'>Only if Normal cannot finish does <b>High</b> take over (at most
+{cap('sonnet')} a run), starting from what Normal found. <b>Extra</b> ({cap('opus')}) is used last, and only after asking you.</p></article>
+<article class='card'><h3>5. Sure or not sure</h3><p class='muted'>In Auto mode a fix the agent is sure about (checks green, low risk, nothing
+for you to do) is pushed to your branch after your GitHub tests pass, then your live site is checked. Not sure? You get a pull request,
+the reason, and step-by-step instructions to merge it.</p></article>
+<article class='card'><h3>You stay in control</h3><p class='muted'>Pause or start any case, turn auto-start off, press "Not right? Let a stronger
+AI look", or "Undo this fix". On Usage you choose Auto, Ask me, or Economy (Normal only).</p></article>
 <article class='card'><h3>What a try is</h3><p class='muted'>{E(plans.TRY_DEFINITION)} Your plan includes {q['normal']} Normal, {q['high']} High and
 {q['extra']} Extra tries a month.</p></article>
-<article class='card'><h3>Why it sometimes uses a stronger AI</h3><p class='muted'>{E(plans.WHY_STRONGER)}</p></article>
-<article class='card'><h3>When a fix fails</h3><p class='muted'>{E(plans.FAILED_FIX)}</p></article>
 <article class='card'><h3>When a person is needed</h3><p class='muted'>{E(plans.HUMAN_NEEDED)}</p></article>
-<article class='card'><h3>You stay in control</h3><p class='muted'>On the Usage page you can let the agent decide (Auto), be asked first (Ask me), or never use
-High and Extra (Economy). Your dashboard always shows which mode is working and how many tries you have left.</p></article>
-</div>
-
-<div class='algo stack' style='margin-top:22px'><div>
-<h3>Three different numbers</h3>
-<ol class='muted'>
-<li><b>Cost of this AI attempt</b>: what the AI provider bills Agent Daemon for one attempt in that mode. Stronger AIs cost more per attempt.</li>
-<li><b>Usage adjustment</b>: when much of the month's allowance is used, the agent treats the paid modes as a little more
-"expensive" so it saves them for bugs that really need them. It only affects the comparison; nobody is charged for it.</li>
-<li><b>Estimated total cost to resolve the bug</b>: a forecast that adds the attempt to what may come after it if that attempt fails
-(more attempts, or a person stepping in). The agent picks the mode with the lowest estimated total, not simply the cheapest attempt.</li>
-</ol>
-<p class='muted'>A cheap attempt that rarely works can end up with a higher estimated total than a more expensive attempt that usually works.
-That is why the free mode does not always look best.</p>
-<details class='more'><summary>Show the formula</summary>
-<div class='formula'>estimated total = attempt cost × usage adjustment
-                + (1 − chance it works) × cheapest next step
-
-usage adjustment = 1 + {E(r['lambda'])} × share of the month's allowance used
-cheapest next step = one more attempt, or the internal
-                     "person steps in" value of ₹{E(r['give_up_penalty_inr'])} if that is lower</div>
-<p class='muted'>For the technically curious: the real agent uses an expected-cost <b>dynamic program</b>, the same "cheapest route" idea as
-<b>Dijkstra's algorithm</b> but for steps that can succeed or fail, and it looks up to {E(r['max_depth'])} attempts ahead.</p></details>
-</div>
-<div class='card play'><h3>Try the comparison</h3>
-<label for='pg-class'>What kind of bug?</label><select id='pg-class'><option value='easy'>Easy (a typo, a missing import, a setting)</option>
-<option value='medium' selected>Medium (wrong logic across a few files)</option><option value='hard'>Hard (timing, state, many files)</option></select>
-<label for='pg-used'>How much of the monthly AI allowance has been used? <span id='pg-used-out'>20%</span></label>
-<input id='pg-used' type='range' min='0' max='100' value='20'>
-<p class='demo-note'>This is a demonstration. It shows how usage can influence the AI selection. It does not display your actual account usage or remaining attempts.</p>
-<div id='pg-bars'></div>
-<details class='more'><summary>Why are these two costs different?</summary><div id='pg-why'></div></details>
-<p class='muted small-note'>The chances shown are <b>starting estimates</b> used for this demonstration, not proven success rates. The agent refines
-them with real results as it fixes more bugs. This calculator shows only the core comparison: the real agent also always starts with the free
-attempts, gives Normal at least two attempts before a stronger AI, and never goes past your tries or the per-bug limits.</p></div></div></section>
-<script type='application/json' id='arch-data'>{_playground_data(cfg)}</script>"""
+</div></section>"""
 
 
 def user_page_html(cfg: dict | None = None) -> str:
@@ -292,9 +267,9 @@ Tap any box to read what happens there, or press play to follow a bug from conne
 <div class='stage-legend'>{legend}</div></section>
 <section class='section'><div class='eyebrow'>Safety</div><h2>What the agent can and cannot do</h2><div class='grid'>
 <article class='card'><h3>Your code runs only in the sandbox</h3><p class='muted'>Fresh container per run, non-root, read-only system, memory/CPU/time limits, no secrets, and no network while tests run.</p></article>
-<article class='card'><h3>Models only write text</h3><p class='muted'>They never get tools, never run commands and never see your keys. Our code applies the patch after the safety rules.</p></article>
+<article class='card'><h3>The AI never sees your secrets</h3><p class='muted'>It works on a copy of your code through a fixed set of tools. Secret files are never read, the sandbox gets no keys, and our safety rules check every change before it can leave.</p></article>
 <article class='card'><h3>Proven before it reaches your branch</h3><p class='muted'>Every fix is tested on a branch first. Auto mode pushes to your branch only what the sandbox proved and your GitHub tests passed. After 3 failed rounds a human reviews a pull request.</p></article>
-<article class='card'><h3>No surprise bills</h3><p class='muted'>Monthly tries per mode, per-bug caps and a global budget with a kill switch. Push checks themselves are free.</p></article>
+<article class='card'><h3>No surprise bills</h3><p class='muted'>Normal first (a few rupees per run), a spending cap per run and per case, monthly tries per mode, and Extra only after asking you. Push checks themselves are free.</p></article>
 </div></section>
 <section class='card mission-card' style='text-align:center'><h3>Try it on your repo</h3><p class='muted'>Connect a repository and your next push is tested automatically.</p>
 <div class='actions' style='justify-content:center'><a class='button primary' href='/login'>Get started</a><a class='button' href='/pricing'>Pricing</a></div></section>
@@ -309,15 +284,16 @@ SYSTEM_LAYERS = [
     ("Render: web", [("web_app.py (gunicorn)", "Routes, auth (Google + admin passwords), CSRF, /webhooks/github/<id>, /ingest, payments UI."),
                      ("push_watch.py", "Webhook signature check, push parsing, commit statuses, poller, run_check()."),
                      ("Worker (portal_worker.py)", "Loop: one push check → one incident → expired choices → poll pushes → auto-merge.")]),
-    ("Fix engine", [("orchestrator.Engine", "baseline → [router → guard → adapter → policy → sandbox]* → PR or review. Resumable from the ledger."),
-                    ("router.py", "Expected-cost DP + hard rules. Pure function, every decision logged."),
+    ("Fix engine", [("agent.py (the engineer)", "Haiku → Sonnet → Opus with tools on a copy of the repo (OpenRouter). Ends: fix / needs owner / question / give up."),
+                    ("orchestrator.Engine", "Case context, budgets, our own sandbox check, sure → push / not sure → PR. Old text-patch loop only without OpenRouter."),
+                    ("router.py", "Old engine only (no OpenRouter key): expected-cost DP + hard rules."),
                     ("guard.py", "Quotas, packs, per-user ceiling, budget B, kill-switch levels, spike breaker, rate limits."),
-                    ("validator.py", "Patch policy (≤3 files, ≤40 lines, no tests/CI/deps/secrets) and verification level.")]),
+                    ("validator.py", "Harm rules on the engineer's change (placeholders, stubs, hidden errors, removed options, protected files) and verification level.")]),
     ("Sandbox host (VPS)", [("sandbox_service.py", "Signed /run endpoint (HMAC, 5-minute window). One job at a time."),
                             ("DockerRunner", "Per stack: install (network) → build → test → smoke (no network). Non-root, read-only, caps dropped."),
                             ("Images", "fixengine-sandbox-python / -node (JS, TS, static) / -java.")]),
     ("Data and providers", [("PostgreSQL", "users, projects, push_checks, incidents, fx_attempts (the cost ledger), router decisions, payments."),
-                            ("Model providers", "Groq (Low effort), Anthropic Claude Haiku/Sonnet/Opus (Normal/High/Extra), or all through OpenRouter."),
+                            ("Model providers", "Claude Haiku / Sonnet / Opus (Normal / High / Extra) through OpenRouter; Groq only for the website help chat."),
                             ("Brevo", "Email over HTTPS: warnings, push failures, payment and admin alerts.")]),
 ]
 ADAPTER_LAYERS = [
@@ -426,7 +402,7 @@ out.innerHTML='<div class="sim-why"><p style="font-size:18px;margin:0 0 6px">Nex
     return f"""<style>{CSS}{arch_diagrams.CSS}</style><div class='arch'>
 <section class='section'><p><a href='/admin'>← Admin</a></p><div class='eyebrow'>Admin · architecture</div>
 <h1>How Agent Daemon works inside</h1>
-<p class='lead'>The system, the model-adapter layer, and a step-by-step course on how the router chooses an AI. Every number comes live from
+<p class='lead'>The system, the model-adapter layer, and a step-by-step course on the OLD router (used only when no OpenRouter key is set; with one, the engineer runs Haiku → Sonnet → Opus). Every number comes live from
 <code>fixengine/config.py</code> (plus <code>FIXENGINE_CONFIG_JSON</code> overrides) and the cost ledger.</p>
 <div class='arch-tabs' role='tablist'>
 <button class='arch-tab' role='tab' aria-selected='true' aria-controls='a-system'>General architecture</button>

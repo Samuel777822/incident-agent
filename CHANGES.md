@@ -19,6 +19,12 @@ again, and tell the client honestly.
   the risk low, and nothing is left for the owner. Then the fix goes straight to the branch (GitHub tests first, live check after,
   automatic undo when the site gets worse). Anything else becomes a pull request whose reason starts "the agent is not sure: ...".
   No extra reviewer model is paid on this path.
+* **Every page now describes the new system** (copy audit): homepage, /how-it-works (the old router maths and cost calculator are
+  replaced by "How the agent fixes a problem"), features, FAQ, privacy, terms, the project flow, the dashboard and Usage (no free
+  "Low effort" card or meter any more), the help chat's knowledge, the architecture diagram, the connect form's consent text (it now
+  says the repository's source code goes to Claude through OpenRouter), and one FAQ answer that was simply false ("your code is never
+  executed": it runs in the sandbox). Economy mode is enforced by the engineer (Normal only). The admin course on the old router is
+  kept and labelled as the fallback engine used only without an OpenRouter key.
 * **"Not right? Let a stronger AI look"** on "Needs you" cases: the next stronger model (Haiku -> Sonnet -> Opus) reads everything
   again with what was found so far. You decide when to spend more.
 

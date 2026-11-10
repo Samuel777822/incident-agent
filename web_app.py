@@ -1699,14 +1699,14 @@ HttpClient.newHttpClient().sendAsync(req, HttpResponse.BodyHandlers.discarding()
     <details class="accordion-item">
       <summary class="accordion-summary">Does Agent Daemon run my proprietary code on its servers?</summary>
       <div class="accordion-body">
-        <p><b>No.</b> Agent Daemon only reads source code files as text evidence via GitHub API to diagnose problems and construct minimal AST-checked diffs. Customer code and test suites are never executed on Agent Daemon servers.</p>
+        <p><b>Only inside an isolated sandbox.</b> To test a push or prove a fix, your code is installed, built, tested and started in a fresh container on our sandbox server: non-root, read-only system, memory, CPU and time limits, no secrets, and no network while tests run. It is deleted after every run. Your code never runs on the web servers.</p>
       </div>
     </details>
 
     <details class="accordion-item">
       <summary class="accordion-summary">Can Agent Daemon accidentally break my database or infrastructure?</summary>
       <div class="accordion-body">
-        <p><b>No.</b> Auto-fix is confined to application source code (Python, JavaScript, TypeScript, Java, HTML and CSS). Database migrations, credentials, environment variables, Docker configurations, and infrastructure errors are strictly escalated to human engineers with <code>needs_human</code> status.</p>
+        <p><b>No.</b> Fixes are confined to application source code (Python, JavaScript, TypeScript, Java, HTML and CSS). The agent never changes databases, credentials, environment variables, Docker or deploy files. When one of those is the cause, it gives you step-by-step instructions instead, and every fix that went live has an <b>Undo this fix</b> button.</p>
       </div>
     </details>
 
@@ -2621,8 +2621,8 @@ def _page_dashboard(request):
         quota = _quota_by_tier(user_id)
         if quota:
             meters = ("<section class='section-tight'><div class='row'><h2>Tries left</h2><a href='/usage'>Usage &amp; settings →</a></div>"
-                      f"<p class='muted'>{_escape(plans.TRY_SHORT)} The agent starts with the free and economical modes and uses High or Extra "
-                      "only when they are needed. <a href='/how-it-works#router'>How it chooses</a></p>"
+                      f"<p class='muted'>{_escape(plans.TRY_SHORT)} Every case starts with the low-cost Normal engineer; High takes over only "
+                      "if Normal cannot finish, and Extra only after asking you. <a href='/how-it-works#router'>How it works</a></p>"
                       + live_status.quota_strip(list(quota.values())) + "</section>")
     cards = []
     for project in projects:
@@ -2770,7 +2770,7 @@ You do not need to install anything yourself.</p></div>
 <div class='field'><label>What should the agent do with a bug?</label><select name='mode'><option value='pr' selected>Pull request: push the fix to a new branch and open a PR for me</option><option value='auto'>Auto: push the fix to my branch once the sandbox and my GitHub tests pass (no pull request)</option><option value='report'>Report only: explain the bug, change nothing</option></select><small>Pull request mode never touches your branch: the fix lands on <code>agent-daemon/fix-…</code> with a pull request. Auto mode tests the fix on that branch and pushes it to your branch only when the sandbox and every GitHub check pass. If it still fails after 3 tries, Auto mode opens a pull request for you to review instead.</small></div>
 <div class='field'><label>App URL (optional)</label><input name='app_url' type='url' placeholder='https://app.example.com'></div>
 <div class='field'><label class='checkbox'><input name='allow_install' type='checkbox' value='yes' required><span>I authorize Agent Daemon to add a push webhook and commit statuses to this repository and to add error-monitoring code with a commit to my branch (or a pull request, if my branch is protected).</span></label></div>
-<div class='field'><label class='checkbox'><input name='allow_ai_processing' type='checkbox' value='yes' required><span>I understand that error output and the relevant source files are sent to third-party AI providers (Groq, and Anthropic Claude for the stronger modes, possibly through OpenRouter), and that my code is built and tested inside Agent Daemon's isolated sandbox.</span></label></div>
+<div class='field'><label class='checkbox'><input name='allow_ai_processing' type='checkbox' value='yes' required><span>I understand that error reports and my repository's source code are sent to Anthropic's Claude models (through OpenRouter or directly) to find and fix problems, and that my code is built and tested inside Agent Daemon's isolated sandbox.</span></label></div>
 <div class='field'><label class='checkbox'><input name='allow_remediation' type='checkbox' value='yes'><span>For Pull request or Auto mode, I authorize small code fixes. Pull request mode opens pull requests. Auto mode pushes a fix to my branch only after the sandbox proves it and all GitHub checks pass; if that fails 3 times it opens a pull request for me to review.</span></label></div>"""
         note = (f"<p class='muted'>Project {slots['used'] + 1} of {slots['limit']}. Extra projects are ₹{plans.PROJECT_SLOT_PRICE} each.</p>"
                 if not _is_admin(request) else "")
@@ -2815,7 +2815,7 @@ You do not need to install anything yourself.</p></div>
         return _slot_full_page(request, portal_db.project_slot_info(user_id))
     portal_db.audit(project_id, "project_connected", {"repo": f"{owner}/{repo}", "mode": mode, "watch_mode": watch_mode,
                                                      "visibility": "private" if private else "public"})
-    portal_db.audit(project_id, "ai_diagnosis_consent", {"scope": "error output and relevant repository source sent to third-party AI providers (Groq, Anthropic, OpenRouter); code built and tested in the sandbox"})
+    portal_db.audit(project_id, "ai_diagnosis_consent", {"scope": "error reports and repository source code sent to Anthropic Claude models (via OpenRouter or direct); code built and tested in the sandbox"})
     if mode in ("pr", "auto"):
         portal_db.audit(project_id, "remediation_consent", {"mode": mode, "auto_merge_requires_sandbox_proof_and_passing_github_checks": mode == "auto"})
     if not private:

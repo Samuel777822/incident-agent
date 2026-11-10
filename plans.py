@@ -79,17 +79,15 @@ def quotas() -> dict:
 
 def quota_sentence() -> str:
     q = quotas()
-    return (f"{q['normal']} Normal, {q['high']} High and {q['extra']} Extra fix attempts every month, "
-            "plus Low effort attempts on a fair-use basis")
+    return f"{q['normal']} Normal, {q['high']} High and {q['extra']} Extra fix attempts every month"
 
 
 def quota_lines() -> list[tuple[str, str, str]]:
     """[(mode, amount, what it is)] for plan cards: one line per mode, so the pack reads '30 Normal / 6 High / 3 Extra'."""
     q = quotas()
-    return [("Normal", f"{q['normal']} tries / month", "everyday fixes, where most bugs get solved"),
-            ("High", f"{q['high']} tries / month", "deeper analysis when Normal is not enough"),
-            ("Extra", f"{q['extra']} tries / month", "maximum effort for the hardest bugs"),
-            ("Low effort", "fair use, daily cap", "a free first look at every bug")]
+    return [("Normal", f"{q['normal']} tries / month", "the first engineer on every case, where most problems get solved"),
+            ("High", f"{q['high']} tries / month", "a stronger engineer when Normal could not finish"),
+            ("Extra", f"{q['extra']} tries / month", "the strongest engineer, only after asking you")]
 
 
 def projects_sentence() -> str:
@@ -103,16 +101,18 @@ def quota_fine_print() -> str:
 
 
 # ---- One wording for every page (architecture page, usage, FAQ, help, chatbot, emails). Change it here, not per page. ----
-TRY_DEFINITION = ("A try is one attempt by the AI to write a fix that then has to pass the same check in the sandbox. "
-                  "Checking your pushes is free and never uses a try, and a technical fault on our side never counts as one.")
-WHY_STRONGER = ("The agent starts with the free and the economical AI modes. If they cannot fix the bug, it moves to a stronger "
-                "(more expensive) AI and passes on what the earlier attempts learned. A stronger AI is used only when it is likely "
-                "to be worth it, and never beyond the tries you have.")
-FAILED_FIX = ("If a fix does not pass the check, nothing is pushed to your repository. The agent tries again with the new error, "
-              "or with a stronger AI, until the bug is fixed or a limit is reached.")
-HUMAN_NEEDED = ("The agent stops and asks for a person when it reaches the limit for one bug, when you have no suitable tries left, "
-                "or when more attempts are unlikely to help. You get a report of everything it tried. You can also send any bug "
-                "to human review yourself.")
-MODE_SUMMARY = ("Low effort is a free first look; Normal handles most bugs; High is a stronger AI for bugs Normal could not fix; "
-                "Extra is the strongest, for the hardest bugs.")
-TRY_SHORT = "One try = one AI attempt to fix a bug. Push checks are free."
+TRY_DEFINITION = ("A try is one run of the AI engineer on your case: it reads your code, runs your build and tests in the sandbox, "
+                  "can open your live site, and ends with a fix that passed the checks, clear steps for you, one question, or an honest "
+                  "'I could not'. Checking your pushes is free and never uses a try, and a technical fault on our side never counts as one.")
+WHY_STRONGER = ("Every case starts with the Normal engineer, which costs a few rupees. Only if it cannot finish does a stronger "
+                "(more expensive) engineer take over, starting from what the first one found. Extra, the strongest, is used only after "
+                "asking you, and never beyond the tries you have.")
+FAILED_FIX = ("If a fix does not pass the checks, nothing is pushed to your repository. A stronger engineer takes over with the new "
+              "error, until the problem is fixed or a limit is reached.")
+HUMAN_NEEDED = ("When the cause is outside your code (a missing key on your host, a database or sign-in setting, a service that is "
+                "down) the agent says so right away and gives you simple step-by-step instructions. It stops and asks for a person when "
+                "it reaches the limit for one case or when more attempts are unlikely to help, and you get a report of everything it "
+                "tried. You can also send any case to human review yourself.")
+MODE_SUMMARY = ("Normal is the first engineer on every case; High is a stronger engineer for cases Normal could not finish; Extra is "
+                "the strongest, used only after asking you.")
+TRY_SHORT = "One try = one run of the AI engineer on a case. Push checks are free."

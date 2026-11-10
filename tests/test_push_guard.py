@@ -443,7 +443,9 @@ def test_default_admins_and_support_address(monkeypatch):
 def test_how_it_works_is_public_and_explains_the_algorithm(web_env):
     st, _, body = _request("/how-it-works")
     assert st == "200 OK" and "Push guard" in body and "Live error watch" in body
-    assert "Dijkstra" in body and "dynamic program" in body and "arch-data" in body
+    # v4.1: the page explains the engineer (Normal first, stronger only if needed, steps for the owner), not the old router maths
+    assert "How the agent fixes a problem" in body and "Normal goes first" in body and "Stronger only if needed" in body
+    assert "Is it a code problem?" in body and "Sure or not sure" in body and "Dijkstra" not in body
 
 
 def test_admin_architecture_is_admin_only_and_the_simulator_uses_the_real_router(web_env):

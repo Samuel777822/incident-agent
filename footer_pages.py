@@ -173,8 +173,8 @@ def features_page_html() -> str:
   </article>
   <article class="card">
     <div class="feat-ico" aria-hidden="true">&#8721;</div>
-    <h3>Smart, economical AI choice</h3>
-    <p class="muted">The agent compares the available AI models and chooses an economical option to fix your bug. When a weaker AI cannot solve it, it moves to a stronger one, passing on what it learned. <a href="/how-it-works#router">See how it decides</a>.</p>
+    <h3>An AI engineer, cheapest first</h3>
+    <p class="muted">The low-cost Normal engineer reads your whole code, reproduces the problem and fixes it. Only when it cannot finish does a stronger engineer take over, starting from what it found. <a href="/how-it-works#router">See how it works</a>.</p>
   </article>
   <article class="card">
     <div class="feat-ico" aria-hidden="true">&#128274;</div>
@@ -331,7 +331,7 @@ def changelog_page_html() -> str:
     <ul style="color:#d1c4df;font-size:14px;line-height:1.7;padding-left:18px">
       <li><b>Google OAuth2 Authentication:</b> Secure, passwordless sign-in with display name capture.</li>
       <li><b>Zero-Touch Monitoring Installer:</b> One-click GitHub PR installing client, app entrypoint hook, and test workflow.</li>
-      <li><b>Autonomous Auto-Fix Engine:</b> Incident grouping, Groq root-cause extraction, AST patch synthesis, and CI-gated auto-merge.</li>
+      <li><b>AI engineer:</b> one case per cause, Claude models working on the real code with tools (read, search, edit, build and test in the sandbox, live browser, git history, web search), harm rules on every change, GitHub-test-gated pushes and a live check afterwards.</li>
       <li><b>Paytm UPI QR Billing:</b> QR payment generation and UTR verification workflow.</li>
     </ul>
   </article>
@@ -435,7 +435,7 @@ def faq_page_html() -> str:
   <details class="accordion-item">
     <summary class="accordion-summary">Can Agent Daemon fix infrastructure or database issues?</summary>
     <div class="accordion-body">
-      <p>No. Auto-fix is confined to application source code (Python, JavaScript, TypeScript, Java, HTML and CSS). Database migrations, credentials, environment variables, network outages, and infrastructure errors are strictly escalated to human engineers.</p>
+      <p>It never changes them itself. Fixes are confined to application source code (Python, JavaScript, TypeScript, Java, HTML and CSS). When the cause is a database, a key or environment variable, a sign-in setting or the hosting, the agent says so and gives you simple step-by-step instructions to fix it yourself, then checks your site again when you are done.</p>
     </div>
   </details>
 
@@ -483,7 +483,7 @@ def privacy_policy_page_html() -> str:
   <p>When push checks are on, GitHub tells us about every push to your tracked branch through a signed webhook. We download that commit into a temporary, isolated sandbox, install, build, test and start it, record the result (pass or fail, and the error output) and post a status on the commit. The copy is deleted after the run. You can switch push checks off per project at any time.</p>
 
   <h3 style="color:var(--silver);margin:24px 0 8px">4. Third-Party AI Providers</h3>
-  <p>To diagnose and fix a bug, selected error logs, tracebacks and the relevant source files are sent to third-party AI providers: Groq for Low effort mode, Anthropic's Claude models for Normal, High and Extra modes, and OpenRouter where we route requests through it. Environment files and secret-looking content are excluded or redacted before anything is sent, but you should only connect repositories whose code you are allowed to share with these providers. The free Low effort tier may come with weaker privacy guarantees than paid provider tiers. Each provider handles data under its own terms, which we encourage you to read.</p>
+  <p>To diagnose and fix a problem, the error reports, and your repository's source code (the whole code base when it fits, otherwise the parts the engineer reads) are sent to Anthropic's Claude models through OpenRouter (or directly to Anthropic). The engineer may also search the public web through OpenRouter's web search. Environment files and secret-looking content are never read or are redacted before anything is sent, but you should only connect repositories whose code you are allowed to share with these providers. The help chat on our website uses Groq and never receives your code. Each provider handles data under its own terms, which we encourage you to read.</p>
 
   <h3 style="color:var(--silver);margin:24px 0 8px">5. Data Retention &amp; Deletion</h3>
   <p>You may delete any connected project at any time through your dashboard. Deletion permanently purges all stored incidents, decrypted tokens, and telemetry associated with that project. You may also revoke the GitHub Personal Access Token directly from GitHub at any time.</p>
@@ -505,7 +505,7 @@ def terms_of_service_page_html() -> str:
   <p>By accessing or using Agent Daemon (https://incident-agent-portal.onrender.com), you agree to be bound by these Terms of Service. If you are entering into this agreement on behalf of a company or legal entity, you represent that you have the authority to bind such entity.</p>
 
   <h3 style="color:var(--silver);margin:24px 0 8px">2. Autonomous Pull Requests &amp; Customer Responsibility</h3>
-  <p>Agent Daemon provides autonomous error diagnosis and software patch synthesis. While our system implements strict AST validation, test suite gates, and confidence thresholds, <b>the customer retains ultimate responsibility for reviewing and validating any code pushed or merged into their production repositories</b>.</p>
+  <p>Agent Daemon provides autonomous error diagnosis and code fixes. While our system checks every change against safety rules, runs it in a sandbox and gates pushes on your GitHub tests, <b>the customer retains ultimate responsibility for reviewing and validating any code pushed or merged into their production repositories</b>.</p>
   <p>In Automatic mode, Agent Daemon merges a pull request only when the fix is proven in our sandbox (the check that failed before now passes) and every GitHub check on the pull request reports success. We recommend keeping tests in every repository you connect: the more your tests cover, the more a green check means.</p>
   <p>Push checks: by connecting a repository you allow us to add a webhook to it and to post commit statuses ("Agent Daemon / push check") on the commits we test.</p>
 

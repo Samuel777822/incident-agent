@@ -724,7 +724,7 @@ def test_architecture_diagrams_show_every_process_and_respect_roles(web_env):
     assert st == "200 OK" and "Agent Daemon general architecture" in public and "<svg" in public
     assert "model adapter architecture" not in public.lower()                       # normal users: general architecture only
     for step in ("Connect project", "Public-repo check", "Install monitor", "Heartbeat · 30 s", "Error detected", "Sandbox",
-                 "Diagnosis", "Model adapters", "Fix", "Tests", "Pull request", "Push guard", "dg-play", "prefers-reduced-motion"):
+                 "Understand", "The engineer", "Fix", "Tests", "Pull request", "Push guard", "dg-play", "prefers-reduced-motion"):
         assert step in public, step
     _, _, user_cookie = make_session("dev@example.com")
     assert _request("/admin/architecture", cookie=user_cookie)[0].startswith("404")

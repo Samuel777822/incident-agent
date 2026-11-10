@@ -135,11 +135,12 @@ G_NODES = {
                "becomes an incident and goes to the fix pipeline."),
     "sandbox": ("violet", "📥", "Sandbox", "download · reproduce", "Your repository is downloaded into a fresh, isolated "
                 "container. Your code only ever runs there."),
-    "diagnose": ("magenta", "🔍", "Diagnosis", "error + code", "The error report and the relevant files are read to "
-                 "find the cause."),
-    "router": ("magenta", "🧠", "Model adapters", "router picks the AI", "The router chooses an economical AI mode; adapters "
-               "talk to the providers. A retired AI model in YOUR app is fixed without AI at all."),
-    "fix": ("green", "🩹", "Fix", "small, safe patch", "At most 3 files and 40 lines; never tests, CI, dependencies or secrets."),
+    "diagnose": ("magenta", "🔍", "Understand", "all your code", "The engineer reads your whole code base, the error, the live "
+                 "site and your recent commits, and decides first whether this is a code problem at all."),
+    "router": ("magenta", "🧠", "The engineer", "Normal → High → Extra", "Normal (low cost) works every case first; a stronger engineer "
+               "takes over only if it cannot finish. A retired AI model in YOUR app is fixed without AI at all."),
+    "fix": ("green", "🩹", "Fix", "checked by safety rules", "Any size the fix needs. Never placeholder keys, fake clients, hidden errors, "
+            "removed features, tests, CI, lock or secret files."),
     "tests": ("green", "✅", "Tests", "same check must pass", "Your tests (or build / lint / parse checks) run on the patched code. "
               "Not green? Nothing is pushed and the agent tries again."),
     "pr": ("green", "🚀", "Test, then push", "pushed when proven", "A test branch agent-daemon/fix-… where your GitHub tests run. Auto mode pushes the fix "

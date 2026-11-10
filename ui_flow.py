@@ -8,7 +8,7 @@ FLOW_NODES = [
     ("1", "Connected", "Your repo is private and linked"),
     ("2", "Watching", "Every push, plus a daily visit to your site"),
     ("3", "Error found", "A request fails, a button is dead"),
-    ("4", "AI writes a fix", "Cheapest model first"),
+    ("4", "AI engineer fixes it", "Reads all your code, Normal first"),
     ("5", "Sandbox test", "Built and clicked in a safe box"),
     ("6", "GitHub test", "Your own tests must pass"),
     ("7", "Pushed", "Straight to your branch"),

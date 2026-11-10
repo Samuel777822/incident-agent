@@ -943,7 +943,7 @@ def render_homepage_html() -> str:
         <div id="hview-2" style="display:none">
           <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:12px">
             <div>
-              <span class="pill amber" style="font-size:11px">{ICON_CPU} AST DIAGNOSTIC REASONING</span>
+              <span class="pill amber" style="font-size:11px">{ICON_CPU} THE ENGINEER READS YOUR CODE</span>
               <h3 style="margin:8px 0 4px;font-size:18px;color:#fff">Root Cause Hypothesized in 1.8s</h3>
             </div>
             <span class="pill green" style="font-size:11px"><span class="pulse-dot-green"></span> Confidence: 98%</span>
@@ -1090,7 +1090,7 @@ def render_homepage_html() -> str:
       </div>
       <h3 style="font-size:18px;margin:0 0 10px;color:var(--text);font-family:var(--serif)">The agent fixes it</h3>
       <p style="color:var(--muted);font-size:14px;line-height:1.6;margin:0">
-        The agent picks an economical AI that is likely to fix it, and moves to a stronger one only if needed. The fix must pass the exact check that failed. Watch every step live on your dashboard.
+        An AI engineer reads your whole code, reproduces the problem, fixes it and runs your checks. It starts with the low-cost Normal mode and calls a stronger one only if needed. Not a code problem? You get simple step-by-step instructions instead. Watch every step live on your dashboard.
       </p>
     </div>
 
@@ -1137,8 +1137,8 @@ def render_homepage_html() -> str:
     <div class="feature-v2-card">
       <span class="feature-num">03</span>
       <div class="feature-icon-box">{ICON_CPU}</div>
-      <h3>Economical AI choice</h3>
-      <p>Starts with free and low-cost AI and moves to a stronger model only when the cheaper ones cannot fix the bug.</p>
+      <h3>An engineer, not a guesser</h3>
+      <p>Reads your whole code base, runs your build and tests, opens your live site and checks git history before it changes anything. Low-cost Normal first; stronger only when needed.</p>
     </div>
 
     <!-- 04 -->
@@ -1296,12 +1296,12 @@ def render_homepage_html() -> str:
       <div id="sc-pane-2" style="display:none">
         <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:14px;flex-wrap:wrap;gap:8px">
           <div>
-            <span class="pill amber" style="font-size:11px">{ICON_CPU} STAGE 3 :: AST SEMANTIC ROOT CAUSE</span>
+            <span class="pill amber" style="font-size:11px">{ICON_CPU} STAGE 3 :: THE ENGINEER FINDS THE CAUSE</span>
             <h3 style="margin:6px 0 0;font-size:19px;color:#fff">Reasoning Engine Pinpoints Flaw in 1.8 Seconds</h3>
           </div>
           <span class="pill green" style="font-size:11px"><span class="pulse-dot-green"></span> Confidence: 98%</span>
         </div>
-        <p style="color:#cfc5dc;font-size:14.5px;line-height:1.6">The diagnosis worker fetches relevant repository files as evidence and lets the agent pick an economical AI mode likely to fix it; the patch must pass the same sandbox check.</p>
+        <p style="color:#cfc5dc;font-size:14.5px;line-height:1.6">The engineer reads your code, the error and your recent commits, runs the failing check itself, and fixes the cause; the fix must pass the same sandbox check.</p>
         <div style="background:#060309;padding:14px;border-radius:8px;border:1px solid #2b1731;font-size:13px;color:#d5cadf">
           <b>Diagnosis:</b> Promotional items in catalog omit raw 'price' attribute. Subscripting <code>PRODUCTS[item["product_id"]]["price"]</code> throws unhandled KeyError.
         </div>
@@ -1316,7 +1316,7 @@ def render_homepage_html() -> str:
           </div>
           <span class="pill green" style="font-size:11px">{ICON_CHECK} CI Verified</span>
         </div>
-        <p style="color:#cfc5dc;font-size:14.5px;line-height:1.6">The agent commits the minimal safe patch to a fix branch and your GitHub tests run on it. If they fail, the error goes back to the AI (up to 3 rounds). Pull request mode opens a PR for your review. Auto mode pushes the proven fix to your branch, or opens a PR for review after 3 failed rounds.</p>
+        <p style="color:#cfc5dc;font-size:14.5px;line-height:1.6">The fix goes to a test branch and your GitHub tests run on it. If they fail, the error goes back to the engineer (up to 3 rounds). Auto mode pushes a fix it is sure about straight to your branch and checks your live site afterwards; when it is not sure it opens a pull request and tells you why. Pull request mode always opens one for you.</p>
         <div style="background:#040c08;padding:14px;border-radius:8px;border:1px solid #1a4d3b;font-family:Consolas,monospace;font-size:12.5px;color:#8ce4c0">
           PR #42: fix(checkout): defend against missing price attribute · CI Status: 42/42 Passed · Ready for One-Click Merge
         </div>
