@@ -344,6 +344,7 @@ def main() -> None:
     next_push_poll = 0.0
     next_monitor_sweep = 0.0
     next_visibility_sweep = 0.0
+    next_site_audit = 0.0
     while not _STOP:
         try:
             portal_db.touch_worker()
@@ -384,6 +385,13 @@ def main() -> None:
             except Exception:
                 LOG.exception("Site probe sweep failed")
             next_site_probe = now + max(10, int(os.getenv("SITE_PROBE_SECONDS", "30")))
+        if now >= next_site_audit and not _STOP and not worked:
+            try:
+                import site_audit
+                site_audit.sweep()                   # connect it and it looks for what is broken: one live-site visit per project per day
+            except Exception:
+                LOG.exception("Site audit failed")
+            next_site_audit = now + max(30, int(os.getenv("SITE_AUDIT_POLL_SECONDS", "60")))
         if now >= next_push_poll and not _STOP:
             try:
                 queued = push_watch.poll_once()

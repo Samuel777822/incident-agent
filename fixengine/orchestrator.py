@@ -149,7 +149,7 @@ class Engine:
             gate = self.guard.check(user_id, tier)
             if not gate.ok:
                 if gate.code in ("rate", "cooldown"):
-                    return self._fault_wait(claimed, bug, gate.message, 900)
+                    return self._fault_wait(claimed, bug, gate.message, min(900, max(60, gate.wait_seconds or 900)), quiet=True)
                 blocked.add(tier)
                 continue
             pause = self._maybe_warn(claimed, project, bug, tier)
@@ -176,6 +176,8 @@ class Engine:
                 return self._open_pr(claimed, project, bug, result[1])
             if result[0] == "question":
                 return self._ask_client(claimed, project, bug, result[1])
+            if result[0] == "owner_action":
+                return self._finish_owner_action(claimed, project, bug, event, result[1])
             if result[0] == "model_fault":
                 # The free model is down, rate limited or the request is too large for it: never wait for it. Block it for this
                 # pass and let the router pick the next model (normally Haiku) straight away.
@@ -246,9 +248,12 @@ class Engine:
             state = store.gh_state(bug["id"])
             state["live_before"] = live_before
             store.save_gh_state(bug["id"], state)
+        live_text = investigator.format_report(live_before) if live_before else ""
+        if web and not site:
+            live_text = ("The address of the live site is not set for this project, so the site could NOT be opened. Reason from the "
+                         "code only, and say in client_message that adding the live site address lets the agent see and verify it.")
         return {"kind": kind, "site": site, "map": project_map.build(files, history=history, site_url=site), "reports": reports,
-                "replies": replies, "hints": hints, "live_before": live_before or {},
-                "live_text": investigator.format_report(live_before) if live_before else ""}
+                "replies": replies, "hints": hints, "live_before": live_before or {}, "live_text": live_text}
 
     def _ask_client(self, claimed, project, bug, question) -> str:
         """The model needs ONE thing only the owner knows. The case waits for the answer (no tries are spent while waiting)."""
@@ -263,6 +268,31 @@ class Engine:
             pass
         notify.user_question(project["user_id"], project["name"], claimed["project_id"], incident_id, q)
         return "awaiting_client"
+
+    def _finish_owner_action(self, claimed, project, bug, event, info: dict) -> str:
+        """The cause is outside the code. Stop spending tries; show the owner the exact steps; a reply re-opens the case."""
+        incident_id, project_id = claimed["incident_id"], claimed["project_id"]
+        steps = info.get("steps") or []
+        text = ("NEEDS YOU: the cause is outside your code, so no code change can fix it.\n\n"
+                + (info.get("message") + "\n\n" if info.get("message") else "")
+                + ("What to do:\n" + "\n".join(f"{i}. {s}" for i, s in enumerate(steps, 1)) + "\n\n" if steps else "")
+                + "Why: " + (info.get("diagnosis") or "see the report") + "\n\n"
+                "When you have done it, reply on this case (\"done\") and the agent checks your live site again.")
+        attempts = store.list_attempts(bug["id"])
+        report = review.build_report(bug, attempts, store.list_decisions(bug["id"]), project_name=project["name"], incident=event,
+                                     stop_reason="the cause is outside the code: your action is needed")
+        store.update_bug(bug["id"], status="needs_human", stop_reason="needs the owner's action (cause outside the code)",
+                         review_report=report, closed_at=store.now())
+        portal_db.complete_diagnosis(incident_id, project_id, {"category": "config_or_environment", "confidence": "medium",
+                                                               "root_cause": (info.get("diagnosis") or "")[:3000], "report": text + "\n\n" + report})
+        portal_db.mark_remediation_needs_human(incident_id, project_id, "Needs your action: the cause is outside the code.")
+        try:
+            portal_db.set_live_result(incident_id, text)
+        except Exception:
+            pass
+        _stage(incident_id, "needs_you", (steps[0] if steps else (info.get("message") or info.get("diagnosis") or ""))[:300])
+        notify.user_review_ready(project["user_id"], project["name"], incident_id, text[:1500])
+        return "needs_owner"
 
     def _push_policy(self, claimed, project, bug, win: dict, ctx: dict) -> str:
         """'' = may go live once GitHub agrees. Otherwise the reason a person must look first (a pull request instead of a push).
@@ -402,7 +432,10 @@ class Engine:
         cur_info = prompts.info_hash(last["error_summary"] if last else "start", (bug["strong_diagnosis"] or "")[:200])
         attempt_id = store.add_attempt(bug=bug, tier=tier, model=model, used_strong_diag=bool(bug["strong_diagnosis"]),
                                        info_hash=cur_info, pack_try=pack_try)
-        budget = int(self.cfg["tokens"]["groq_prompt_tokens"] if tier == "groq" else self.cfg["tokens"]["max_prompt_tokens"])
+        # v3.2: send the RELEVANT code (trace / report words / imports), not the whole repository on every try. The project map lists
+        # every file and the model can read_file / search for more, so a try costs a fraction of the old 60K-token prompt.
+        tok = self.cfg["tokens"]
+        budget = int(tok["groq_prompt_tokens"] if tier == "groq" else min(int(tok.get("context_tokens", 14000)), int(tok["max_prompt_tokens"])))
         chosen, tests = repo_context.select(files, traceback_text, budget, hints=ctx.get("hints"))
         history = [{"tier": a["tier"], "result": a["result"], "error_summary": a["error_summary"]} for a in counted]
         # The free model gets one shot (small context); paid models may look around first, a few bounded rounds.
@@ -487,6 +520,19 @@ class Engine:
             store.finish_attempt(attempt_id, result="unusable", error_summary=("asked the owner: " + exc.question)[:300],
                                  diagnosis=exc.diagnosis[:500])
             return ("question", exc.question)
+        except prompts.OwnerAction as exc:
+            diag = str(exc)
+            store.finish_attempt(attempt_id, result="unusable", error_summary=diag[:300], diagnosis=diag[:500])
+            if tier in router.STRONG:
+                # A strong model says the cause is outside the code. A stronger or repeated try cannot change that: stop here
+                # and tell the owner exactly what to do, instead of climbing the ladder and spending every model on it.
+                store.update_bug(bug["id"], strong_diagnosis=exc.diagnosis[:1500])
+                return ("owner_action", {"diagnosis": exc.diagnosis, "steps": exc.steps, "message": exc.message})
+            # A cheap model says so: get ONE confirmation from the High model, skipping the rest of the ladder.
+            if self.adapters["sonnet"].configured() and self.guard.quota(user_id, "sonnet")["left"] > 0:
+                store.update_bug(bug["id"], user_pinned_tier="sonnet")
+                store.set_flag(f"bypass:{bug['id']}:sonnet", "1")
+            return ("fail", diag)
         except prompts.Unusable as exc:
             diag = str(exc)
             if tier in router.STRONG and diag.startswith("cannot determine:"):
@@ -559,8 +605,9 @@ class Engine:
                 store.log_admin_action("provider_outage", detail={"provider": provider, "until": until})
 
     # ---- outcomes --------------------------------------------------------------------------------------------------------------------------
-    def _fault_wait(self, claimed, bug, reason, delay) -> str:
-        _stage(claimed["incident_id"], "waiting_retry", f"{reason[:180]} · retrying in about {max(1, delay // 60)} min")
+    def _fault_wait(self, claimed, bug, reason, delay, quiet: bool = False) -> str:
+        _stage(claimed["incident_id"], "waiting_retry",
+               reason[:220] if quiet else f"{reason[:180]} · retrying in about {max(1, delay // 60)} min")
         store.update_bug(bug["id"], status="open")
         store.park_incident(claimed["incident_id"], claimed["project_id"], waiting_for_choice=False, delay_seconds=delay)
         log.info("Bug %s waiting %ss: %s", bug["id"], delay, reason)

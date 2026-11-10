@@ -204,8 +204,23 @@ def groq_used_today(user_id) -> int:
 
 def tries_last_hour(user_id) -> int:
     since = (_now_dt() - timedelta(hours=1)).isoformat(timespec="microseconds")
-    row = _one("SELECT COUNT(*) AS n FROM fx_attempts WHERE user_id=? AND created_at>=?", (user_id, since))
+    # Only real tries count. A provider fault, a skipped free model or a review is not a try: counting them is how the hourly
+    # limit filled up with nothing done ("Too many tries this hour").
+    row = _one("""SELECT COUNT(*) AS n FROM fx_attempts WHERE user_id=? AND created_at>=?
+                  AND result NOT IN ('system_fault','review','pending')""", (user_id, since))
     return int(row["n"]) if row else 0
+
+
+def minutes_until_try_frees(user_id) -> int:
+    """Minutes until the oldest counted try of the last hour is an hour old (when the hourly limit lets the next one through)."""
+    since = (_now_dt() - timedelta(hours=1)).isoformat(timespec="microseconds")
+    row = _one("""SELECT MIN(created_at) AS t FROM fx_attempts WHERE user_id=? AND created_at>=?
+                  AND result NOT IN ('system_fault','review','pending')""", (user_id, since))
+    try:
+        oldest = datetime.fromisoformat(row["t"])
+        return max(1, int((oldest + timedelta(hours=1) - _now_dt()).total_seconds() // 60) + 1)
+    except (TypeError, ValueError, KeyError):
+        return 5
 
 
 def new_bugs_last_hour(user_id) -> int:

@@ -3093,6 +3093,8 @@ def _page_project(request, project_id):
         if project.get("ci_workflow") == "missing" and project.get("mode") == "auto":
             install_card = _workflow_fix_card(project_id, request) + install_card
         cards.append(install_card)
+    site_now = _escape(project.get("app_url") or "")
+    cards.append(f"<article class='card'><h3>Live site address</h3><p class='muted'>{'The agent opens this address in a real browser to see problems for itself, checks it after every fix, and audits it once a day.' if site_now else '<b>Not set.</b> Without it the agent can only read your code: it cannot open your site, click the failing button or check its own fix.'}</p><form method='post' action='/projects/{_escape(project_id)}/site-url'><input type='hidden' name='csrf' value='{csrf}'><div class='field'><label>Where your site is live</label><input name='app_url' type='url' required maxlength='300' value='{site_now}' placeholder='https://your-site.com'></div><button class='button primary' type='submit'>Save address</button></form></article>")
     cards.append(f"<article class='card'><h3>Update GitHub token</h3><p class='muted'>Use a classic token with the repo and workflow scopes ticked. The new token replaces the saved one and is never shown again.</p><form method='post' action='/projects/{_escape(project_id)}/github-token'><input type='hidden' name='csrf' value='{csrf}'><div class='field'><label>New GitHub token</label><input name='github_token' type='password' autocomplete='new-password' required minlength='20' maxlength='500'></div><button class='button primary' type='submit'>Validate and save token</button></form></article>")
     if watch in ("runtime", "both"):
         cards.append(f"<article class='card'><h3>Monitor key</h3><p class='muted'>The monitor uses a key that can only <b>send</b> check-ins and error reports for this project. If you think it leaked, replace it: the old key stops working and we put the new one into your code for you.</p><form method='post' action='/projects/{_escape(project_id)}/rotate-key'><input type='hidden' name='csrf' value='{csrf}'><button class='button' type='submit'>Replace key</button></form></article>")
@@ -3288,6 +3290,46 @@ def _recent_reports(project_id: str) -> int:
         conn.close()
 
 
+def _save_site_url(project_id: str, user_id: str, raw: str) -> str:
+    """Store the project's live address when it is a public http(s) site. Returns the saved address or ''."""
+    import site_probe
+    from urllib.parse import urlparse
+    raw = str(raw or "").strip()[:300]
+    if raw and "://" not in raw:
+        raw = "https://" + raw
+    safe = site_probe.safe_url(raw) if raw else ""
+    if not safe:
+        return ""
+    parts = urlparse(safe)
+    origin = f"{parts.scheme}://{parts.netloc}/"
+    conn = portal_db.get_connection()
+    try:
+        portal_db._execute(conn, "UPDATE projects SET app_url=? WHERE id=? AND user_id=?", (origin, project_id, user_id))
+        conn.commit()
+    finally:
+        conn.close()
+    try:
+        from fixengine import store as fx_store
+        fx_store.set_flag(f"audit_next:{project_id}", "")          # a new address: audit it now
+    except Exception:
+        pass
+    return origin
+
+
+def _page_site_url(request, project_id):
+    gate = _require_access(request)
+    if gate:
+        return gate
+    if request.method != "POST" or not _csrf_valid(request):
+        return _response("<div class='alert'>Request expired or invalid.</div>", request, "403 Forbidden")
+    project = portal_db.get_project(project_id, request.session["user_id"])
+    if not project:
+        return _response("<h1>Project not found</h1>", request, "404 Not Found")
+    saved = _save_site_url(project_id, request.session["user_id"], request.form.get("app_url", ""))
+    portal_db.audit(project_id, "site_url_set" if saved else "site_url_rejected")
+    return _redirect(f"/projects/{project_id}?reported={'site' if saved else 'badsite'}")
+
+
 def _page_report(request, project_id):
     """The last-resort path: the owner describes what is broken in plain words and the agent investigates the code."""
     gate = _require_access(request)
@@ -3310,6 +3352,8 @@ def _page_report(request, project_id):
     if _recent_reports(project_id) >= REPORTS_PER_HOUR:
         return _redirect(f"/projects/{project_id}?reported=limit")
     page = str(request.form.get("page", "")).strip()[:300]
+    if page.startswith(("http://", "https://")) and not project.get("app_url"):
+        _save_site_url(project_id, request.session["user_id"], page)     # the agent now knows where the live site is
     evidence = {"kind": "user_report", "owner_report": text}
     if page:
         evidence["page"] = page
@@ -3541,6 +3585,10 @@ def _page_case_reply(request, project_id, incident_id):
             bug = fx_store.get_bug_by_incident(target)
             if bug and bug.get("status") in ("awaiting_client", "needs_human", "resolved", "pr_opened"):
                 fx_store.update_bug(bug["id"], status="open", closed_at=None, stop_reason="")
+            if bug:
+                state = fx_store.gh_state(bug["id"])
+                if state.pop("live_before", None) is not None:      # look at the live site again with fresh eyes
+                    fx_store.save_gh_state(bug["id"], state)
             portal_db.reopen_incident_with_reply(target, project_id, text)
     except Exception:
         LOG.exception("could not add the client reply to case %s", target)
@@ -4197,6 +4245,9 @@ def _dispatch(request: Request) -> Response:
     match = re.fullmatch(r"/projects/([0-9a-f-]{36})/report", request.path)
     if match:
         return _page_report(request, match.group(1))
+    match = re.fullmatch(r"/projects/([0-9a-f-]{36})/site-url", request.path)
+    if match:
+        return _page_site_url(request, match.group(1))
     match = re.fullmatch(r"/projects/([0-9a-f-]{36})/incidents/([0-9a-f-]{36})/reply", request.path)
     if match:
         return _page_case_reply(request, match.group(1), match.group(2))

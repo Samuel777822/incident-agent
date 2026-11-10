@@ -6,6 +6,31 @@ read code, could not see the live site, and pushed fixes that nothing had proven
 on-call engineer: understand the request, look at the real site, find the cause, fix it, prove it, push it, check the live site
 again, and tell the client honestly.
 
+## v3.2: stop wasting tries, see sign-in problems, audit on connect (10 November 2026, evening)
+
+From the second live test ("Continue with Google sends me back to login": Groq, Haiku, Sonnet and Opus all tried, nothing fixed,
+then "Too many tries this hour · retrying in about 15 min").
+
+* **The ladder stops when the cause is outside the code.** Before, a model answering "this is a setting, not code" counted as a
+  failed try, so the same question went to the next, more expensive model, up to Opus. Now a strong model's answer ends the case as
+  **Needs you** with numbered steps naming the console, the setting and the value ("In Google Cloud Console > Credentials > … add
+  https://…/callback to Authorized redirect URIs"). A cheap model saying so gets exactly one confirmation from High mode. Reply
+  "done" on the case and the agent opens the live site again.
+* **About 4x fewer tokens per try.** A try used to send up to 60,000 tokens of code (the relevant files, then every other file
+  until the budget was full). Now it sends the relevant files only (`tokens.context_tokens`, 14,000) plus the project map, and the
+  model reads or searches for more when it needs it.
+* **Hourly limit counts real tries only** and is 30 (was 12). Provider faults, skipped free-model calls and reviews no longer use
+  it up. When it is reached, the card says when it continues and waits exactly that long, not a flat 15 minutes.
+* **Sign-in problems:** the investigator clicks the sign-in button the report names and records where the visit goes and the
+  `redirect_uri`, `state` and scope sent to the provider, plus any `error=` in the address it comes back to (it never types
+  credentials). The prompt has a login / OAuth / session checklist (redirect URI, callback, state, cookie flags, auth guard, CORS).
+* **Site audit on connect** (`site_audit.py`): within a minute of connecting, and then once a day, the agent opens the live site in
+  the browser and opens cases for failing API calls, missing scripts and JavaScript errors: no visitor or report needed, no AI call
+  for the visit. (The push check that downloads, builds and tests the code on connect already existed.)
+* **Live site address** is now a setting on the project page (it was only asked when connecting, as optional), and a full address
+  typed in the report's page field is remembered. Without it the agent can only read code; the card says so.
+* Sandbox server: `git pull` and `systemctl restart fx-sandbox` (no image rebuild: `investigate.py` is mounted from the checkout).
+
 ## Follow-up fixes (same day, from the first live test)
 
 * **Groq "HTTP 413 · retrying in about 5 min" forever:** 413 means the request is too large for Groq's free tier (about 8K tokens per

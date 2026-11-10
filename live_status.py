@@ -35,6 +35,7 @@ INCIDENT_STAGES = {
     "verified": ("Verified on your live site", "green", 6, False),
     "merged_case": ("Part of another case (same cause)", "muted", None, False),
     "needs_human": ("Needs human review", "red", None, False),
+    "needs_you": ("Needs you: a setting outside your code", "amber", None, False),
     "resolved": ("Resolved", "green", 6, False),
 }
 PUSH_STAGES = {
@@ -110,7 +111,7 @@ def incident_view(inc: dict, mode: str, quota: dict | None = None) -> dict:
                  "diagnosed": "resolved" if mode == "report" else "thinking"}.get(status, "diagnosing")
     if status == "resolved" and stage not in ("merged", "resolved", "pushed", "verifying", "verified"):
         stage = "merged" if inc.get("pr_url") else "resolved"
-    if status == "needs_human":
+    if status == "needs_human" and stage != "needs_you":
         stage = "needs_human"
     headline, tone, active_idx, busy = INCIDENT_STAGES.get(stage, (stage.replace("_", " ").title() or "Working", "muted", 1, True))
     tier = str(inc.get("stage_tier") or "")

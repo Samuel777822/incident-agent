@@ -73,7 +73,7 @@ def _tries(s: RouterInput, tier: str) -> int:
 
 def _est_cost(cfg: dict, tier: str, s: RouterInput) -> float:
     tok = cfg["tokens"]
-    tokens_in = min(s.repo_tokens, tok["max_prompt_tokens"]) + (tok["retry_overhead_in"] if s.total_tries else 0)
+    tokens_in = min(s.repo_tokens, tok["max_prompt_tokens"], int(tok.get("context_tokens", tok["max_prompt_tokens"])) + 6000) + (tok["retry_overhead_in"] if s.total_tries else 0)
     tokens_out = int(tok["expected_out"] * tok.get("reasoning_out_multiplier", 1.0))
     return fx_config.estimate_cost_inr(cfg, tier, tokens_in, tokens_out)
 

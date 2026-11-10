@@ -231,9 +231,12 @@ def test_per_user_rupee_ceiling(fx_db, cfg):
 
 def test_hourly_rate_limit(fx_db, cfg):
     uid, pid = make_user_and_project()
-    for _ in range(12):
+    for _ in range(30):
         _attempt(uid, pid, "haiku")
-    assert fx_guard.Guard(cfg).check(uid, "haiku").code == "rate"
+    for _ in range(5):
+        _attempt(uid, pid, "haiku", result="system_fault")      # faults are not tries
+    gate = fx_guard.Guard(cfg).check(uid, "haiku")
+    assert gate.code == "rate" and "continues by itself in about" in gate.message and gate.wait_seconds > 0
 
 
 def test_spike_from_one_project_pauses_only_that_project(fx_db, cfg):

@@ -93,7 +93,8 @@ ANSWER FORMAT: ONE JSON object, nothing else (no markdown fences):
   "client_message": "2-3 plain sentences for the site owner: what was wrong and what you changed. No jargon, no promises you cannot prove.",
   "requests": [],
   "question_for_client": "",
-  "cannot_determine": false
+  "cannot_determine": false,
+  "owner_steps": []
 }
 - "verification" is a short browser journey (steps: goto, click, fill + text, expect_text, expect_visible, wait) that FAILS today and PASSES after your fix. Use real selectors/text from the code. Leave it [] for a pure server/test problem.
 - "requests" (instead of edits, when you need to look first; at most 3 per answer, and you get only a few rounds):
@@ -104,7 +105,7 @@ ANSWER FORMAT: ONE JSON object, nothing else (no markdown fences):
     {"check_model": "provider/model-id"}
   When you send requests, leave "edits" empty. On the LAST round you must answer with edits, a question, or cannot_determine.
 - "question_for_client": ONE specific question, only when something only the owner can know is missing (which page, what they expected, a business rule). Never ask what the evidence or the code already answers. Leave edits empty when you ask.
-- "cannot_determine": true only when the cause is outside the code (a down third-party service with no alternative, a missing secret or environment variable, a database, the hosting). Say exactly what the owner must do in "client_message".
+- "cannot_determine": true only when the cause is outside the code (a setting in the Google / OAuth / payment / hosting console, a missing or wrong environment variable, a database, a dead third-party service with no alternative). Then fill "owner_steps" with the EXACT numbered actions the owner must take, naming the console, the setting and the value taken from the code (for example: "In Google Cloud Console > Credentials > your OAuth client, add https://site.example/auth/google/callback to Authorized redirect URIs" or "On your host set SESSION_SECRET"). This ends the case with those instructions, so first make sure the code itself is right; if the code ALSO needs a change, return the edits instead and put the owner's part in "client_message".
 
 RULES FOR EDITS (the system enforces them; a violation wastes the try)
 1. old_text must be copied EXACTLY from the file as shown (whitespace and indentation included) and occur exactly once in that file. Include enough surrounding lines to be unique. Never invent file paths: only files shown or read.
@@ -115,6 +116,7 @@ RULES FOR EDITS (the system enforces them; a violation wastes the try)
 6. AN OUTSIDE API IS FAILING OR CHANGED (4xx/5xx, CORS, changed URL or response shape): fix the URL, method, header, parameter or response field in the code to match what the answer body and the docs-in-code show. If the service is simply down, show a clear message with a retry button; use a second endpoint only if the code or evidence names one. Never invent URLs or keys.
 7. A BUTTON OR LINK DOES NOTHING: find the element (id/class/text), its handler and the reason they no longer meet (renamed id, script not loaded, handler throws, form submits and reloads), and fix that.
 8. A PAGE NEVER FILLS / "X IS NOT LOADING": compare the URL the page requests with what the server or API actually serves (route names, IDs, book/chapter formats, case, trailing slashes, query parameters), then the parsing, then the render.
+8b. LOGIN / "CONTINUE WITH GOOGLE" SENDS ME BACK TO THE LOGIN PAGE (any OAuth or session problem). You cannot log in, so reason from the code and the redirect evidence. Check, in this order: (a) the redirect_uri the code sends (in the evidence when the investigator clicked the button) against the callback route that really exists, including scheme, host, path and trailing slash, and where it is built from (an env var, the request host behind a proxy, a hard-coded localhost); (b) the callback handler: is the state / nonce / PKCE value it compares stored in a cookie or session that survives the round trip; does it exchange the code and READ the errors, or silently redirect to /login on any exception; (c) the session cookie it sets after success: Secure on an http origin, SameSite=Strict (or None without Secure) on a cross-site redirect, a Domain that does not match the site, a different cookie name than the one the auth check reads, a session store that lives in memory per process or per serverless call; (d) the auth guard that sends users to /login: does it read the same cookie / token the callback wrote, and can the page check before the session is saved; (e) front-end and API on different origins: credentials "include" and CORS allow-credentials. Search for the callback path, "redirect_uri", the cookie name and the session secret's env name before answering.
 9. A SMALL CHANGE REQUESTED BY THE CLIENT (text, a link, a colour, a small behaviour): do exactly what they asked, nothing more, and make sure the page still works.
 10. If a previous attempt failed, read its failure (sandbox, GitHub, or the live site after deploy) and the failed patch. Do NOT repeat it; explain what was wrong with it in "findings".
 11. Never claim something is verified. The system verifies.
@@ -236,6 +238,17 @@ class Unusable(ValueError):
     """The model's answer could not be used (malformed, or it said it cannot determine the cause)."""
 
 
+class OwnerAction(Unusable):
+    """The cause is outside the code (a setting at Google / the host, a missing environment variable, a dead outside service).
+    Not something a stronger model can fix: the engine stops spending tries and tells the owner exactly what to do."""
+
+    def __init__(self, diagnosis: str, steps: list[str], message: str = ""):
+        super().__init__("cannot determine: " + (diagnosis or message or "no reason given")[:300])
+        self.diagnosis = diagnosis[:1500]
+        self.steps = [s[:400] for s in steps[:8]]
+        self.message = message[:700]
+
+
 class ClientQuestion(Unusable):
     """The model needs ONE thing only the site owner knows. Not a failed try: the case waits for the owner's answer."""
 
@@ -309,7 +322,8 @@ def parse_response(text: str, *, allow_requests: bool = False) -> dict:
     raw = data.get("edits")
     has_edits = isinstance(raw, list) and bool(raw)
     if data.get("cannot_determine") is True and not has_edits:
-        raise Unusable("cannot determine: " + (diagnosis or extra["client_message"] or "no reason given")[:300])
+        steps = [" ".join(str(x).split()) for x in data.get("owner_steps", []) if str(x).strip()] if isinstance(data.get("owner_steps"), list) else []
+        raise OwnerAction(diagnosis, steps, extra["client_message"])
     if question and not has_edits:
         raise ClientQuestion(question, diagnosis)
     if requests and not has_edits:

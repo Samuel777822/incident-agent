@@ -234,6 +234,7 @@ def problems(report: dict) -> list[str]:
     out += ["console error: " + str(e)[:160] for e in (report.get("console_errors") or [])[:5]
             if "favicon" not in str(e).lower() and "failed to load resource" not in str(e).lower()]
     out += ["on the page: " + str(e)[:160] for e in (report.get("visible_errors") or [])[:4]]
+    out += ["error in the address: " + str(e)[:200] for e in (report.get("url_errors") or [])[:3]]
     for s in report.get("steps") or []:
         if not s.get("ok"):
             out.append(f"step failed: {json.dumps(s.get('step'))[:100]} ({str(s.get('detail'))[:120]})")
@@ -280,6 +281,15 @@ def format_report(report: dict, *, limit: int = 3000) -> str:
     for f in (report.get("failed_requests") or [])[:6]:
         if f.get("body"):
             head.append(f"  answer from {f.get('host', '')}{f.get('path', '')}: {str(f['body'])[:300]}")
+    hops = report.get("navigations") or []
+    if len(hops) > 1:
+        head.append("The visit went: " + " -> ".join(f"{h.get('host', '')}{h.get('path', '')}" for h in hops[:10]))
+    oauth = report.get("oauth")
+    if oauth:
+        head.append(f"Sign-in request sent to {oauth.get('provider', '')}: redirect_uri={oauth.get('redirect_uri', '')} "
+                    f"response_type={oauth.get('response_type', '')} state={'yes' if oauth.get('has_state') else 'NO'} scope={oauth.get('scope', '')}")
+        head.append("(The investigator cannot sign in. Compare that redirect_uri with the callback route in the code and with what the "
+                    "provider's console allows.)")
     if report.get("steps"):
         head.append("Steps: " + "; ".join(f"{json.dumps(s.get('step'))[:80]} {'ok' if s.get('ok') else 'FAILED'}" for s in report["steps"]))
     return "\n".join(head)[:limit]
@@ -293,6 +303,14 @@ def default_steps(report_text: str, html_files: dict[str, str] | None = None) ->
     named = re.findall(r"\bthe\s+([A-Z][\w-]{1,30}|[\w-]{2,30})\s+button\b", text, re.I)
     for label in (quoted + named)[:1]:
         steps.append({"click": f"text={label.strip()}"})
+    if not steps:
+        # "Continue with Google sends me back to login": click the sign-in button so the report shows where it goes and which
+        # redirect_uri it sends. The investigator never types credentials; it stops at the provider's page.
+        m = re.search(r"((?:continue|sign ?in|log ?in|sign ?up|login) with (google|github|facebook|apple|microsoft))", text, re.I)
+        if m:
+            steps.append({"click": f"text=/{m.group(2)}/i"})
+        elif re.search(r"google.*(log ?in|sign ?in|auth)|(log ?in|sign ?in|auth)\w*.*google", text, re.I):
+            steps.append({"click": "text=/google/i"})
     if steps:
         steps.append({"wait": "1500"})
     return clean_steps(steps)

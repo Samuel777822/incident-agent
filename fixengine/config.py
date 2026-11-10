@@ -50,7 +50,7 @@ DEFAULTS: dict = {
         "per_bug_cost_inr": 60.0,
         "per_bug_max_tries": 10,
         "user_month_ceiling_inr": 250.0,
-        "tries_per_hour_per_user": 12,
+        "tries_per_hour_per_user": 30,
         "new_bugs_per_hour_per_user": 20,
         "cooldown_after_failures": 4,       # consecutive failed bugs
         "cooldown_minutes": 30,
@@ -87,6 +87,7 @@ DEFAULTS: dict = {
         "retry_overhead_in": 7500,    # error output + short report (plan 5.1: +5K..+10K)
         "expected_out": 3000,
         "max_prompt_tokens": 60000,   # keeps Haiku under its 100K price band
+        "context_tokens": 14000,      # v3.2: code sent up front (the relevant files only); the model asks for more when it needs it
         "groq_prompt_tokens": 3500,   # free tier is rate limited (~8K tokens/min): send only the relevant files
         "groq_request_limit": 7500,   # prompt + answer above this is rejected with HTTP 413: skip the free model instead
         "reasoning_out_multiplier": 1.0,

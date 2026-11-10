@@ -6,7 +6,7 @@ import html
 
 FLOW_NODES = [
     ("1", "Connected", "Your repo is private and linked"),
-    ("2", "Watching", "Your site and code, all day"),
+    ("2", "Watching", "Every push, plus a daily visit to your site"),
     ("3", "Error found", "A request fails, a button is dead"),
     ("4", "AI writes a fix", "Cheapest model first"),
     ("5", "Sandbox test", "Built and clicked in a safe box"),
@@ -55,6 +55,8 @@ def flash_html(code: str) -> str:
             "dup": ("amber", "Already working on this: you sent the same report a moment ago. It is one case, so nothing is paid twice."),
             "joined": ("green", "Sent. This looks like the same cause as a problem the agent is already fixing, so your report was added "
                                 "to that case (one fix, nothing paid twice)."),
+            "site": ("green", "Saved. The agent now opens this address to see problems for itself, and audits it in the next minute."),
+            "badsite": ("amber", "That address could not be used. Enter the public address of your site, for example https://your-site.com"),
             "short": ("amber", "Please describe the problem in a few more words."),
             "limit": ("amber", "You sent 5 reports in the last hour. Please wait a little; the agent is still working on them.")}
     tone, text = msgs.get(code, ("", ""))

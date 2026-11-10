@@ -25,6 +25,7 @@ class GuardResult:
     code: str = "ok"            # ok | exhausted | paused | busy | ceiling | rate | cooldown | budget
     pack_try: bool = False
     message: str = ""
+    wait_seconds: int = 0
 
 
 class Guard:
@@ -197,7 +198,9 @@ class Guard:
     def rate_check(self, user_id: str) -> GuardResult | None:
         caps = self.cfg["caps"]
         if store.tries_last_hour(user_id) >= int(caps["tries_per_hour_per_user"]):
-            return GuardResult(False, "rate", message="Too many tries this hour. The agent will continue later.")
+            mins = store.minutes_until_try_frees(user_id)
+            return GuardResult(False, "rate", message=f"The agent used this hour's {caps['tries_per_hour_per_user']} AI tries "
+                               f"(a safety limit on spending). It continues by itself in about {mins} min", wait_seconds=mins * 60)
         n = int(caps["cooldown_after_failures"])
         if n and store.recent_failed_bugs(user_id, int(caps["cooldown_minutes"])) >= n:
             return GuardResult(False, "cooldown", message="Cooling down after repeated failures.")

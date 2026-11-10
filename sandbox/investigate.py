@@ -19,7 +19,7 @@ import re
 import socket
 import sys
 import time
-from urllib.parse import urlparse
+from urllib.parse import parse_qs, urlparse
 
 MAX_FAILED = 25
 MAX_CONSOLE = 25
@@ -82,7 +82,8 @@ def run(spec: dict) -> dict:
     parts = urlparse(url)
     allowed = (spec.get("allowed_host") or parts.hostname or "").lower()
     report = {"ok": False, "mode": "browser", "url": url[:300], "final_url": "", "status": None, "title": "", "page_errors": [],
-              "console_errors": [], "failed_requests": [], "visible_errors": [], "steps": [], "blocked": [], "ms": 0, "reason": ""}
+              "console_errors": [], "failed_requests": [], "visible_errors": [], "steps": [], "blocked": [], "ms": 0, "reason": "",
+              "navigations": [], "url_errors": [], "oauth": None}
     if parts.scheme not in ("http", "https") or not parts.hostname or parts.username or parts.password:
         report["reason"] = "not a public http(s) address"
         return report
@@ -130,6 +131,30 @@ def run(spec: dict) -> dict:
                 failed.append({**_short(req.url), "method": req.method, "status": 0, "body": str(req.failure or "")[:BODY_CHARS],
                                "type": req.resource_type})
 
+        def on_nav(frame):
+            # Where the visit went (host + path only). A sign-in button shows here as a hop to the identity provider, and the
+            # redirect_uri it carries is the one thing that explains most "login sends me back to the login page" problems.
+            try:
+                if frame != page.main_frame:
+                    return
+                u = urlparse(frame.url)
+                if u.scheme not in ("http", "https"):
+                    return
+                hop = {"host": (u.hostname or "")[:120], "path": (u.path or "/")[:160]}
+                if len(report["navigations"]) < 10 and (not report["navigations"] or report["navigations"][-1] != hop):
+                    report["navigations"].append(hop)
+                q = parse_qs(u.query)
+                if q.get("redirect_uri") and not report.get("oauth"):
+                    report["oauth"] = {"provider": hop["host"], "redirect_uri": q["redirect_uri"][0][:300],
+                                       "response_type": (q.get("response_type") or [""])[0][:40],
+                                       "has_state": bool(q.get("state")), "scope": (q.get("scope") or [""])[0][:120]}
+                err = (q.get("error") or q.get("error_description") or [""])[0]
+                if err and len(report["visible_errors"]) < 8:
+                    report["url_errors"].append(f"{hop['host']}{hop['path']} error={err[:160]}")
+            except Exception:
+                pass
+
+        page.on("framenavigated", on_nav)
         page.on("response", on_response)
         page.on("requestfailed", on_failed)
         page.on("pageerror", lambda e: report["page_errors"].append(str(e)[:300]) if len(report["page_errors"]) < MAX_CONSOLE else None)
