@@ -65,8 +65,9 @@ DEFAULTS: dict = {
         "levels": [0.5, 0.8, 0.9, 1.0],      # fractions of B (plan 9.3)
         "reserve_floor_fraction_of_credits": 0.95,
         "spike_hour_multiple": 6.0,          # last hour vs average hourly spend this month
-        "spike_hour_min_inr": 40.0,          # ignore spikes below this
-        "project_hour_cap_inr": 150.0,       # v3.1: one project's AI spend per hour (~2.5 problems at the per-bug cap); above it ONLY that project waits
+        # These two grow with the budget B (FIXENGINE_BUDGET_INR) unless set explicitly in FIXENGINE_CONFIG_JSON:
+        "spike_hour_min_inr": None,          # ignore spikes below this: 10% of B (Rs 40 at B = 400)
+        "project_hour_cap_inr": None,        # one project's AI spend per hour before ONLY that project waits: 37.5% of B, at least Rs 150
         "project_pause_minutes": 60,
         "auto_grant_projection_fraction": 0.70,
         "auto_grant_high_tries": 2,
@@ -181,6 +182,11 @@ def load() -> dict:
             for part in path_[:-1]:
                 target = target[part]
             target[path_[-1]] = number
+    b = cfg["budget"]
+    if b.get("spike_hour_min_inr") is None:
+        b["spike_hour_min_inr"] = round(0.10 * float(b["b_inr"]), 2)
+    if b.get("project_hour_cap_inr") is None:
+        b["project_hour_cap_inr"] = round(max(150.0, 0.375 * float(b["b_inr"])), 2)
     return cfg
 
 

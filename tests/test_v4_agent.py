@@ -575,3 +575,43 @@ def test_run_again_reopens_the_same_case_without_retyping(web_env):
     _, headers, _ = _request(f"/projects/{project_id}/incidents/{inc['id']}/rerun", method="POST", cookie=cookie, form={"csrf": csrf})
     assert "case=rerun" in str(headers) and portal_db.get_incident_row(inc["id"])["status"] == "diagnosing"
     assert len(portal_db.list_incidents(project_id)) == 1                   # the same case, not a new one
+
+
+# ============================================================================================ budget scaling, pause emails, email check
+def test_spending_limits_grow_with_the_budget(monkeypatch):
+    monkeypatch.setenv("FIXENGINE_BUDGET_INR", "2000")
+    b = fx_config.load()["budget"]
+    assert b["spike_hour_min_inr"] == 200.0 and b["project_hour_cap_inr"] == 750.0
+
+
+def test_a_project_pause_emails_the_admins(fx_db, cfg, monkeypatch):
+    from fixengine import guard as fx_guard, notify
+    sent = []
+    monkeypatch.setattr(notify, "_to_admins", lambda subject, body="", kind="": sent.append(subject))
+    uid, pid = H.make_user_and_project()
+    bug = store.create_bug(project_id=pid, user_id=uid, incident_id="i", fingerprint_json={"hash": "h"}, bug_class="medium", category="")
+    aid = store.add_attempt(bug=bug, tier="sonnet", model="m", used_strong_diag=False, info_hash="x")
+    store.finish_attempt(aid, result="fail", cost_inr=500.0)
+    assert fx_guard.Guard(cfg).project_paused(pid) and any("paused for one project" in s for s in sent)
+    assert fx_guard.Guard(cfg).user_ceiling_reached(uid) and any("monthly spending ceiling" in s for s in sent)
+
+
+def test_email_check_names_what_is_missing():
+    import email_health
+
+    class Resp:
+        def __init__(self, answers):
+            self._a = answers
+
+        def json(self):
+            return {"Answer": [{"type": 16, "data": a} for a in self._a]}
+
+    class Client:
+        def get(self, url, params=None, timeout=None):
+            name = params["name"]
+            return Resp({"agentdaemon.xyz": ["v=spf1 include:zoho.in ~all"]}.get(name, []))
+    res = email_health.check("agentdaemon.xyz", "brevo", client=Client())
+    text = " ".join(res["problems"])
+    assert not res["ok"] and "spf.brevo.com" in text and "DKIM" in text and "DMARC" in text and "No SPF" not in text
+    steps = " ".join(email_health.fix_steps("agentdaemon.xyz", "brevo"))
+    assert "v=spf1 include:zoho.in include:spf.brevo.com ~all" in steps and "_dmarc" in steps

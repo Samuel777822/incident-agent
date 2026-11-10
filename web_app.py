@@ -2391,7 +2391,7 @@ setInterval(() => {
 """
 
     body = (f"<section class='section'><div class='eyebrow'>Administrator</div><h1>Operations</h1>"
-            f"<p class='muted'>Signed in as {_escape(request.session['email'])}</p>{flash}<div class='statgrid'>{cards}</div>{attention}"
+            f"<p class='muted'>Signed in as {_escape(request.session['email'])}</p>{flash}{_email_health_card()}<div class='statgrid'>{cards}</div>{attention}"
             f"<h2>Customers</h2>{_table(['Customer', 'Contact & Referral', 'Access', 'Action'], customer_rows, 'No customer accounts yet.')}"
             f"<h2>Applications</h2>{_table(['App', 'Owner', 'State', 'Last check-in', 'Open incidents'], project_rows, 'No applications connected yet.')}"
             f"<h2>Recent incidents and fixes</h2>{_table(['When', 'App', 'Error', 'Agent status', 'Fix'], incident_rows, 'No incidents yet.')}"
@@ -4649,3 +4649,20 @@ def _page_host_ready(request, project_id):
                            signature=signature)
     portal_db.audit(project_id, "host_ready_requested", {"findings": len(hr.get("findings", []))})
     return _redirect(f"/projects/{project_id}?reported=1")
+
+
+def _email_health_card() -> str:
+    """Admin warning when our emails will land in spam (missing SPF / DKIM / DMARC), with the exact fix."""
+    try:
+        import email_health
+        res = email_health.check()
+    except Exception:
+        return ""
+    if res.get("ok") or not res.get("problems"):
+        return ""
+    probs = "".join(f"<li>{_escape(p)}</li>" for p in res["problems"])
+    steps = "".join(f"<li>{_escape(s)}</li>" for s in email_health.fix_steps(res.get("domain", ""), res.get("service", "")))
+    return ("<article class='card' style='border-color:#8a3342'><h3>Your emails are likely going to spam</h3>"
+            f"<p class='muted'>Checked the public DNS of <b>{_escape(res.get('domain', ''))}</b>. Payment alerts, pause alerts and customer "
+            f"emails all depend on this.</p><ul>{probs}</ul><details class='more' open><summary>How to fix it (about 15 minutes)</summary>"
+            f"<ol>{steps}</ol></details></article>")

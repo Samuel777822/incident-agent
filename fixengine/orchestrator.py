@@ -352,6 +352,11 @@ class Engine:
                 if gate.code in ("rate", "cooldown"):
                     return self._fault_wait(claimed, bug, gate.message, min(900, max(60, gate.wait_seconds or 900)), quiet=True)
                 unavailable.append(self._why_unavailable(tier, gate))
+                day_key = f"unavailable_mail:{tier}:{gate.code}:{store.now()[:10]}"
+                if gate.code in ("paused", "busy", "budget") and not store.get_flag(day_key):
+                    store.set_flag(day_key, "1")
+                    notify._to_admins(f"{notify.mode_name(tier)} mode is not available and a customer case needed it",
+                                      unavailable[-1] + "\n\nThis email is sent once a day per mode.", "fix_pause")
                 break
             if tier != "haiku" and tier != start:   # Haiku costs a few rupees; a model you asked for is not asked about again
                 warned = self._maybe_warn(claimed, project, bug, tier)
@@ -905,6 +910,9 @@ class Engine:
                 store.set_flag(f"outage_{provider}_until", until)
                 store.set_flag(key, "0")
                 store.log_admin_action("provider_outage", detail={"provider": provider, "until": until})
+                notify._to_admins(f"AI provider resting: {provider}",
+                                  f"{provider} failed 3 times in a row (outage, timeout or rate limit), so it rests until {until} (UTC). "
+                                  "Cases use another model meanwhile or continue by themselves afterwards.", "fix_pause")
 
     # ---- outcomes --------------------------------------------------------------------------------------------------------------------------
     def _fault_wait(self, claimed, bug, reason, delay, quiet: bool = False) -> str:

@@ -36,6 +36,7 @@ def _isolated_environment(monkeypatch):
     monkeypatch.setenv("AGENT_DIRECT_PUSH", "0")
     monkeypatch.setenv("MODEL_CATALOG_OFFLINE", "1")
     monkeypatch.setenv("FIX_JOURNEYS_ENABLED", "0")
+    monkeypatch.setenv("EMAIL_HEALTH_CHECK", "0")       # the admin email check never asks the real DNS in tests
 
 
 @pytest.fixture(autouse=True)

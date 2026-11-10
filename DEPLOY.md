@@ -96,6 +96,27 @@ Make a random secret: `python -c "import secrets; print(secrets.token_urlsafe(48
 web service, set `PORTAL_RUN_WORKER=1` on it so the worker runs inside it, and keep UptimeRobot pinging `/health` every 5 minutes
 (a sleeping free service misses webhooks; the poller then catches the push a few minutes later).
 
+## Emails must not land in spam (do this once, about 15 minutes)
+
+On 11 November 2026 agentdaemon.xyz had NO SPF, DKIM or DMARC record, so payment alerts, pause alerts and customer emails were
+going to spam. The admin page (/admin) now shows a red card while anything is missing. In the DNS of agentdaemon.xyz:
+
+1. ONE TXT record, name `@`: `v=spf1 include:zoho.in include:spf.brevo.com ~all` (use `include:amazonses.com` instead of Brevo if you
+   send with Resend). There must be only one record starting with `v=spf1`.
+2. Zoho Mail: Admin Console > Domains > agentdaemon.xyz > Email Configuration > DKIM > Add a selector, copy the TXT record into the
+   DNS, press Verify.
+3. Brevo: Senders, Domains & Dedicated IPs > Domains > Add agentdaemon.xyz > Authenticate: copy brevo-code, brevo1._domainkey and
+   brevo2._domainkey into the DNS, press Verify.
+4. TXT record, name `_dmarc`: `v=DMARC1; p=none; rua=mailto:postmaster@agentdaemon.xyz`.
+5. After an hour, reload /admin: the red card disappears when everything is found.
+
+## Budget: what grows when you add credit
+
+Set `FIXENGINE_CREDITS_INR` (what you have on OpenRouter) and `FIXENGINE_BUDGET_INR` (what the agent may spend a month, about 80% of
+the credit). Everything below follows them: the alert and pause levels (50/80/90/100% of the budget), the reserve floor (95% of the
+credit), the spike threshold (10% of the budget) and the per-project hourly cap (37.5% of the budget, at least Rs 150). Every pause
+(a project, a customer's ceiling, a mode, a provider resting, the global spike breaker) emails both admins right away.
+
 ## Upgrading to the on-call engineer (plan v3.1, 10 November 2026)
 
 What changes for you: the report box works on PostgreSQL again, one cause is one case (one fix, one bill), a flooding project only

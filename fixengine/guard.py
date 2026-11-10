@@ -92,6 +92,11 @@ class Guard:
         until = (now + timedelta(minutes=int(cfgb.get("project_pause_minutes", 60) or 60))).isoformat(timespec="seconds")
         store.set_flag(f"project_pause:{project_id}", until)
         store.log_admin_action("project_pause", detail={"project_id": project_id, "last_hour": round(hour, 2), "until": until})
+        notify._to_admins("Agent paused for one project (hourly spending cap)",
+                          f"Project {project_id} spent Rs {hour:.2f} on AI in the last hour (cap Rs {cap:.0f}). Its cases wait until {until} "
+                          "(UTC) and then continue by themselves. Other customers are not affected.\n"
+                          "Raise the cap with FIXENGINE_CONFIG_JSON budget.project_hour_cap_inr, or raise the budget (FIXENGINE_BUDGET_INR).",
+                          "fix_pause")
         return self._pause_text(until)
 
     @staticmethod
@@ -124,6 +129,9 @@ class Guard:
             until = (now + timedelta(minutes=int(cfgb.get("project_pause_minutes", 60) or 60))).isoformat(timespec="seconds")
             store.set_flag(f"project_pause:{row['project_id']}", until)
             store.log_admin_action("project_pause", detail={"project_id": row["project_id"], "last_hour": round(share, 2), "until": until})
+            notify._to_admins("Agent paused for one project (spending spike)",
+                              f"Project {row['project_id']} caused a spending spike: Rs {share:.2f} in the last hour. Its cases wait until "
+                              f"{until} (UTC); everyone else continues.", "fix_pause")
             rest -= share
         if rest < float(cfgb["spike_hour_min_inr"]) or rest <= normal * float(cfgb["spike_hour_multiple"]):
             return
@@ -175,7 +183,18 @@ class Guard:
                 "warn_at": int(self.cfg["warn_at"].get(tier, 0)), "every_use": bool(self.cfg["warn_every_use"].get(tier))}
 
     def user_ceiling_reached(self, user_id: str) -> bool:
-        return store.spend_inr(period=store.current_period(), user_id=user_id) >= float(self.cfg["caps"]["user_month_ceiling_inr"])
+        spent = store.spend_inr(period=store.current_period(), user_id=user_id)
+        ceiling = float(self.cfg["caps"]["user_month_ceiling_inr"])
+        if spent < ceiling:
+            return False
+        key = f"ceiling_mail:{user_id}:{store.current_period()}"
+        if not store.get_flag(key):
+            store.set_flag(key, "1")
+            notify._to_admins("Agent paused for one customer (monthly spending ceiling)",
+                              f"Customer {user_id} reached the monthly AI spending ceiling (Rs {spent:.2f} of Rs {ceiling:.0f}). Their cases "
+                              "wait and the customer sees a 'busy' message. Raise caps.user_month_ceiling_inr if this customer should continue.",
+                              "fix_pause")
+        return True
 
     def quota_left_tuple(self, user_id: str) -> tuple[tuple, tuple]:
         """(left, total) for haiku, sonnet, opus, with the kill switch, admin pauses and user ceiling applied."""
