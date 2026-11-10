@@ -513,3 +513,97 @@ def test_bench_has_web_cases():
     for name in names:
         case = json.loads((ROOT / "bench" / "web_cases" / name / "case.json").read_text(encoding="utf-8"))
         assert case["expect"] and case["events"]
+
+
+# ============================================================================================ follow-up: free model fails -> Haiku now
+def test_groq_413_is_too_large_and_never_retried(monkeypatch):
+    import httpx
+    monkeypatch.setenv("GROQ_API_KEY", "g" * 20)
+    calls = []
+
+    def handler(request):
+        calls.append(1)
+        return httpx.Response(413, json={"error": {"message": "Request too large for model on tokens per minute (TPM)"}})
+    ad = adapters.GroqAdapter("groq", fx_config.load(), client=httpx.Client(transport=httpx.MockTransport(handler)), sleep=lambda s: None)
+    with pytest.raises(adapters.AdapterError) as err:
+        ad.call("s", [adapters.Block("x")], 10)
+    assert err.value.kind == "too_large" and not err.value.retryable and len(calls) == 1
+
+
+def test_a_failing_free_model_hands_over_to_haiku_at_once(tmp_path, monkeypatch):
+    monkeypatch.setenv("PORTAL_DB_PATH", str(tmp_path / "portal.sqlite3"))
+    monkeypatch.setenv("FIXENGINE_ALLOW_UNSAFE_LOCAL", "1")
+    portal_db.init_db()
+    cfg = fx_config.load()
+    cfg["sandbox"]["mode"] = "local_unsafe"
+    cfg["warn_every_use"]["opus"] = False
+    cfg["warn_at"].update({"haiku": 0, "sonnet": 0, "opus": 0})
+    repo = H.make_repo(tmp_path)
+    _uid, pid = H.make_user_and_project(mode="pr")
+    down = adapters.AdapterError("rate_limit", "Groq unavailable after retries (HTTP 429)", provider="groq", model="m", status=429)
+    fake = {t: adapters.FakeAdapter(t, cfg, None) for t in fx_config.TIERS}
+    fake["groq"] = adapters.FakeAdapter("groq", cfg, [down])
+    fake["haiku"] = adapters.FakeAdapter("haiku", cfg, [json.dumps({"diagnosis": "pct must be divided by 100", "edits": [H.GOOD_EDIT]})])
+    prs = []
+    engine = orchestrator.Engine(cfg, adapters=fake, runner=sandbox.LocalUnsafeRunner(cfg), repo_provider=H.repo_provider(repo),
+                                 commits_provider=lambda p: "",
+                                 pr_opener=lambda project, **kw: prs.append(kw) or {"url": "https://github.com/a/b/pull/1", "number": 1,
+                                                                                    "branch": "b", "path": "pricing.py", "diff": kw["diff"]})
+    H.make_incident(pid)
+    outcome = engine.handle_incident(H.claim())
+    assert outcome == "pr_opened" and fake["groq"].calls == 1 and fake["haiku"].calls == 1 and prs   # no 5-minute wait
+
+
+def test_a_prompt_too_big_for_the_free_model_skips_it_without_a_call(tmp_path, monkeypatch):
+    monkeypatch.setenv("PORTAL_DB_PATH", str(tmp_path / "portal.sqlite3"))
+    monkeypatch.setenv("FIXENGINE_ALLOW_UNSAFE_LOCAL", "1")
+    portal_db.init_db()
+    cfg = fx_config.load()
+    cfg["sandbox"]["mode"] = "local_unsafe"
+    cfg["warn_at"].update({"haiku": 0, "sonnet": 0, "opus": 0})
+    cfg["tokens"]["groq_request_limit"] = 100
+    repo = H.make_repo(tmp_path)
+    _uid, pid = H.make_user_and_project(mode="pr")
+    fake = {t: adapters.FakeAdapter(t, cfg, None) for t in fx_config.TIERS}
+    fake["haiku"] = adapters.FakeAdapter("haiku", cfg, [json.dumps({"diagnosis": "d", "edits": [H.GOOD_EDIT]})])
+    engine = orchestrator.Engine(cfg, adapters=fake, runner=sandbox.LocalUnsafeRunner(cfg), repo_provider=H.repo_provider(repo),
+                                 commits_provider=lambda p: "",
+                                 pr_opener=lambda project, **kw: {"url": "https://github.com/a/b/pull/1", "number": 1, "branch": "b",
+                                                                  "path": "pricing.py", "diff": kw["diff"]})
+    H.make_incident(pid)
+    assert engine.handle_incident(H.claim()) == "pr_opened" and fake["groq"].calls == 0 and fake["haiku"].calls == 1
+
+
+# ============================================================================================ follow-up: no phantom "Python app"
+def test_our_own_old_python_monitor_does_not_make_a_vite_site_a_python_app():
+    import monitoring_installer as mi
+    files = {"package.json": json.dumps({"dependencies": {"react": "18"}, "devDependencies": {"vite": "5"}}),
+             "index.html": "<div id='root'></div><script type='module' src='/src/main.jsx'></script>",
+             "src/main.jsx": "x", "api/chat.js": "export default function handler(req, res) {}",
+             "incident_agent_monitor.py": "# installed by an older Agent Daemon", "incident_agent_config.json": "{}",
+             "requirements.txt": ""}
+    kinds = [(t["kind"], t["label"]) for t in mi.detect_targets(list(files), files.get)]
+    assert ("browser", "Front-end (Vite)") in kinds and not any(k == "python" for k, _ in kinds)
+    files["app.py"] = "from flask import Flask\napp = Flask(__name__)\n"
+    assert any(t["kind"] == "python" for t in mi.detect_targets(list(files), files.get))     # a real Python app is still found
+
+
+def test_a_waiting_decision_has_buttons_on_the_case_card_and_returns_to_the_project(web_env):
+    from test_v3_web import _setup
+    from test_web_app import _request
+    _user, csrf, cookie, project_id = _setup()
+    _request(f"/projects/{project_id}/report", method="POST", cookie=cookie, form={"csrf": csrf, "text": "the Send button does nothing"})
+    inc = portal_db.list_incidents(project_id)[0]
+    row = portal_db.get_project_any(project_id)
+    bug = store.create_bug(project_id=project_id, user_id=row["user_id"], incident_id=inc["id"], fingerprint_json={"hash": "h"},
+                           bug_class="medium", category="user_report")
+    choice_id = store.create_choice(bug["id"], row["user_id"], "opus", "This would be Extra try 1 of 3 for this month. Keep going?", None)
+    store.park_incident(inc["id"], project_id, waiting_for_choice=True)
+    _, _, page = _request(f"/projects/{project_id}", cookie=cookie)
+    assert "Your decision:" in page and "Yes, go ahead" in page and "Send to human review" in page and "Use a stronger mode" not in page
+    _, _, detail = _request(f"/projects/{project_id}/incidents/{inc['id']}", cookie=cookie)
+    assert "The agent is waiting for you" in detail and "Yes, go ahead" in detail
+    status, headers, _ = _request("/usage/choice", method="POST", cookie=cookie,
+                                  form={"csrf": csrf, "choice_id": choice_id, "choice": "auto", "next": f"/projects/{project_id}#case-{inc['id']}"})
+    assert f"/projects/{project_id}#case-{inc['id']}" in str(headers) and store.get_choice(choice_id)["status"] != "waiting"
+    assert portal_db.get_incident_row(inc["id"])["status"] == "diagnosing"

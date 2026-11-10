@@ -205,8 +205,13 @@ def _join(*parts: str) -> str:
 
 
 # ======================================================================================================== detection
+OWN_FILES = {PY_FILE, PY_CONFIG, NODE_FILE, NODE_CONFIG, BROWSER_FILE}
+
+
 def _visible(path: str) -> bool:
-    return not (set(path.split("/")[:-1]) & SKIP_DIRS)
+    """A file of the customer's project. Our OWN monitor files never count: an older installer put incident_agent_monitor.py at
+    the root of every repo, and that one .py file made a Vite/JavaScript site look like a "Python app" on every reinstall."""
+    return not (set(path.split("/")[:-1]) & SKIP_DIRS) and posixpath.basename(path) not in OWN_FILES
 
 
 def _json(text) -> dict:
@@ -345,6 +350,8 @@ def detect_targets(paths, read) -> list[dict]:
             py_bases.add(posixpath.dirname(n))
         elif n.endswith(".py") and n.count("/") == 0:
             py_bases.add("")
+    # A folder is a Python app only when it has Python code of its own (a lone requirements.txt next to a JS site is not one).
+    py_bases = {b for b in py_bases if any(n.endswith(".py") and (n.startswith(b + "/") if b else True) for n in names)}
     found = []
     for base in sorted(py_bases, key=lambda b: (b.count("/"), b)):
         if any(f["entry"] and (not f["base"] or base.startswith(f["base"] + "/")) for f in found):

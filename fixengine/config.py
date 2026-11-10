@@ -87,7 +87,8 @@ DEFAULTS: dict = {
         "retry_overhead_in": 7500,    # error output + short report (plan 5.1: +5K..+10K)
         "expected_out": 3000,
         "max_prompt_tokens": 60000,   # keeps Haiku under its 100K price band
-        "groq_prompt_tokens": 4500,   # free tier is rate limited (~8K tokens/min): send only the relevant files
+        "groq_prompt_tokens": 3500,   # free tier is rate limited (~8K tokens/min): send only the relevant files
+        "groq_request_limit": 7500,   # prompt + answer above this is rejected with HTTP 413: skip the free model instead
         "reasoning_out_multiplier": 1.0,
     },
     "ask_timeout_minutes": 30,

@@ -2456,6 +2456,9 @@ def _page_usage(request):
             fx_api.set_mode(user_id, form.get("mode", ""))
         elif request.path == "/usage/choice":
             fx_api.answer_choice(form.get("choice_id", ""), form.get("choice", ""), user_id)
+            back = str(form.get("next", ""))
+            if re.fullmatch(r"/projects/[0-9a-f-]{36}(/incidents/[0-9a-f-]{36})?(#case-[0-9a-f-]{36})?", back):
+                return _redirect(back)          # answered on the case card: stay on the project
         elif request.path == "/usage/more":
             tier = {"high": "sonnet", "extra": "opus"}.get(form.get("kind", ""), "")
             if tier:
@@ -3072,7 +3075,7 @@ def _page_project(request, project_id):
         return _redirect(f"/projects/{project_id}")
     csrf = _escape(_csrf(request))
     incidents = portal_db.list_incidents(project_id)
-    table = incident_board.render_board_section(project_id, _with_fx_paths(incidents), project["mode"])
+    table = incident_board.render_board_section(project_id, _with_fx_paths(incidents), project["mode"], _csrf(request))
     paused = bool(project["paused"])
     button = ("Resume agent" if paused else "Pause agent")
     watch = project.get("watch_mode") or "both"
@@ -3437,9 +3440,16 @@ def _page_delete_project(request, project_id):
 def _with_fx_paths(incidents):
     """Adds a short 'Low effort ×3 → Normal ×1' summary to each incident card. Never breaks the board."""
     try:
-        from fixengine import api as fx_api, ui as fx_ui
+        from fixengine import api as fx_api, ui as fx_ui, store as fx_store
         paths = fx_api.paths_for_incidents([i.get("id") for i in incidents])
-        return [{**i, "fx_path": fx_ui.mode_path(paths[i["id"]]["tiers"])} if paths.get(i.get("id"), {}).get("tiers") else i for i in incidents]
+        out = [{**i, "fx_path": fx_ui.mode_path(paths[i["id"]]["tiers"])} if paths.get(i.get("id"), {}).get("tiers") else i for i in incidents]
+        for inc in out:
+            if inc.get("status") == "awaiting_choice":
+                bug = fx_store.get_bug_by_incident(inc["id"])
+                choice = fx_store.waiting_choice_for_bug(bug["id"]) if bug else None
+                if choice:
+                    inc["fx_choice"] = choice
+        return out
     except Exception:
         return incidents
 
@@ -3478,6 +3488,12 @@ def _page_incident(request, project_id, incident_id):
 def _case_panel_html(incident: dict, project_id: str, request) -> str:
     """v3.1 case panel: what the live check found, the reports merged into this case, and a reply box for the client."""
     parts = []
+    if incident.get("status") == "awaiting_choice":
+        withc = _with_fx_paths([incident])[0]
+        if withc.get("fx_choice"):
+            parts.append(f"<article class='card'><h2>The agent is waiting for you</h2><p>{_escape(withc['fx_choice'].get('message') or '')}</p>"
+                         + incident_board.choice_buttons_html(withc["fx_choice"], _csrf(request),
+                                                              f"/projects/{project_id}/incidents/{incident['id']}") + "</article>")
     live = str(incident.get("live_result") or "")
     if live:
         parts.append(f"<article class='card'><h2>{'Question for you' if live.startswith('QUESTION: ') else 'Live site check'}</h2>"
@@ -3558,7 +3574,7 @@ def _page_incident_board_live(request, project_id):
     if request.query.get("part") == ["checks"]:
         body = _push_checks_table(project)
     else:
-        body = incident_board.render_board(project_id, _with_fx_paths(portal_db.list_incidents(project_id)), project["mode"])
+        body = incident_board.render_board(project_id, _with_fx_paths(portal_db.list_incidents(project_id)), project["mode"], _csrf(request))
     return Response(body, "200 OK", [("Content-Type", "text/html; charset=utf-8"), ("Cache-Control", "no-store"),
                                      ("X-Content-Type-Options", "nosniff")])
 

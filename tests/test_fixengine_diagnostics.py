@@ -208,7 +208,8 @@ def test_a_provider_fault_is_recorded_with_its_cause_and_is_not_a_try(tmp_path, 
                                 provider="openrouter", model="openai/gpt-oss-120b:free", status=404)
     world = World(tmp_path, monkeypatch, scripts={"groq": [err]})
     outcome, bug, attempts = world.run()
-    assert outcome == "waiting" and len(attempts) == 1
+    # v3.1: a model that cannot answer hands the problem to the next model at once (no waiting on the free model).
+    assert attempts[0]["tier"] == "groq" and all(x["tier"] != "groq" for x in attempts[1:])
     a = attempts[0]
     assert a["result"] == "system_fault" and a["model"] == "openai/gpt-oss-120b:free"
     assert a["tokens_in"] == 0 and a["tokens_out"] == 0 and float(a["cost_inr"]) == 0.0
@@ -218,7 +219,7 @@ def test_a_provider_fault_is_recorded_with_its_cause_and_is_not_a_try(tmp_path, 
     row = next(r for r in store.spend_by_tier() if r["tier"] == "groq")
     assert (row["tries"], row["faults"], row["passes"]) == (0, 1, 0)        # not shown as a failed bug fix
     assert store.get_flag("pause_groq") == "1"                              # a persistent config problem pauses the tier instead of retrying forever
-    assert int(bug["tries"] or 0) == 0
+    assert sum(1 for x in attempts if x["tier"] == "groq" and x["result"] != "system_fault") == 0
 
 
 def test_the_model_that_really_answered_is_recorded_and_tokens_and_cost_are_exact(tmp_path, monkeypatch):

@@ -267,14 +267,19 @@ class GroqAdapter(BaseAdapter):
                 raise AdapterError("auth", f"Groq rejected the API key (HTTP {code})", provider="groq", model=body["model"], status=code)
             if code == 400 and "reasoning" in resp.text.lower() and "reasoning_effort" in body:
                 body.pop("reasoning_effort"); continue
-            if code in (413, 429):
+            if code == 413:
+                # "Request too large" for the free tier's per-minute token limit. Waiting or retrying the same request can never
+                # help: say so, so the engine moves on to the next model straight away.
+                raise AdapterError("too_large", f"Groq: the request is too large for the free tier (HTTP 413){': ' + _detail(resp) if _detail(resp) else ''}",
+                                   provider="groq", model=body["model"], status=413)
+            if code == 429:
                 if body["model"] != self.FALLBACK and attempt == 0:
                     body["model"] = self.FALLBACK; continue
                 last, last_status = f"HTTP {code}", code; _sleep_backoff(attempt, self._sleep); continue
             if code >= 500:
                 last, last_status = f"HTTP {code}", code; _sleep_backoff(attempt, self._sleep); continue
             raise _client_error("groq", body["model"], code, _detail(resp))
-        raise AdapterError("rate_limit" if "429" in last or "413" in last else "outage", f"Groq unavailable after retries ({last})",
+        raise AdapterError("rate_limit" if "429" in last else "outage", f"Groq unavailable after retries ({last})",
                            provider="groq", model=body["model"], status=last_status)
 
 

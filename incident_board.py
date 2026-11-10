@@ -189,7 +189,7 @@ def _render_steps(steps) -> str:
     return f"<ol class='steps'>{items}</ol>"
 
 
-def render_board(project_id: str, incidents: list, mode: str) -> str:
+def render_board(project_id: str, incidents: list, mode: str, csrf: str = "") -> str:
     """The HTML that sits inside #incident-board. This exact string is also what the live endpoint returns."""
     if not incidents:
         return "<div class='empty'>No incidents yet. Once monitoring is installed, incidents will appear here.</div>"
@@ -221,6 +221,7 @@ def render_board(project_id: str, incidents: list, mode: str) -> str:
         if inc.get("fx_path"):
             meta.append("tries: " + _e(inc["fx_path"]))
         buttons = []
+        decide = choice_buttons_html(inc.get("fx_choice"), csrf, f"/projects/{project_id}#case-{iid}")
         if pr_url:
             buttons.append(f"<a class='button primary' href='{_e(pr_url)}' target='_blank' rel='noopener'>Open fix pull request</a>")
         buttons.append(f"<a class='button' href='/projects/{_e(project_id)}/incidents/{_e(iid)}'>Full details &amp; diff</a>")
@@ -231,6 +232,7 @@ def render_board(project_id: str, incidents: list, mode: str) -> str:
             f"<span class='pill tone-{_e(stage['tone'])}'>{_e(stage['headline'])}</span></div>"
             f"<div class='inc-sub muted'>{_e(cause) + '<br>' if cause else ''}{' · '.join(meta)}</div>"
             f"{_render_steps(stage['steps'])}"
+            f"{decide}"
             f"<span class='hint'>Show report</span></summary>"
             f"<div class='inc-body'>{_render_report(inc, stage)}<div class='inc-actions'>{''.join(buttons)}</div></div>"
             f"</details></article>")
@@ -256,15 +258,35 @@ _STYLE = """<style>
 .rp-sec p,.rp-sub p{margin:0;white-space:pre-wrap;color:#d7e2f5}
 .rp-sub{margin-top:14px}.rp-sub summary{cursor:pointer;color:var(--muted);font-size:13px}
 .inc-actions{display:flex;gap:10px;flex-wrap:wrap;margin-top:18px}
+.inc-decide{margin:12px 0 0;display:flex;flex-wrap:wrap;gap:8px;align-items:center}
 @media(prefers-reduced-motion:reduce){.steps .active .dot{animation:none}}
 </style>"""
 
 
-def render_board_section(project_id: str, incidents: list, mode: str) -> str:
+CHOICE_LABELS = (("auto", "Yes, go ahead", True), ("lower", "Use a cheaper mode", False),
+                 ("higher", "Use a stronger mode", False), ("review", "Send to human review", False))
+
+
+def choice_buttons_html(choice: dict | None, csrf: str, back: str) -> str:
+    """The decision the agent is waiting for, answerable right on the case card (it used to be only on the Usage page, so the
+    card said "Waiting for your decision" with nothing to click)."""
+    if not choice or not csrf:
+        return ""
+    forms = "".join(
+        f"<form method='post' action='/usage/choice' style='display:inline'>"
+        f"<input type='hidden' name='csrf' value='{_e(csrf)}'><input type='hidden' name='choice_id' value='{_e(choice.get('id'))}'>"
+        f"<input type='hidden' name='choice' value='{value}'><input type='hidden' name='next' value='{_e(back)}'>"
+        f"<button class='button{' primary' if primary else ''}' type='submit'>{_e(text)}</button></form> "
+        for value, text, primary in CHOICE_LABELS
+        if not (value == "higher" and choice.get("tier") == "opus") and not (value == "lower" and choice.get("tier") == "haiku"))
+    return f"<div class='inc-decide'><b>Your decision:</b> {forms}</div>"
+
+
+def render_board_section(project_id: str, incidents: list, mode: str, csrf: str = "") -> str:
     """The block the project page embeds: styles, live indicator, the board, and the same-origin script."""
     pid = _e(project_id)
     return (f"{_STYLE}<div class='board-head'><span id='live-dot' class='live' data-state='on'>● Live</span></div>"
-            f"<div id='incident-board' data-live='/projects/{pid}/incidents/live'>{render_board(project_id, incidents, mode)}</div>"
+            f"<div id='incident-board' data-live='/projects/{pid}/incidents/live'>{render_board(project_id, incidents, mode, csrf)}</div>"
             f"<script src='/assets/live.js?v={LIVE_JS_VERSION}' defer></script>")
 
 

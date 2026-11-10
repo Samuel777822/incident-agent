@@ -172,14 +172,14 @@ def test_sandbox_outage_does_not_burn_the_users_tries(world):
 
 
 def test_provider_outage_waits_and_pauses_after_repeated_faults(world):
+    # v3.1: a failing model hands over to the next one at once; the case waits only when NO model can answer.
     err = adapters.AdapterError("outage", "Anthropic unavailable")
-    w = world(scripts={"groq": ["garbage"], "haiku": [err]})
+    w = world(scripts={"groq": ["garbage"], "haiku": [err], "sonnet": [err], "opus": [err]})
+    w.silence_warnings()
     incident_id, outcome = w.run_once()
     assert outcome == "waiting"
-    for _ in range(2):                           # the worker comes back for it after the wait
-        store._run("UPDATE incident_jobs SET available_at='2020-01-01T00:00:00+00:00'")
-        claimed = H.claim()
-        assert claimed and w.engine.handle_incident(claimed) in ("waiting", "needs_human")
+    assert {a["tier"] for a in store.list_attempts(w.bug(incident_id)["id"]) if a["result"] == "system_fault"} >= {"haiku", "sonnet"}
+    assert "No AI model could answer" in w.incident(incident_id)["stage_detail"]
     assert "haiku" in store.paused_tiers()
     assert any(a["kind"] == "provider_outage" for a in store.list_admin_actions())
     assert Guard(w.cfg).quota(w.user_id, "haiku")["used"] == 0           # outages never cost the user a try
@@ -188,7 +188,9 @@ def test_provider_outage_waits_and_pauses_after_repeated_faults(world):
 def test_bad_api_key_pauses_the_model_and_alerts_admins(world, monkeypatch):
     sent = []
     monkeypatch.setattr("fixengine.notify._to_admins", lambda s, b="", k="x": sent.append(s))
-    w = world(scripts={"groq": ["garbage"], "haiku": [adapters.AdapterError("auth", "Anthropic rejected the API key (HTTP 401)")]})
+    bad = adapters.AdapterError("auth", "Anthropic rejected the API key (HTTP 401)")
+    w = world(scripts={"groq": ["garbage"], "haiku": [bad], "sonnet": [bad], "opus": [bad]})
+    w.silence_warnings()
     incident_id, outcome = w.run_once()
     assert outcome == "waiting" and "haiku" in store.paused_tiers() and any("paused" in s for s in sent)
 

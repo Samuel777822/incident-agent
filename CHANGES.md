@@ -6,6 +6,19 @@ read code, could not see the live site, and pushed fixes that nothing had proven
 on-call engineer: understand the request, look at the real site, find the cause, fix it, prove it, push it, check the live site
 again, and tell the client honestly.
 
+## Follow-up fixes (same day, from the first live test)
+
+* **Groq "HTTP 413 · retrying in about 5 min" forever:** 413 means the request is too large for Groq's free tier (about 8K tokens per
+  minute), not "busy", so waiting never helped. The free model now gets a compact prompt (no project map), the size is checked before
+  calling (too big = skipped at no cost), a 413 is never retried, and **any model that fails hands the problem to the next model
+  (Haiku) at once**. The case waits only when no model at all can answer ("No AI model could answer just now… retrying by itself").
+* **"Python app: we could not find the file that starts this Python app" on a Vite site:** an older installer had put our own
+  `incident_agent_monitor.py` at the root of every repo, and the detector counted that one `.py` file as a Python app. Our own monitor
+  files are now ignored, and a folder is a Python app only when it has Python code of its own.
+* **"Waiting for your decision" with nothing to click:** the decision buttons were only on the Usage page. They are now on the case
+  card itself and on the case page (Yes, go ahead / Use a cheaper mode / Use a stronger mode / Send to human review), and answering
+  brings you back to the project.
+
 ## P0: the crash, double clicks, plain words
 
 | Problem | Fix |

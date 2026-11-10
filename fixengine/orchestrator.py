@@ -127,6 +127,7 @@ class Engine:
         repo_tok = repo_context.repo_tokens(files)
         ctx = self._case_context(claimed, project, bug, files)
         blocked: set[str] = set()
+        failed_models: list[str] = []      # models that did not answer in THIS pass: the next model takes over at once
         for _ in range(int(self.cfg["caps"]["per_bug_max_tries"]) + 4):
             bug = store.get_bug(bug["id"])
             attempts = [a for a in store.list_attempts(bug["id"]) if a["result"] not in ("pending", "review")]
@@ -135,6 +136,10 @@ class Engine:
             inp = self._router_input(user_id, bug, attempts, blocked, repo_tok, kind=ctx["kind"])
             decision = router.decide(inp, self.cfg, router.ProbTable(self.cfg, store.success_stats()))
             store.log_decision(bug["id"], inp.__dict__, decision.options, decision.action, decision.reason)
+            if decision.action == "stop" and failed_models:
+                # Nothing left that can answer right now because the providers failed, not because the tries are used up.
+                return self._fault_wait(claimed, bug, "No AI model could answer just now (" + "; ".join(failed_models)[:220]
+                                        + "). Retrying by itself", 120)
             if decision.action == "stop":
                 return self._finish_review(claimed, project, bug, attempts, event, decision.reason)
             tier = decision.action
@@ -171,6 +176,13 @@ class Engine:
                 return self._open_pr(claimed, project, bug, result[1])
             if result[0] == "question":
                 return self._ask_client(claimed, project, bug, result[1])
+            if result[0] == "model_fault":
+                # The free model is down, rate limited or the request is too large for it: never wait for it. Block it for this
+                # pass and let the router pick the next model (normally Haiku) straight away.
+                blocked.add(tier)
+                failed_models.append(result[1][:160])
+                _stage(incident_id, "thinking", f"{live_status.MODE_NAMES.get(tier, tier)} mode did not answer, switching to the next AI model")
+                continue
             if result[0] == "fault":
                 return self._fault_wait(claimed, bug, result[1], 300)
         bug = store.get_bug(bug["id"])
@@ -402,6 +414,7 @@ class Engine:
         res = None
         parsed = None
         parse_error: prompts.Unusable | None = None
+        small = tier == "groq"            # the free model: compact prompt, no project map, one shot
         for rnd in range(rounds):
             last_round = rnd == rounds - 1
             blocks = prompts.build_blocks(
@@ -411,10 +424,21 @@ class Engine:
                 baseline_output=bug["baseline_output"] if not counted else "",
                 previous_patch=(last["patch_json"] if last and last["result"] == "fail" else ""),
                 evidence={**_evidence_of(claimed), **(store.gh_state(bug["id"]).get("evidence") or {})},
-                project_map=ctx.get("map", ""), client_replies=ctx.get("replies"), case_reports=ctx.get("reports"),
-                live_report=ctx.get("live_text", ""), looked_up=looked_up, last_round=last_round and rounds > 1)
+                project_map="" if small else ctx.get("map", ""), client_replies=ctx.get("replies"),
+                case_reports=(ctx.get("reports") or [])[:2] if small else ctx.get("reports"),
+                live_report=(ctx.get("live_text", "") or "")[:700] if small else ctx.get("live_text", ""),
+                looked_up=looked_up, last_round=last_round and rounds > 1)
+            system = prompts.LEGACY_SYSTEM_PROMPT if small else prompts.SYSTEM_PROMPT
+            if small:
+                # The free tier rejects a request (HTTP 413) when prompt + answer exceed its per-minute token limit. Check BEFORE
+                # calling: if it does not fit, skip the free model at no cost and let the next model take the problem.
+                size = prompts.estimate_tokens(system + "".join(b.text for b in blocks)) + 2500
+                if size > int(self.cfg["tokens"].get("groq_request_limit", 7500)):
+                    store.finish_attempt(attempt_id, result="system_fault", model=model,
+                                         error_summary=f"origin=engine kind=too_large retryable=no | about {size} tokens, over the free tier limit")
+                    return ("model_fault", f"the problem is too big for the free model (about {size} tokens)")
             try:
-                res = adapter.call(prompts.SYSTEM_PROMPT, blocks, 2500 if tier == "groq" else 4000)
+                res = adapter.call(system, blocks, 2500 if small else 4000)
             except fx_adapters.AdapterError as exc:
                 # The ledger keeps WHO failed, with WHICH model, with what HTTP status, why, and whether retrying can help. Redacted.
                 cost = fx_config.estimate_cost_inr(self.cfg, tier, tok_in, tok_out, cache_read) if tok_in else 0.0
@@ -423,7 +447,7 @@ class Engine:
                 if cost:
                     store.update_bug(bug["id"], spent_inr=float(bug["spent_inr"] or 0) + cost)
                 self._note_provider_fault(tier, exc, adapter)
-                return ("fault", f"{tier} model call failed: {exc.summary()}")
+                return ("model_fault", f"{tier} model call failed: {exc.summary()}")
             tok_in, tok_out, cache_read = tok_in + res.tokens_in, tok_out + res.tokens_out, cache_read + res.cache_read
             try:
                 parsed = prompts.parse_response(res.text, allow_requests=not last_round)
