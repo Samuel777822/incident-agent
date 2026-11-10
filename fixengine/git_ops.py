@@ -327,3 +327,66 @@ def revert_files(project: dict, *, base_sha: str, paths: list[str], title: str) 
             return "ok"
         except RemediationError as exc:
             return "protected" if http_code(exc) in (403, 409, 422) else "moved"
+
+
+# ---- v4: the engineer's view of history ------------------------------------------------------------------------------------------
+AGENT_COMMIT_MARK = "[agent-daemon]"
+
+
+def commits_list(project: dict, path: str = "", limit: int = 12) -> str:
+    """Newest commits on the tracked branch (optionally touching one path), one line each. Agent Daemon's own fixes are marked so
+    the engineer can see when the problem started right after one of OUR changes."""
+    owner, repo, branch = _validate(project)
+    token = _token(project.get("github_token_ciphertext", ""))
+    params = {"sha": branch, "per_page": max(1, min(30, int(limit)))}
+    if path:
+        params["path"] = path
+    with httpx.Client(headers=_headers(token), timeout=httpx.Timeout(20, connect=8)) as client:
+        resp = client.get(f"{_api_root(project)}/commits", params=params)
+        if resp.status_code != 200:
+            return f"Could not read the commits (HTTP {resp.status_code})."
+        rows = []
+        for item in resp.json():
+            commit = item.get("commit") or {}
+            title = str(commit.get("message") or "").splitlines()[0][:140] if commit.get("message") else ""
+            when = str((commit.get("author") or {}).get("date") or "")[:16].replace("T", " ")
+            own = " [agent-daemon: Agent Daemon's own fix]" if AGENT_COMMIT_MARK in str(commit.get("message") or "") else ""
+            rows.append(f"{str(item.get('sha', ''))[:10]}  {when}  {title}{own}")
+    return "\n".join(rows) or "No commits found."
+
+
+def commit_show(project: dict, sha: str, limit: int = 12000) -> str:
+    """One commit: its message and the diff of each file (trimmed)."""
+    sha = re.sub(r"[^0-9a-fA-F]", "", str(sha or ""))[:40]
+    if len(sha) < 6:
+        return "Give a commit sha (at least 6 characters)."
+    token = _token(project.get("github_token_ciphertext", ""))
+    with httpx.Client(headers=_headers(token), timeout=httpx.Timeout(20, connect=8)) as client:
+        resp = client.get(f"{_api_root(project)}/commits/{sha}")
+        if resp.status_code != 200:
+            return f"Could not read commit {sha} (HTTP {resp.status_code})."
+        data = resp.json()
+    parts = [f"commit {data.get('sha', '')}\n{str((data.get('commit') or {}).get('message') or '')[:1500]}\n"]
+    used = len(parts[0])
+    for f in data.get("files") or []:
+        block = f"--- {f.get('filename')} ({f.get('status')}, +{f.get('additions')} -{f.get('deletions')}) ---\n{str(f.get('patch') or '(no text diff)')}\n"
+        if used + len(block) > limit:
+            parts.append(f"... more files not shown ({len(data.get('files') or [])} in total)")
+            break
+        parts.append(block)
+        used += len(block)
+    return "\n".join(parts)
+
+
+def merged_fix_info(project: dict, pr_number: int) -> dict:
+    """For 'Undo this fix' on a merged pull request: the commit before the merge and the files the pull request changed."""
+    token = _token(project.get("github_token_ciphertext", ""))
+    api = _api_root(project)
+    with httpx.Client(headers=_headers(token), timeout=httpx.Timeout(20, connect=8)) as client:
+        pr = portal_remediation._api(client, "GET", f"{api}/pulls/{int(pr_number)}")
+        if not pr.get("merged") or not pr.get("merge_commit_sha"):
+            return {"merged": False}
+        merge = portal_remediation._api(client, "GET", f"{api}/commits/{pr['merge_commit_sha']}")
+        parents = [p.get("sha") for p in merge.get("parents") or []]
+        files = portal_remediation._api(client, "GET", f"{api}/pulls/{int(pr_number)}/files?per_page=100")
+    return {"merged": True, "base_sha": parents[0] if parents else "", "paths": [f.get("filename") for f in files if f.get("filename")]}

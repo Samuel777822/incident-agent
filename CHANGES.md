@@ -6,6 +6,43 @@ read code, could not see the live site, and pushed fixes that nothing had proven
 on-call engineer: understand the request, look at the real site, find the cause, fix it, prove it, push it, check the live site
 again, and tell the client honestly.
 
+## v4: the engineer (11 November 2026)
+
+Why: on Bible-Well the old engine replaced a working Supabase key with `'public-anon-key'` (8 Nov), then pushed seven patches in 36
+minutes to repair its own damage (a key moved to a missing env var, a fake Supabase client, a hidden error message) and deleted the NIV
+Bible version. It never ran the app, never read its own history, and wrote a JSON patch from a few files in one shot.
+
+* **The engineer (`fixengine/agent.py`).** With `OPENROUTER_API_KEY` set, Claude Sonnet 5.5 works each case with tools on a real copy
+  of the repository: the whole code base in the first message when it fits (about 110K tokens, cached), list / read / search / edit /
+  write files, run install-build-test-start in the sandbox, open the live site in a real browser (with clicks), read recent commits and
+  diffs (Agent Daemon's own fixes are marked), search the web (OpenRouter web plugin, about $0.01 a search), check AI model ids.
+  It ends with a proven fix, beginner steps for the owner, one question, or an honest stop. Opus 5.5 gets one run when Sonnet does not
+  finish, with what Sonnet found. No more Groq / Haiku ladder for fixes, no 5-file / 120-line limit. Bounds per run: 45 steps,
+  25 minutes, about Rs 90, 5 sandbox runs, 5 live-page visits, 6 web searches. `FIX_AGENT_MODE=0` returns to the old loop.
+* **Harm rules on every agent change** (`validator.agent_change_problems`), checked before anything leaves the sandbox: no placeholder
+  values, no moving a working key into an env var, no stub / fake / mock clients, no removed error reporting, no removed options, no
+  edits to the monitor, CI, lock, secret or existing test files. Replaying the Bible-Well commits: every harmful one is rejected.
+  Dependency / build-setting changes, "high risk" fixes and fixes that also need the owner always go to a pull request.
+* **Our own check of the final change:** the engineer's checks are not trusted; the orchestrator runs the sandbox on the final files.
+* **"Needs you" for a beginner:** what is wrong, why, numbered steps with exact sites / menus / values, how to check it worked, and an
+  **I did it, check again** button.
+* **Pause / Start per case**, **Pause all open cases**, and **auto-start** on/off (off: problems found automatically wait; your own
+  reports always start). A running engineer stops at its next step when you pause.
+* **Pull requests explained:** each case with a fix shows "what to do now" (open, check Files changed, Merge, Confirm, wait for the
+  host) and an **I merged it, check my site** button that starts the live check.
+* **Undo this fix** on fixes that went live (direct push or merged pull request): the changed files go back with a new commit.
+* **What the engineer did:** a step-by-step timeline on the case page. Project notes it learns are kept for the next case.
+* **Noise filter:** rate limits (HTTP 429), analytics / ad scripts, browser extensions and missing favicons no longer become cases.
+* Fixed a bug the new tests caught: path cleaning turned `.env` into `env`, so the secret-file guard would not have recognised it.
+
+Tests: `tests/test_v4_agent.py` (18): the Bible-Well replay, the engineer loop (read, search, edit, refused unchecked finish, checks,
+finish), a refused harmful finish that ends as owner steps, pause, budget, secret files, the OpenRouter transport (tools, reasoning,
+HTTP 402), whole cases through the orchestrator (Sonnet fixes it -> PR; Sonnet gives up -> Opus with Sonnet's findings; not a code
+problem -> beginner steps and no Opus; a stub fix is never sent), pause / resume / auto-start, noise, the case buttons, undo.
+Full suite: 463 passed; the 5 failures are the same Windows-only ones as before.
+
+Not tested here: real model runs (no OpenRouter key on this laptop). The first real cases are the test.
+
 ## v3.2: stop wasting tries, see sign-in problems, audit on connect (10 November 2026, evening)
 
 From the second live test ("Continue with Google sends me back to login": Groq, Haiku, Sonnet and Opus all tried, nothing fixed,

@@ -3087,6 +3087,7 @@ def _page_project(request, project_id):
     reported = (request.query.get("reported") or [""])[0]
     if reported:
         flash += ui_flow.flash_html(reported)
+    flash += _case_flash(request)
     cards = []
     if watch in ("runtime", "both"):
         install_card = _monitor_install_card(project, csrf)
@@ -3110,7 +3111,7 @@ def _page_project(request, project_id):
             f"{checkin}</div>{flash}{ui_flow.flow_diagram_html()}{monitor_panel}"
             f"{ui_flow.report_card_html(project_id, _csrf(request))}"
             f"{_push_checks_html(project, request)}"
-            f"<h2>Bugs and fixes</h2>{table}<h2>Settings</h2><section class='grid'>{''.join(cards)}</section></section>")
+            f"<h2>Bugs and fixes</h2>{_cases_toolbar(project, request)}{table}<h2>Settings</h2><section class='grid'>{''.join(cards)}</section></section>")
     return _response(body, request)
 
 
@@ -3525,7 +3526,7 @@ def _page_incident(request, project_id, incident_id):
     diff = "".join(f"<article class='card'><div class='row'><strong>{_escape(f['file_path'])}</strong><span class='pill'>{_escape(f['ci_result'])}</span></div><pre style='overflow:auto;white-space:pre-wrap;color:#c7d2e4'>{_escape(f['diff'])}</pre></article>" for f in fixes) or "<div class='empty'>No proposed fix has been saved yet.</div>"
     pr_link = (f"<p><a class='button primary' href='{_escape(incident['pr_url'])}' target='_blank' rel='noopener'>Open fix pull request</a></p>"
                if incident.get("pr_url") else "")
-    body = f"<section class='section'><p><a href='/projects/{_escape(project_id)}'>← {_escape(project['name'])}</a></p><div class='eyebrow'>Incident</div><h1>{_escape(incident['signature'])}</h1><div class='stats'><span class='pill'>{_escape(incident_board.stage_for(incident, project['mode'])['headline'])}</span><span class='pill'>Occurrences · {_escape(incident['occurrences'])}</span><span class='pill'>CI · {_escape(incident['ci_status'])}</span><span class='pill'>Last seen · {_escape(_fmt_time(incident.get('last_seen')))}</span></div>{pr_link}<article class='card'><h2>What happened</h2><p>{_escape(incident['root_cause']) or 'Diagnosis is pending.'}</p><p class='muted' style='white-space:pre-wrap'>{_escape(incident['report'])}</p></article>{_case_panel_html(incident, project_id, request)}{_fx_trail_html(incident_id, request.session["user_id"])}<h2>Proposed changes</h2>{diff}</section>"
+    body = f"<section class='section'><p><a href='/projects/{_escape(project_id)}'>← {_escape(project['name'])}</a></p><div class='eyebrow'>Incident</div><h1>{_escape(incident['signature'])}</h1><div class='stats'><span class='pill'>{_escape(incident_board.stage_for(incident, project['mode'])['headline'])}</span><span class='pill'>Occurrences · {_escape(incident['occurrences'])}</span><span class='pill'>CI · {_escape(incident['ci_status'])}</span><span class='pill'>Last seen · {_escape(_fmt_time(incident.get('last_seen')))}</span></div>{pr_link}<article class='card'><h2>What happened</h2><p>{_escape(incident['root_cause']) or 'Diagnosis is pending.'}</p><p class='muted' style='white-space:pre-wrap'>{_escape(incident['report'])}</p></article>{_case_panel_html(incident, project_id, request)}{_timeline_html(incident_id)}{_fx_trail_html(incident_id, request.session["user_id"])}<h2>Proposed changes</h2>{diff}</section>"
     return _response(body, request)
 
 
@@ -3560,6 +3561,117 @@ def _case_panel_html(incident: dict, project_id: str, request) -> str:
                  f"<input type='hidden' name='csrf' value='{csrf}'><textarea name='text' rows='3' maxlength='1000' required></textarea>"
                  "<button class='button primary' type='submit'>Send reply</button></form></article>")
     return "".join(parts)
+
+
+def _owned_case(request, project_id, incident_id):
+    """(project, incident row) when the signed-in user owns both, else (None, error response)."""
+    gate = _require_access(request)
+    if gate:
+        return None, gate
+    if request.method != "POST" or not _csrf_valid(request):
+        return None, _response("<div class='alert'>This form expired. Refresh and try again.</div>", request, "403 Forbidden")
+    project = portal_db.get_project(project_id, request.session["user_id"])
+    row = portal_db.get_incident_row(incident_id) if project else None
+    if not project or not row or row.get("project_id") != project_id:
+        return None, _response("<h1>Not found</h1>", request, "404 Not Found")
+    return (project, row), None
+
+
+def _page_case_action(request, project_id, incident_id, action):
+    """Pause / Start one case, 'I merged it, check my site', and 'Undo this fix'."""
+    owned, err = _owned_case(request, project_id, incident_id)
+    if err:
+        return err
+    project, row = owned
+    back = f"/projects/{project_id}"
+    if action == "pause":
+        portal_db.pause_incident(incident_id, project_id)
+        return _redirect(back + "?case=paused#case-" + incident_id)
+    if action == "resume":
+        portal_db.resume_incident(incident_id, project_id)
+        return _redirect(back + "?case=started#case-" + incident_id)
+    from fixengine import store as fx_store
+    bug = fx_store.get_bug_by_incident(incident_id)
+    if action == "merged":
+        import site_probe
+        if not site_probe.safe_url(project.get("app_url") or ""):
+            portal_db.set_incident_stage(incident_id, "merged", "You merged the fix. Add your live site address (Settings, below) so the "
+                                         "agent can check it for you next time.")
+            return _redirect(back + "?case=merged_nosite#case-" + incident_id)
+        if bug:
+            import time as _time
+            state = fx_store.gh_state(bug["id"])
+            state["verify"] = {"since": _time.time(), "round": int((state.get("verify") or {}).get("round", 0)) + 1}
+            fx_store.save_gh_state(bug["id"], state)
+            fx_store.update_bug(bug["id"], status="verifying", stop_reason="")
+        portal_db.set_incident_stage(incident_id, "verifying", "You merged the fix. Your host is putting it live; the agent opens your "
+                                     "site in about a minute and tells you here whether the problem is gone.")
+        portal_db.audit(project_id, "fix_merged_by_owner", {"incident_id": incident_id})
+        return _redirect(back + "?case=checking#case-" + incident_id)
+    if action == "undo":
+        from fixengine import git_ops, store as fx_store2
+        full = fx_store2.get_project_row(project_id)
+        state = fx_store.gh_state(bug["id"]) if bug else {}
+        base_sha, paths = state.get("base_sha", ""), list(state.get("files") or [])
+        try:
+            if (not base_sha or not paths) and row.get("pr_number"):
+                info = git_ops.merged_fix_info(full, int(row["pr_number"]))
+                if not info.get("merged"):
+                    return _redirect(back + "?case=undo_notmerged#case-" + incident_id)
+                base_sha, paths = info.get("base_sha", ""), info.get("paths") or []
+            if not base_sha or not paths:
+                return _redirect(back + "?case=undo_unknown#case-" + incident_id)
+            outcome = git_ops.revert_files(full, base_sha=base_sha, paths=paths,
+                                           title=f"revert: undo Agent Daemon fix for case {incident_id[:8]} (requested by the owner) [agent-daemon]")
+        except Exception as exc:
+            LOG.warning("undo for case %s failed (%s)", incident_id, exc.__class__.__name__)
+            outcome = "failed"
+        if outcome == "ok":
+            portal_db.set_incident_stage(incident_id, "reverted", "You undid this fix. The changed files are back as they were (new commit "
+                                         "on your branch). Your host puts it live in 1 to 3 minutes.")
+            portal_db.audit(project_id, "fix_undone_by_owner", {"incident_id": incident_id})
+            return _redirect(back + "?case=undone#case-" + incident_id)
+        return _redirect(back + f"?case=undo_{'protected' if outcome == 'protected' else 'failed'}#case-" + incident_id)
+    return _redirect(back)
+
+
+def _page_project_cases(request, project_id, action):
+    gate = _require_access(request)
+    if gate:
+        return gate
+    if request.method != "POST" or not _csrf_valid(request):
+        return _response("<div class='alert'>This form expired. Refresh and try again.</div>", request, "403 Forbidden")
+    project = portal_db.get_project(project_id, request.session["user_id"])
+    if not project:
+        return _response("<h1>Project not found</h1>", request, "404 Not Found")
+    if action == "pause-all":
+        n = portal_db.pause_all_incidents(project_id)
+        return _redirect(f"/projects/{project_id}?case=paused_all&n={n}")
+    on = request.form.get("auto_start") == "on"
+    portal_db.set_auto_start(project_id, request.session["user_id"], on)
+    return _redirect(f"/projects/{project_id}?case={'auto_on' if on else 'auto_off'}")
+
+
+CASE_FLASH = {
+    "paused": ("amber", "Paused. The agent stops working on this case and spends nothing until you press Start."),
+    "started": ("green", "Started. The agent picks this case up in a few seconds."),
+    "paused_all": ("amber", "All open cases are paused. Start the ones you want the agent to work on."),
+    "auto_on": ("green", "Auto-start is on: problems the agent finds by itself are worked on right away."),
+    "auto_off": ("amber", "Auto-start is off: problems the agent finds by itself wait (paused) until you press Start. Your own reports always start."),
+    "checking": ("green", "Thanks. The agent checks your live site in about a minute and writes the result on the case."),
+    "merged_nosite": ("amber", "Thanks. The agent cannot check your site because its address is not set: add it under Settings below."),
+    "undone": ("green", "Undone. The files the fix changed are back as they were (a new commit on your branch)."),
+    "undo_notmerged": ("amber", "That fix was never merged, so there is nothing to undo. You can close its pull request on GitHub."),
+    "undo_unknown": ("amber", "The agent cannot tell which files this fix changed. Undo it on GitHub: open the commit and use Revert."),
+    "undo_protected": ("amber", "Your branch is protected, so the agent cannot add the undo commit. Revert the fix's pull request on GitHub."),
+    "undo_failed": ("red", "The undo did not work (GitHub refused or did not answer). Try again in a minute, or revert it on GitHub."),
+}
+
+
+def _case_flash(request) -> str:
+    code = (request.query.get("case") or [""])[0]
+    tone, text = CASE_FLASH.get(code, ("", ""))
+    return f"<div class='pill {tone}' style='white-space:normal'>{_escape(text)}</div>" if text else ""
 
 
 def _page_case_reply(request, project_id, incident_id):
@@ -4070,6 +4182,11 @@ def _page_ingest(request):
     where = " · ".join(str(x) for x in (data.get("monitor"), context.get("page") or context.get("url")) if x)
     if where and where not in traceback:
         traceback = (traceback + f"\n[reported by the {where}]").strip()[:30000]
+    import cases
+    noise = cases.noise_reason(message, traceback)
+    if noise:       # never a paid case: rate limits on the other side, extensions, trackers, favicons
+        LOG.info("ingest ignored for project %s: %s", project["id"], noise)
+        return _monitor_json({"accepted": False, "ignored": noise}, "200 OK")
     signature = _incident_signature(message, traceback, data)
     incident_id, inserted = portal_db.ingest_event(project["id"], timestamp=timestamp,
         level=level, message=message, traceback=traceback, signature=signature)
@@ -4248,6 +4365,12 @@ def _dispatch(request: Request) -> Response:
     match = re.fullmatch(r"/projects/([0-9a-f-]{36})/site-url", request.path)
     if match:
         return _page_site_url(request, match.group(1))
+    match = re.fullmatch(r"/projects/([0-9a-f-]{36})/incidents/([0-9a-f-]{36})/(pause|resume|merged|undo)", request.path)
+    if match:
+        return _page_case_action(request, match.group(1), match.group(2), match.group(3))
+    match = re.fullmatch(r"/projects/([0-9a-f-]{36})/(pause-all|auto-start)", request.path)
+    if match:
+        return _page_project_cases(request, match.group(1), match.group(2))
     match = re.fullmatch(r"/projects/([0-9a-f-]{36})/incidents/([0-9a-f-]{36})/reply", request.path)
     if match:
         return _page_case_reply(request, match.group(1), match.group(2))
@@ -4330,3 +4453,37 @@ def main():
 
 if __name__ == "__main__":
     main()
+
+
+def _cases_toolbar(project: dict, request) -> str:
+    """Above the cases: pause everything at once, and choose whether problems found automatically start by themselves."""
+    csrf = _escape(_csrf(request))
+    pid = _escape(project["id"])
+    auto = int(project.get("auto_start", 1) or 0) == 1
+    return ("<div class='cases-bar' style='display:flex;flex-wrap:wrap;gap:10px;align-items:center;margin:0 0 12px'>"
+            f"<form method='post' action='/projects/{pid}/pause-all' style='display:inline'><input type='hidden' name='csrf' value='{csrf}'>"
+            "<button class='button' type='submit'>Pause all open cases</button></form>"
+            f"<form method='post' action='/projects/{pid}/auto-start' style='display:inline'><input type='hidden' name='csrf' value='{csrf}'>"
+            f"<input type='hidden' name='auto_start' value='{'off' if auto else 'on'}'>"
+            f"<button class='button' type='submit'>{'Turn auto-start off' if auto else 'Turn auto-start on'}</button></form>"
+            f"<span class='muted' style='font-size:13px'>Auto-start is <b>{'on' if auto else 'off'}</b>: "
+            + ("problems the agent finds by itself are worked on right away." if auto else
+               "problems the agent finds by itself wait until you press Start. Your own reports always start.")
+            + "</span></div>")
+
+
+def _timeline_html(incident_id: str) -> str:
+    """What the engineer actually did, step by step (read, searched, ran, opened, decided)."""
+    try:
+        from fixengine import store as fx_store
+        bug = fx_store.get_bug_by_incident(incident_id)
+        steps = (fx_store.gh_state(bug["id"]).get("agent_log") or []) if bug else []
+    except Exception:
+        steps = []
+    if not steps:
+        return ""
+    names = {"sonnet": "High", "opus": "Extra"}
+    rows = "".join(f"<li class='{'' if s.get('ok', True) else 'bad'}'><span class='muted'>{_escape(names.get(s.get('tier'), s.get('tier', '')))}</span> "
+                   f"{_escape(s.get('what', ''))}</li>" for s in steps[-80:])
+    return ("<article class='card'><h2>What the engineer did</h2><p class='muted'>Every step of its work on your code, newest last.</p>"
+            f"<ol class='timeline' style='margin:0;padding-left:20px;line-height:1.7'>{rows}</ol></article>")

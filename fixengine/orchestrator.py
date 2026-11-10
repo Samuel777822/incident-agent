@@ -17,6 +17,7 @@ from pathlib import Path
 import portal_db
 
 from . import adapters as fx_adapters
+from . import agent as fx_agent
 from . import admin_tools, fingerprint, investigator, journeys, notify, oncall, project_map, prompts, repo_context, review, router, sandbox, store, triage, validator
 from . import config as fx_config
 from . import git_ops
@@ -54,7 +55,7 @@ def _failed_test_names(output: str) -> list[str]:
 
 class Engine:
     def __init__(self, cfg: dict | None = None, *, adapters=None, runner=None, repo_provider=None, commits_provider=None,
-                 pr_opener=None, guard: Guard | None = None, gh=None, investigate=None):
+                 pr_opener=None, guard: Guard | None = None, gh=None, investigate=None, agent_transport=None):
         self.cfg = cfg or fx_config.load()
         self.adapters = adapters or fx_adapters.build_adapters(self.cfg)
         self.runner = runner or sandbox.make_runner(self.cfg)
@@ -64,6 +65,7 @@ class Engine:
         self.guard = guard or Guard(self.cfg)
         self.gh = gh or git_ops          # the GitHub calls of the proof loop (tests pass a fake)
         self.investigate = investigate or investigator.investigate     # the live browser on the client's site (tests pass a fake)
+        self.agent_transport = agent_transport     # v4: tier -> transport for the engineer (tests pass a fake; production: OpenRouter)
 
     # ---- entry points ---------------------------------------------------------------------------------------------
     def handle_incident(self, claimed: dict) -> str:
@@ -126,6 +128,8 @@ class Engine:
         commits = self.commits_provider(project) if self.commits_provider else ""
         repo_tok = repo_context.repo_tokens(files)
         ctx = self._case_context(claimed, project, bug, files)
+        if self._agent_ready():
+            return self._agent_work(claimed, project, bug, event, root, files, profile, message, traceback_text, commits, ctx)
         blocked: set[str] = set()
         failed_models: list[str] = []      # models that did not answer in THIS pass: the next model takes over at once
         for _ in range(int(self.cfg["caps"]["per_bug_max_tries"]) + 4):
@@ -273,11 +277,12 @@ class Engine:
         """The cause is outside the code. Stop spending tries; show the owner the exact steps; a reply re-opens the case."""
         incident_id, project_id = claimed["incident_id"], claimed["project_id"]
         steps = info.get("steps") or []
-        text = ("NEEDS YOU: the cause is outside your code, so no code change can fix it.\n\n"
-                + (info.get("message") + "\n\n" if info.get("message") else "")
-                + ("What to do:\n" + "\n".join(f"{i}. {s}" for i, s in enumerate(steps, 1)) + "\n\n" if steps else "")
-                + "Why: " + (info.get("diagnosis") or "see the report") + "\n\n"
-                "When you have done it, reply on this case (\"done\") and the agent checks your live site again.")
+        text = ("NEEDS YOU: this is not a problem in your code, so the agent did not change anything.\n\n"
+                + ("What is wrong: " + info.get("message") + "\n\n" if info.get("message") else "")
+                + ("Why: " + info.get("diagnosis") + "\n\n" if info.get("diagnosis") else "")
+                + ("Do this, step by step:\n" + "\n".join(f"{i}. {s}" for i, s in enumerate(steps, 1)) + "\n\n" if steps else "")
+                + ("How to check it worked: " + info.get("how_to_check") + "\n\n" if info.get("how_to_check") else "")
+                + "When you are done, press \"I did it, check again\" on this case and the agent checks your live site.")
         attempts = store.list_attempts(bug["id"])
         report = review.build_report(bug, attempts, store.list_decisions(bug["id"]), project_name=project["name"], incident=event,
                                      stop_reason="the cause is outside the code: your action is needed")
@@ -294,7 +299,220 @@ class Engine:
         notify.user_review_ready(project["user_id"], project["name"], incident_id, text[:1500])
         return "needs_owner"
 
+    # ---- v4: the engineer (Claude with tools on the real repository) ---------------------------------------------------------
+    AGENT_TIERS = ("sonnet", "opus")
+
+    def _agent_ready(self) -> bool:
+        if os.getenv("FIX_AGENT_MODE", "1").strip().lower() in ("0", "false", "no", "off"):
+            return False
+        if self.agent_transport is not None:
+            return True
+        ad = self.adapters.get("sonnet")
+        return isinstance(ad, fx_adapters.OpenRouterAdapter) and ad.configured() and not getattr(ad, "dry_run", False)
+
+    def _transport(self, tier: str):
+        if self.agent_transport is not None:
+            return self.agent_transport(tier)
+        effort = str((self.cfg.get("agent") or {}).get("effort", {}).get(tier, "high"))
+        return fx_agent.OpenRouterTransport(self.adapters[tier].model, effort=effort)
+
+    def _agent_work(self, claimed, project, bug, event, root, files, profile, message, traceback_text, commits, ctx) -> str:
+        """Sonnet works the case as an engineer; Opus gets ONE run when Sonnet does not finish with a proven fix. No ladder of weak
+        models, no guessing: a run ends with a fix that passed the checks, instructions for the owner, one question, or an honest stop."""
+        incident_id, project_id, user_id = claimed["incident_id"], claimed["project_id"], project["user_id"]
+        gh_round = int(store.gh_state(bug["id"]).get("round", 0))
+        reason = "the engineer could not find a safe fix"
+        for tier in self.AGENT_TIERS:
+            bug = store.get_bug(bug["id"])
+            if bug["user_pinned_tier"] == "__review__":
+                return self._finish_review(claimed, project, bug, store.list_attempts(bug["id"]), event, "you chose human review")
+            info = "agent:" + prompts.info_hash(tier, str(len(ctx.get("replies") or [])), str(gh_round), str(bug.get("baseline_failing")))
+            if any(a["info_hash"] == info and a["result"] != "system_fault" for a in store.list_attempts(bug["id"])):
+                continue                          # this model already worked on exactly this situation
+            pause = self.guard.project_paused(project_id)
+            if pause:
+                return self._fault_wait(claimed, bug, pause, 900)
+            gate = self.guard.check(user_id, tier)
+            if not gate.ok:
+                if gate.code in ("rate", "cooldown"):
+                    return self._fault_wait(claimed, bug, gate.message, min(900, max(60, gate.wait_seconds or 900)), quiet=True)
+                reason = gate.message or reason
+                continue
+            warned = self._maybe_warn(claimed, project, bug, tier)
+            if warned:
+                return warned
+            _stage(incident_id, "thinking", "The engineer is reading your code and the evidence" if tier == "sonnet"
+                   else "A stronger engineer (Extra mode) is taking over, with what the first one found", tier)
+            result = self._agent_try(claimed, project, bug, tier, gate.pack_try, files, root, profile, message, traceback_text,
+                                     commits, ctx, info)
+            self.guard.check_alerts()
+            kind, payload = result
+            if kind == "pass":
+                payload["from_push"] = claimed.get("source") == "push"
+                hold = self._push_policy(claimed, project, bug, payload, ctx)
+                if hold:
+                    payload["hold_reason"] = hold
+                if self._direct_push(project, claimed):
+                    return self._start_github_proof(claimed, project, bug, payload)
+                return self._open_pr(claimed, project, bug, payload)
+            if kind == "owner_action":
+                return self._finish_owner_action(claimed, project, bug, event, payload)
+            if kind == "question":
+                return self._ask_client(claimed, project, bug, payload)
+            if kind == "paused":
+                return "paused"
+            if kind == "model_fault" and tier == self.AGENT_TIERS[-1]:
+                return self._fault_wait(claimed, bug, payload, 300)
+            reason = str(payload)[:300] or reason
+        bug = store.get_bug(bug["id"])
+        return self._finish_review(claimed, project, bug, store.list_attempts(bug["id"]), event, reason)
+
+    def _agent_try(self, claimed, project, bug, tier, pack_try, files, root, profile, message, traceback_text, commits, ctx, info):
+        incident_id, project_id = claimed["incident_id"], claimed["project_id"]
+        transport = self._transport(tier)
+        model = transport.model
+        attempt_id = store.add_attempt(bug=bug, tier=tier, model=model, used_strong_diag=bool(bug["strong_diagnosis"]),
+                                       info_hash=info, pack_try=pack_try)
+        usd_inr = float(self.cfg.get("usd_inr", 85.0) or 85.0)
+        evidence = _evidence_of(claimed)
+        request_text = "\n".join(x for x in (str(evidence.get("owner_report") or ""),) if x)
+        incident_text = "" if request_text else (message + ("\n\n" + traceback_text if traceback_text else ""))
+        previous = ""
+        done = [a for a in store.list_attempts(bug["id"]) if a["result"] in ("fail", "unusable") and a["id"] != attempt_id]
+        if done:
+            last = done[-1]
+            previous = (f"Model: {last['tier']}. Result: {last['result']}. What happened: {last['error_summary'][:1500]}\n"
+                        f"What it found: {last['diagnosis'][:1200]}")
+        if bug.get("strong_diagnosis"):
+            previous += "\nEarlier diagnosis: " + str(bug["strong_diagnosis"])[:1500]
+        try:
+            history = "\n".join(f"- {h.get('when', '')[:10]} {h.get('signature', '')[:80]} -> {h.get('root_cause', '')[:200]}"
+                                for h in portal_db.project_history(project_id))
+        except Exception:
+            history = ""
+        try:
+            recent = self.gh.commits_list(project, "", 10) if hasattr(self.gh, "commits_list") else commits
+        except Exception:
+            recent = commits
+        shown_evidence = prompts.format_evidence({k: v for k, v in evidence.items() if k != "owner_report"})
+        brief = fx_agent.build_brief(
+            request_text=request_text, incident_text=incident_text, evidence_text=shown_evidence, live_text=ctx.get("live_text", ""),
+            case_reports=ctx.get("reports") or [], replies=ctx.get("replies") or [], baseline=bug.get("baseline_output") or "",
+            notes=store.get_flag(f"notes:{project_id}", ""), history=history, commits=recent, project_map=ctx.get("map", ""),
+            code=fx_agent.code_dump(files), previous=previous)
+
+        def on_step(what: str) -> None:
+            _stage(incident_id, "working", what[:280], tier)
+            try:
+                portal_db.extend_lease(incident_id, 1200)
+            except Exception:
+                pass
+
+        def should_stop() -> bool:
+            row = portal_db.get_incident_row(incident_id) or {}
+            return row.get("status") == "paused"
+
+        ws = fx_agent.Workspace(root, files)
+        try:
+            eng = fx_agent.Engineer(
+                transport=transport, workspace=ws, cfg=self.cfg, runner=self.runner, profile=profile, site_url=ctx.get("site", ""),
+                investigate=self.investigate,
+                commits=(lambda path, n: self.gh.commits_list(project, path, n)) if hasattr(self.gh, "commits_list") else None,
+                commit_show=(lambda sha: self.gh.commit_show(project, sha)) if hasattr(self.gh, "commit_show") else None,
+                web_model=(self.cfg.get("openrouter_models") or {}).get("haiku", ""), should_stop=should_stop, on_step=on_step,
+                usd_inr=usd_inr)
+            res = eng.run(brief)
+        except fx_agent.AgentFault as exc:
+            store.finish_attempt(attempt_id, result="system_fault", model=model,
+                                 error_summary=f"origin=provider provider=openrouter kind={exc.kind} http={exc.status} | {exc}"[:300])
+            if exc.kind in ("auth", "credit", "not_configured"):
+                store.set_flag(f"pause_{tier}", "1")
+                store.log_admin_action("auto_pause", detail={"tier": tier, "why": exc.kind, "provider": "openrouter"})
+                notify._to_admins(f"Auto-fix: {tier} paused ({exc.kind})", f"{exc}. Fix it, then resume the mode in /admin.")
+            return ("model_fault", f"{tier}: {exc}")
+        finally:
+            ws.close()
+        cost = res.cost_usd * usd_inr if res.cost_usd else fx_config.estimate_cost_inr(self.cfg, tier, res.tokens_in, res.tokens_out, res.cache_read)
+        bug = store.get_bug(bug["id"])
+        store.update_bug(bug["id"], spent_inr=float(bug["spent_inr"] or 0) + cost, tries=int(bug["tries"] or 0) + 1)
+        if bug["user_pinned_tier"] == tier:
+            store.update_bug(bug["id"], user_pinned_tier="")
+        state = store.gh_state(bug["id"])
+        state["agent_log"] = (state.get("agent_log") or [])[-40:] + [{"tier": tier, **s} for s in res.steps[-60:]]
+        store.save_gh_state(bug["id"], state)
+        notes = str(res.data.get("project_notes") or "").strip()
+        if notes:
+            store.set_flag(f"notes:{project_id}", notes[:3000])
+        common = dict(tokens_in=res.tokens_in, tokens_out=res.tokens_out, cache_read=res.cache_read, cost_inr=cost, model=model,
+                      patch_json=json.dumps(sorted(res.new_files))[:20000])
+        if res.outcome == "fixed":
+            problems = validator.agent_change_problems(files, res.new_files)
+            if problems:
+                store.finish_attempt(attempt_id, result="unusable", error_summary=("change rejected: " + "; ".join(problems))[:300], **common)
+                return ("fail", "the change broke a safety rule: " + problems[0])
+            _stage(incident_id, "testing_fix", "Checking the engineer's fix in our own sandbox run", tier)
+            work = Path(tempfile.mkdtemp(prefix="fx-final-"))
+            try:
+                patched = work / "repo"
+                shutil.copytree(root, patched, ignore=shutil.ignore_patterns(".git"))
+                for rel, text in res.new_files.items():
+                    target = (patched / rel).resolve()
+                    target.relative_to(patched.resolve())
+                    target.parent.mkdir(parents=True, exist_ok=True)
+                    target.write_text(text, encoding="utf-8")
+                sres = sandbox.run_profile(self.runner, patched, profile)
+            finally:
+                shutil.rmtree(work, ignore_errors=True)
+            if not sres.system_fault and not sres.passed:
+                store.finish_attempt(attempt_id, result="fail", error_summary=sres.output[-600:], diagnosis=str(res.data.get("root_cause", ""))[:500],
+                                     **common)
+                store.update_bug(bug["id"], strong_diagnosis=(str(res.data.get("root_cause", "")) + " " + str(res.data.get("changes_summary", "")))[:1500])
+                return ("fail", "the fix did not pass our own checks: " + sres.output[-200:])
+            level = "build_only" if sres.system_fault else validator.verification_level(
+                baseline_failing=bug["baseline_failing"], baseline_had_tests=profile.has_tests, result=sres,
+                check_failed_before=claimed.get("source") == "push")
+            diagnosis = (str(res.data.get("root_cause", "")) + "\n\nWhat changed: " + str(res.data.get("changes_summary", ""))).strip()
+            store.finish_attempt(attempt_id, result="pass", diagnosis=diagnosis[:500], failing_before=bug["baseline_failing"],
+                                 failing_after=sres.failing if sres.failing is not None else 0, progress=1, error_summary="", **common)
+            owner_steps = [str(x) for x in (res.data.get("owner_steps") or []) if str(x).strip()]
+            client = str(res.data.get("client_message") or "")
+            if owner_steps:
+                client += "\n\nYou also need to do this:\n" + "\n".join(f"{i}. {s}" for i, s in enumerate(owner_steps, 1))
+            win = {"new_files": dict(res.new_files), "diff": res.diff, "diagnosis": diagnosis, "level": level, "tier": tier, "model": model,
+                   "attempt_id": attempt_id, "client_message": client.strip(),
+                   "verification": investigator.clean_steps(res.data.get("verification") or [])}
+            review = validator.agent_risk_notes(res.new_files)
+            if str(res.data.get("risk", "")).lower() == "high":
+                review.append("the engineer rated this change as high risk")
+            if owner_steps:
+                review.append("you also have to do something yourself (see the steps)")
+            if review:
+                win["force_review"] = "; ".join(review)
+            return ("pass", win)
+        if res.outcome == "needs_owner":
+            d = res.data
+            store.finish_attempt(attempt_id, result="unusable", error_summary=("needs the owner: " + str(d.get("what_is_wrong", "")))[:300],
+                                 diagnosis=str(d.get("why", ""))[:500], **common)
+            return ("owner_action", {"message": str(d.get("what_is_wrong", "")), "diagnosis": str(d.get("why", "")),
+                                     "steps": [str(x) for x in d.get("steps") or []], "how_to_check": str(d.get("how_to_check", ""))})
+        if res.outcome == "question":
+            q = str(res.data.get("question", ""))
+            store.finish_attempt(attempt_id, result="unusable", error_summary=("asked the owner: " + q)[:300],
+                                 diagnosis=str(res.data.get("why_needed", ""))[:500], **common)
+            return ("question", q)
+        if res.outcome == "paused":
+            store.finish_attempt(attempt_id, result="system_fault", error_summary="origin=owner kind=paused retryable=yes | you paused this case", **common)
+            return ("paused", "")
+        why = str(res.data.get("reason") or res.outcome)
+        findings = str(res.data.get("findings") or "")
+        store.finish_attempt(attempt_id, result="unusable", error_summary=why[:300], diagnosis=findings[:500], **common)
+        if findings:
+            store.update_bug(bug["id"], strong_diagnosis=findings[:1500])
+        return ("fail", why)
+
     def _push_policy(self, claimed, project, bug, win: dict, ctx: dict) -> str:
+        if win.get("force_review"):
+            return str(win["force_review"])
         """'' = may go live once GitHub agrees. Otherwise the reason a person must look first (a pull request instead of a push).
 
         Problems seen on the live site or reported by the owner are pushed automatically only when the fix is PROVEN (a failing

@@ -1,0 +1,313 @@
+"""v4: the engineer (Claude with tools on the real repository), its harm rules, pause / resume, the beginner guide on the case card,
+'I merged it, check my site', 'Undo this fix', and the noise filter. A scripted fake model; no network, no money."""
+import json
+from pathlib import Path
+
+import httpx
+import pytest
+
+import cases
+import portal_db
+from fixengine import agent, config as fx_config, orchestrator, sandbox, store, validator
+from tests import fx_helpers as H
+from tests.test_fixengine_core import cfg, fx_db  # noqa: F401  (fixtures)
+from test_web_app import web_env  # noqa: F401  (fixture)
+
+
+def call(name, **args):
+    return {"id": f"c_{name}_{len(json.dumps(args))}", "type": "function", "function": {"name": name, "arguments": json.dumps(args)}}
+
+
+def reply(*calls, text="", cost=0.01):
+    return {"message": {"content": text, "tool_calls": list(calls)}, "finish": "tool_calls" if calls else "stop",
+            "usage": {"prompt_tokens": 1000, "completion_tokens": 200, "cost": cost}}
+
+
+class FakeTransport:
+    def __init__(self, script, model="anthropic/claude-sonnet-5.5"):
+        self.script, self.model, self.calls = list(script), model, []
+
+    def complete(self, messages, tools, **kw):
+        self.calls.append({"messages": [dict(m) for m in messages], "tools": tools, **kw})
+        if kw.get("extra", {}).get("plugins"):
+            return {"message": {"content": "Use the anon key in front-end code; it is public by design.",
+                                "annotations": [{"type": "url_citation", "url_citation": {"url": "https://supabase.com/docs/guides/api/api-keys"}}]},
+                    "finish": "stop", "usage": {"prompt_tokens": 50, "completion_tokens": 50, "cost": 0.01}}
+        step = self.script.pop(0) if self.script else reply(call("give_up", reason="script ended", findings=""))
+        return step(messages) if callable(step) else step
+
+
+class OkRunner:
+    def __init__(self, passed=True):
+        self.passed, self.runs = passed, 0
+
+    def run(self, root, profile):
+        self.runs += 1
+        return sandbox.SandboxResult(passed=self.passed, phases=[sandbox.PhaseResult("build", self.passed, 0 if self.passed else 1, 1.0, "out")],
+                                     output="all good" if self.passed else "[build] exit 1\nboom")
+
+
+def _ws(tmp_path, files):
+    root = tmp_path / "repo"
+    for p, t in files.items():
+        (root / p).parent.mkdir(parents=True, exist_ok=True)
+        (root / p).write_text(t, encoding="utf-8")
+    return agent.Workspace(root, files)
+
+
+KEY = "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6ImhvZWFt.ZhMOL3zDYB_phB7dUainGAYAVxvEinZsR1yW"
+APP = {"src/supabase.js": f"const supabaseKey = '{KEY}'\nexport const supabase = createClient(url, supabaseKey)\n",
+       "src/App.jsx": 'const versions = ["NIV", "ESV", "NLT", "NKJV"]\nconst url = "/api/verse/" + book + " " + chapter\n'}
+
+
+# ============================================================================================ the harm rules (the Bible-Well replay)
+@pytest.mark.parametrize("name,change,expect", [
+    ("placeholder key (0113612)", {"src/supabase.js": "const supabaseKey = 'public-anon-key'\nexport const supabase = createClient(url, supabaseKey)\n"}, "placeholder"),
+    ("key to a missing env var (fcd300a)", {"src/supabase.js": "const supabaseKey = import.meta.env.VITE_SUPABASE_ANON_KEY\nexport const supabase = createClient(url, supabaseKey)\n"}, "environment variable"),
+    ("fake client (89866aa)", {"src/supabase.js": APP["src/supabase.js"] + "// stub client so it does not crash\nconst stub = {}\n"}, "stub"),
+    ("removes NIV (bfe1a7f)", {"src/App.jsx": APP["src/App.jsx"].replace('"NIV", ', "")}, "removes option"),
+    ("monitor file", {"incident-agent-monitor.cjs": "x"}, "monitor"),
+])
+def test_every_harmful_bible_well_commit_is_rejected(name, change, expect):
+    problems = validator.agent_change_problems(APP, change)
+    assert problems and expect in " ".join(problems), (name, problems)
+
+
+def test_an_honest_fix_and_a_new_reproduction_test_pass():
+    change = {"src/App.jsx": APP["src/App.jsx"].replace('" " + chapter', '"/" + chapter'), "tests/test_verse_url.py": "def test_x():\n    assert 1\n"}
+    assert validator.agent_change_problems(APP, change) == []
+    assert "existing test" in validator.agent_path_problem("tests/test_a.py", existed=True)
+    assert validator.agent_path_problem("tests/test_new.py", existed=False) == ""
+
+
+# ============================================================================================ the engineer loop
+def test_the_engineer_reads_edits_runs_checks_and_finishes(tmp_path):
+    ws = _ws(tmp_path, APP)
+    t = FakeTransport([
+        reply(call("read_file", path="src/App.jsx"), call("search_code", query="api/verse")),
+        reply(call("edit_file", path="src/App.jsx", old_text='" " + chapter', new_text='"/" + chapter')),
+        reply(call("finish_fixed", understanding="u", root_cause="space instead of slash", changes_summary="slash", client_message="Fixed.",
+                   verification=[], owner_steps=[], risk="low", project_notes="Vite + Supabase")),      # refused: no checks yet
+        reply(call("run_checks")),
+        reply(call("finish_fixed", understanding="u", root_cause="space instead of slash", changes_summary="slash", client_message="Fixed.",
+                   verification=[{"goto": "/isaiah/1"}], owner_steps=[], risk="low", project_notes="Vite + Supabase")),
+    ])
+    runner = OkRunner()
+    res = agent.Engineer(transport=t, workspace=ws, cfg=fx_config.load(), runner=runner, profile=sandbox.Profile(language="static", build="x")).run(
+        agent.build_brief(request_text="Isaiah 1 does not load", incident_text="", evidence_text="", live_text="", case_reports=[], replies=[],
+                          baseline="", notes="", history="", commits="", project_map="map", code=agent.code_dump(APP)))
+    ws.close()
+    assert res.outcome == "fixed" and runner.runs == 1 and res.checks_passed is True
+    assert res.new_files == {"src/App.jsx": APP["src/App.jsx"].replace('" " + chapter', '"/" + chapter')}
+    assert "run run_checks" in json.dumps(t.calls[3]["messages"][-1])           # finishing before checking was refused
+    first = t.calls[0]["messages"][1]["content"]
+    assert "THE OWNER'S REQUEST" in first[0]["text"] and "THE WHOLE CODE BASE" in first[2]["text"] and first[2]["cache_control"]
+    assert [s["tool"] for s in res.steps][:2] == ["read_file", "search_code"] and res.cost_usd == pytest.approx(0.05)
+
+
+def test_a_harmful_finish_is_refused_and_the_engineer_hands_it_to_the_owner(tmp_path):
+    ws = _ws(tmp_path, APP)
+    t = FakeTransport([
+        reply(call("web_search", query="is the supabase anon key secret")),
+        reply(call("edit_file", path="src/supabase.js", old_text=f"'{KEY}'", new_text="import.meta.env.VITE_SUPABASE_ANON_KEY")),
+        reply(call("run_checks")),
+        reply(call("finish_fixed", understanding="u", root_cause="r", changes_summary="c", client_message="m", verification=[], owner_steps=[],
+                   risk="low", project_notes="")),
+        reply(call("needs_owner", what_is_wrong="Your Supabase project blocks the Google sign-in return address.",
+                   why="Google sends people back to an address Supabase does not allow.",
+                   steps=["Open supabase.com and sign in", "Authentication > URL Configuration > add https://bible.example to Redirect URLs"],
+                   how_to_check="Press Continue with Google: you should see your name.", project_notes="")),
+    ])
+    res = agent.Engineer(transport=t, workspace=ws, cfg=fx_config.load(), runner=OkRunner(), profile=sandbox.Profile(language="static")).run(
+        [{"type": "text", "text": "x"}])
+    ws.close()
+    assert res.outcome == "needs_owner" and len(res.data["steps"]) == 2
+    everything = json.dumps(t.calls[-1]["messages"])
+    assert "not allowed" in everything and "environment variable" in everything
+    assert "supabase.com/docs" in everything                                        # the web search answer came back with its source
+    assert any(c.get("extra", {}).get("plugins") for c in t.calls)                 # through OpenRouter's web plugin
+
+
+def test_paused_budget_and_secret_files(tmp_path):
+    ws = _ws(tmp_path, {**APP, ".env": "SECRET=1"})
+    stop = {"now": False}
+    t = FakeTransport([reply(call("read_file", path=".env")), lambda m: stop.update(now=True) or reply(call("list_files"))])
+    res = agent.Engineer(transport=t, workspace=ws, cfg=fx_config.load(), should_stop=lambda: stop["now"]).run([{"type": "text", "text": "x"}])
+    assert res.outcome == "paused" and "secret files are never read" in json.dumps(t.calls[1]["messages"][-1])
+    c = fx_config.load()
+    c["agent"]["max_inr_per_run"] = 1.0
+    t2 = FakeTransport([reply(call("list_files"), cost=1.0), reply(call("list_files"), cost=1.0)])
+    res2 = agent.Engineer(transport=t2, workspace=ws, cfg=c).run([{"type": "text", "text": "x"}])
+    ws.close()
+    assert res2.outcome == "budget" and "Budget for this run is used up" in json.dumps(t2.calls[1]["messages"])
+
+
+def test_openrouter_transport_sends_tools_and_reports_no_credit_plainly():
+    seen = []
+
+    def handler(request):
+        body = json.loads(request.content)
+        seen.append(body)
+        if len(seen) == 1:
+            return httpx.Response(200, json={"choices": [{"message": {"content": "", "tool_calls": [call("list_files")]}, "finish_reason": "tool_calls"}],
+                                             "usage": {"prompt_tokens": 9, "completion_tokens": 3, "cost": 0.002}})
+        return httpx.Response(402, json={"error": {"code": 402, "message": "Insufficient credits"}})
+    import os
+    os.environ["OPENROUTER_API_KEY"] = "sk-or-test-" + "x" * 20
+    try:
+        t = agent.OpenRouterTransport("anthropic/claude-sonnet-5.5", client=httpx.Client(transport=httpx.MockTransport(handler)), sleep=lambda s: None)
+        out = t.complete([{"role": "user", "content": "hi"}], agent.tool_specs())
+        assert out["message"]["tool_calls"][0]["function"]["name"] == "list_files"
+        assert seen[0]["model"] == "anthropic/claude-sonnet-5.5" and seen[0]["tool_choice"] == "auto" and seen[0]["reasoning"] == {"effort": "high"}
+        with pytest.raises(agent.AgentFault) as err:
+            t.complete([{"role": "user", "content": "hi"}], None)
+        assert err.value.kind == "credit" and "openrouter.ai/credits" in str(err.value)
+    finally:
+        os.environ.pop("OPENROUTER_API_KEY", None)
+
+
+# ============================================================================================ the whole case, through the orchestrator
+def _engine(tmp_path, monkeypatch, scripts, *, mode="pr"):
+    monkeypatch.setenv("PORTAL_DB_PATH", str(tmp_path / "portal.sqlite3"))
+    monkeypatch.setenv("FIXENGINE_ALLOW_UNSAFE_LOCAL", "1")
+    portal_db.init_db()
+    c = fx_config.load()
+    c["sandbox"]["mode"] = "local_unsafe"
+    c["warn_every_use"]["opus"] = False
+    c["warn_at"].update({"haiku": 0, "sonnet": 0, "opus": 0})
+    repo = H.make_repo(tmp_path)
+    uid, pid = H.make_user_and_project(mode=mode)
+    transports = {t: FakeTransport(s, model=f"anthropic/claude-{t}-5.5") for t, s in scripts.items()}
+    prs = []
+    engine = orchestrator.Engine(c, runner=sandbox.LocalUnsafeRunner(c), repo_provider=H.repo_provider(repo), commits_provider=lambda p: "",
+                                 pr_opener=lambda project, **kw: prs.append(kw) or {"url": "https://github.com/acme/shop/pull/7", "number": 7,
+                                                                                     "branch": "agent-daemon/fix-x", "path": "pricing.py", "diff": kw["diff"]},
+                                 agent_transport=lambda tier: transports.setdefault(tier, FakeTransport([], model=tier)))
+    return engine, transports, prs, pid
+
+
+FIX = [reply(call("read_file", path="pricing.py")),
+       reply(call("edit_file", path="pricing.py", old_text="price * pct / 10\n", new_text="price * pct / 100\n")),
+       reply(call("run_checks")),
+       reply(call("finish_fixed", understanding="Discounts are 10x too big", root_cause="pricing.py divides the percent by 10",
+                  changes_summary="divide by 100", client_message="Discounts were 10 times too big. Fixed.", verification=[], owner_steps=[],
+                  risk="low", project_notes="Python shop, prices in pricing.py"))]
+
+
+def test_a_case_is_fixed_by_the_engineer_proven_in_our_sandbox_and_sent_as_a_pull_request(tmp_path, monkeypatch):
+    engine, transports, prs, pid = _engine(tmp_path, monkeypatch, {"sonnet": list(FIX)})
+    inc = H.make_incident(pid)
+    assert engine.handle_incident(H.claim()) == "pr_opened"
+    assert "pct / 100" in prs[0]["new_files"]["pricing.py"] and "opus" not in transports        # Sonnet fixed it; Opus never ran
+    bug = store.get_bug_by_incident(inc)
+    tiers = [(a["tier"], a["result"]) for a in store.list_attempts(bug["id"])]
+    assert tiers == [("sonnet", "pass")] and "groq" not in json.dumps(tiers)                     # no free-model / Haiku ladder
+    assert store.get_flag(f"notes:{pid}") == "Python shop, prices in pricing.py"                # remembered for the next case
+    assert [s["tool"] for s in store.gh_state(bug["id"])["agent_log"]][:3] == ["read_file", "edit_file", "run_checks"]
+
+
+def test_when_sonnet_gives_up_opus_gets_one_run_with_what_sonnet_found(tmp_path, monkeypatch):
+    engine, transports, prs, pid = _engine(tmp_path, monkeypatch, {
+        "sonnet": [reply(call("give_up", reason="could not find it", findings="the discount maths in pricing.py looks wrong"))],
+        "opus": list(FIX)})
+    H.make_incident(pid)
+    assert engine.handle_incident(H.claim()) == "pr_opened"
+    opus_brief = json.dumps(transports["opus"].calls[0]["messages"][1]["content"])
+    assert "AN EARLIER RUN ON THIS CASE" in opus_brief and "discount maths" in opus_brief
+
+
+def test_not_a_code_problem_ends_with_beginner_steps_and_no_more_models(tmp_path, monkeypatch):
+    engine, transports, prs, pid = _engine(tmp_path, monkeypatch, {"sonnet": [reply(call(
+        "needs_owner", what_is_wrong="The site cannot reach its database because a key is missing on Vercel.",
+        why="The code asks Vercel for VITE_SUPABASE_ANON_KEY and Vercel has none.",
+        steps=["Open vercel.com > your project > Settings > Environment Variables", "Name: VITE_SUPABASE_ANON_KEY. Value: copy the anon public "
+               "key from supabase.com > Project Settings > API", "Click Save, then Deployments > Redeploy"],
+        how_to_check="Open your site and press Continue with Google.", project_notes=""))]})
+    inc = H.make_incident(pid)
+    assert engine.handle_incident(H.claim()) == "needs_owner"
+    row = portal_db.get_incident_row(inc)
+    assert row["live_result"].startswith("NEEDS YOU") and "1. Open vercel.com" in row["live_result"] and "How to check it worked" in row["live_result"]
+    assert "opus" not in transports and not prs
+    import incident_board
+    card = incident_board.guide_html(row, pid, "tok", "")
+    assert "What you need to do" in card and "I did it, check again" in card
+
+
+def test_an_unsafe_fix_is_never_sent_even_if_the_model_insists(tmp_path, monkeypatch):
+    bad = [reply(call("write_file", path="pricing.py", content="def apply_discount(price, pct):\n    return price  # stub\n")),
+           reply(call("run_checks")),
+           reply(call("finish_fixed", understanding="", root_cause="", changes_summary="", client_message="", verification=[], owner_steps=[],
+                      risk="low", project_notes="")),
+           reply(call("give_up", reason="my only idea was a stub", findings=""))]
+    engine, transports, prs, pid = _engine(tmp_path, monkeypatch, {"sonnet": bad, "opus": [reply(call("give_up", reason="no", findings=""))]})
+    H.make_incident(pid)
+    assert engine.handle_incident(H.claim()) == "needs_human" and not prs
+
+
+# ============================================================================================ pause / resume / auto-start / noise
+def test_pause_resume_and_auto_start(fx_db):
+    uid, pid = H.make_user_and_project(mode="auto")
+    a = H.make_incident(pid, ts="2020-01-01T10:00:00Z")
+    assert portal_db.pause_incident(a, pid) and H.claim() is None                       # a paused case is never picked up
+    assert portal_db.resume_incident(a, pid) and H.claim()["incident_id"] == a
+    portal_db.set_auto_start(pid, uid, False)
+    found, _ = portal_db.ingest_event(pid, timestamp="2020-01-01T10:00:00Z", level="ERROR", message="TypeError in cart.js",
+                                      traceback='[evidence] {"kind": "js_error", "page": "/cart"}', signature="js:cart")
+    assert portal_db.get_incident_row(found)["status"] == "paused"
+    mine, _ = portal_db.ingest_event(pid, timestamp="2020-01-01T10:00:00Z", level="ERROR", message="[user report] the cart is empty",
+                                     traceback='[evidence] {"kind": "user_report", "owner_report": "the cart is empty"}', signature="user_report:9")
+    assert portal_db.get_incident_row(mine)["status"] == "diagnosing"                    # your own reports always start
+
+
+def test_rate_limits_trackers_and_extensions_are_noise_not_cases():
+    assert "rate limited" in cases.noise_reason("GET https://openrouter.ai/api failed with HTTP 429", '[evidence] {"status": 429}')
+    assert "analytics" in cases.noise_reason("GET https://www.google-analytics.com/g/collect failed with HTTP 400", "")
+    assert cases.noise_reason("TypeError: verses is undefined", "at App.jsx:12") == ""
+
+
+def test_case_buttons_on_the_project_page(web_env, monkeypatch):
+    from test_v3_web import _setup
+    from test_web_app import _request
+    _user, csrf, cookie, project_id = _setup()
+    _request(f"/projects/{project_id}/report", method="POST", cookie=cookie, form={"csrf": csrf, "text": "the Send button does nothing"})
+    inc = portal_db.list_incidents(project_id)[0]
+    _, _, page = _request(f"/projects/{project_id}", cookie=cookie)
+    assert "Pause this case" in page and "Pause all open cases" in page and "Turn auto-start off" in page
+    _, headers, _ = _request(f"/projects/{project_id}/incidents/{inc['id']}/pause", method="POST", cookie=cookie, form={"csrf": csrf})
+    assert "case=paused" in str(headers) and portal_db.get_incident_row(inc["id"])["status"] == "paused"
+    _, _, page = _request(f"/projects/{project_id}?case=paused", cookie=cookie)
+    assert "Start this case" in page and "spends nothing" in page
+    _request(f"/projects/{project_id}/incidents/{inc['id']}/resume", method="POST", cookie=cookie, form={"csrf": csrf})
+    assert portal_db.get_incident_row(inc["id"])["status"] == "diagnosing"
+    # a fix waiting as a pull request: the beginner steps and the "I merged it" button
+    conn = portal_db.get_connection()
+    try:
+        portal_db._execute(conn, "UPDATE incidents SET status='pr_opened',stage='pr_open',pr_url='https://github.com/acme/shop/pull/7',pr_number=7 WHERE id=?", (inc["id"],))
+        conn.commit()
+    finally:
+        conn.close()
+    _, _, page = _request(f"/projects/{project_id}", cookie=cookie)
+    assert "Merge pull request" in page and "Confirm merge" in page and "I merged it, check my site" in page
+    _, headers, _ = _request(f"/projects/{project_id}/incidents/{inc['id']}/merged", method="POST", cookie=cookie, form={"csrf": csrf})
+    assert "case=merged_nosite" in str(headers)                                             # no live address: it says so
+
+
+def test_undo_this_fix_puts_the_files_back(web_env, monkeypatch):
+    from test_v3_web import _setup
+    from test_web_app import _request
+    from fixengine import git_ops
+    _user, csrf, cookie, project_id = _setup()
+    _request(f"/projects/{project_id}/report", method="POST", cookie=cookie, form={"csrf": csrf, "text": "prices are wrong on the cart"})
+    inc = portal_db.list_incidents(project_id)[0]
+    row = portal_db.get_project_any(project_id)
+    bug = store.create_bug(project_id=project_id, user_id=row["user_id"], incident_id=inc["id"], fingerprint_json={"hash": "h"},
+                           bug_class="medium", category="")
+    store.save_gh_state(bug["id"], {"base_sha": "b" * 40, "files": ["pricing.py"]})
+    portal_db.resolve_incident(inc["id"], project_id, "pushed")
+    portal_db.set_incident_stage(inc["id"], "verified", "Verified on your live site")
+    _, _, page = _request(f"/projects/{project_id}", cookie=cookie)
+    assert "Undo this fix" in page and "data-confirm" in page
+    calls = []
+    monkeypatch.setattr(git_ops, "revert_files", lambda project, **kw: calls.append(kw) or "ok")
+    _, headers, _ = _request(f"/projects/{project_id}/incidents/{inc['id']}/undo", method="POST", cookie=cookie, form={"csrf": csrf})
+    assert "case=undone" in str(headers) and calls[0]["paths"] == ["pricing.py"] and calls[0]["base_sha"] == "b" * 40

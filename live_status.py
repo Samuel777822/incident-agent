@@ -20,6 +20,8 @@ INCIDENT_STAGES = {
     "reproducing": ("Reproducing the bug in the sandbox", "blue", 1, True),
     "diagnosing": ("Diagnosing the error", "blue", 1, True),
     "investigating": ("Looking at your live site and code", "blue", 1, True),
+    "working": ("The engineer is working on it", "blue", 2, True),
+    "paused": ("Paused by you", "muted", None, False),
     "thinking": ("{mode} mode is writing a fix", "blue", 2, True),
     "testing_fix": ("Testing the fix in the sandbox", "blue", 3, True),
     "waiting_user": ("Waiting for your decision", "amber", 2, True),
@@ -113,6 +115,8 @@ def incident_view(inc: dict, mode: str, quota: dict | None = None) -> dict:
         stage = "merged" if inc.get("pr_url") else "resolved"
     if status == "needs_human" and stage != "needs_you":
         stage = "needs_human"
+    if status == "paused":
+        stage = "paused"
     headline, tone, active_idx, busy = INCIDENT_STAGES.get(stage, (stage.replace("_", " ").title() or "Working", "muted", 1, True))
     tier = str(inc.get("stage_tier") or "")
     mode_name = MODE_NAMES.get(tier, "")

@@ -3,6 +3,9 @@ HOME_JS = """(function() {
   // button says "Working…" so it is clear something is happening. Restored when the page is shown again from the back button.
   document.addEventListener('submit', function(ev) {
     var form = ev.target;
+    if (form && form.getAttribute && form.getAttribute('data-confirm') && !window.confirm(form.getAttribute('data-confirm'))) {
+      ev.preventDefault(); ev.fxDuplicate = true; return;
+    }
     if (!form || form.tagName !== 'FORM' || form.hasAttribute('data-no-once')) { return; }
     if (form.getAttribute('data-busy') === '1') { ev.preventDefault(); ev.fxDuplicate = true; return; }
     form.setAttribute('data-busy', '1');

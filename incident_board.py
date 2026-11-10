@@ -214,7 +214,7 @@ def render_board(project_id: str, incidents: list, mode: str, csrf: str = "") ->
         if stage.get("detail"):
             meta.insert(0, "<b>" + _e(stage["detail"][:200]) + "</b>")
         live = str(inc.get("live_result") or "")
-        if live:
+        if live and not live.startswith("NEEDS YOU"):
             meta.insert(0, "<b>" + _e(live.splitlines()[0][:220]) + "</b>")
         if category:
             meta.append(_e(category + (f" · {confidence} confidence" if confidence else "")))
@@ -233,6 +233,7 @@ def render_board(project_id: str, incidents: list, mode: str, csrf: str = "") ->
             f"<div class='inc-sub muted'>{_e(cause) + '<br>' if cause else ''}{' · '.join(meta)}</div>"
             f"{_render_steps(stage['steps'])}"
             f"{decide}"
+            f"{guide_html(inc, project_id, csrf, pr_url)}"
             f"<span class='hint'>Show report</span></summary>"
             f"<div class='inc-body'>{_render_report(inc, stage)}<div class='inc-actions'>{''.join(buttons)}</div></div>"
             f"</details></article>")
@@ -259,6 +260,10 @@ _STYLE = """<style>
 .rp-sub{margin-top:14px}.rp-sub summary{cursor:pointer;color:var(--muted);font-size:13px}
 .inc-actions{display:flex;gap:10px;flex-wrap:wrap;margin-top:18px}
 .inc-decide{margin:12px 0 0;display:flex;flex-wrap:wrap;gap:8px;align-items:center}
+.inc-guide{margin:12px 0 0}
+.inc-guide .guide{margin:10px 0 0;padding:12px 14px;border-radius:12px;border:1px solid #a47e2e;background:#f0c36b10;color:#f3e6c4;font-size:14px;line-height:1.55}
+.inc-guide .guide ol{margin:8px 0 10px 20px;padding:0}.inc-guide .guide li{margin:4px 0}
+.inc-guide .guide-text{margin:8px 0 10px;white-space:normal}.inc-guide .guide-line{margin:4px 0 8px;color:#b8c9df;font-size:13px}
 @media(prefers-reduced-motion:reduce){.steps .active .dot{animation:none}}
 </style>"""
 
@@ -280,6 +285,53 @@ def choice_buttons_html(choice: dict | None, csrf: str, back: str) -> str:
         for value, text, primary in CHOICE_LABELS
         if not (value == "higher" and choice.get("tier") == "opus") and not (value == "lower" and choice.get("tier") == "haiku"))
     return f"<div class='inc-decide'><b>Your decision:</b> {forms}</div>"
+
+
+def _post_button(action: str, csrf: str, label: str, *, primary: bool = False, danger: bool = False, extra: dict | None = None,
+                 confirm: str = "") -> str:
+    hidden = "".join(f"<input type='hidden' name='{_e(k)}' value='{_e(v)}'>" for k, v in (extra or {}).items())
+    cls = "button" + (" primary" if primary else "") + (" danger" if danger else "")
+    onsubmit = f" data-confirm='{_e(confirm)}'" if confirm else ""
+    return (f"<form method='post' action='{_e(action)}' style='display:inline'{onsubmit}><input type='hidden' name='csrf' value='{_e(csrf)}'>"
+            f"{hidden}<button class='{cls}' type='submit'>{_e(label)}</button></form> ")
+
+
+def guide_html(inc: dict, project_id: str, csrf: str, pr_url: str) -> str:
+    """What the owner should do RIGHT NOW, in beginner words, with the button that does it. Shown on the case card itself."""
+    if not csrf:
+        return ""
+    iid = str(inc.get("id") or "")
+    base = f"/projects/{project_id}/incidents/{iid}"
+    status = str(inc.get("status") or "")
+    stage = str(inc.get("stage") or "")
+    live = str(inc.get("live_result") or "")
+    parts = []
+    if status in ("diagnosing", "queued", "processing", "awaiting_choice"):
+        parts.append(_post_button(base + "/pause", csrf, "Pause this case"))
+    if status == "paused":
+        parts.append("<p class='guide-line'>This case is paused. The agent does nothing (and spends nothing) until you start it.</p>"
+                     + _post_button(base + "/resume", csrf, "Start this case", primary=True))
+    if stage == "needs_you" or live.startswith("NEEDS YOU"):
+        body = live.split(chr(10), 1)[1].strip() if chr(10) in live else live
+        parts.append("<div class='guide'><b>What you need to do</b><div class='guide-text'>" + _e(body).replace(chr(10), "<br>") + "</div>"
+                     + _post_button(base + "/reply", csrf, "I did it, check again", primary=True, extra={"text": "I did the steps. Please check again."})
+                     + "</div>")
+    elif pr_url and status in ("diagnosed", "pr_opened", "needs_human") and stage not in ("verifying", "verified", "reverted"):
+        parts.append(
+            "<div class='guide'><b>A fix is ready. What to do now (takes about 2 minutes):</b><ol>"
+            f"<li>Click <a href='{_e(pr_url)}' target='_blank' rel='noopener'>Open fix pull request</a>. It opens GitHub in a new tab.</li>"
+            "<li>Read the short explanation at the top. To see exactly what changed, click the <b>Files changed</b> tab.</li>"
+            "<li>Scroll down and click the green <b>Merge pull request</b> button, then <b>Confirm merge</b>. "
+            "(If the button is grey and says there are conflicts, do not merge: press <b>Send to human review</b> on this page or reply here.)</li>"
+            "<li>Your host (Vercel, Netlify, Render ...) puts the change live by itself in 1 to 3 minutes. You can watch it on your host's "
+            "<b>Deployments</b> page.</li>"
+            "<li>Come back here and press the button below. The agent opens your live site and tells you if the problem is gone.</li></ol>"
+            + _post_button(base + "/merged", csrf, "I merged it, check my site", primary=True) + "</div>")
+    if status == "resolved" and stage in ("pushed", "verified", "verifying", "merged", "resolved") and (inc.get("pr_url") or "pushed" in stage
+                                                                                                    or stage in ("verified", "verifying")):
+        parts.append(_post_button(base + "/undo", csrf, "Undo this fix", danger=True,
+                                  confirm="This puts the changed files back exactly as they were before the fix, with a new commit. Continue?"))
+    return f"<div class='inc-guide'>{''.join(parts)}</div>" if parts else ""
 
 
 def render_board_section(project_id: str, incidents: list, mode: str, csrf: str = "") -> str:

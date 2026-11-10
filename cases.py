@@ -178,3 +178,24 @@ def find_leader(candidates: list[dict], key: dict, *, now_iso: str) -> tuple[str
         if why:
             return str(row["id"]), why
     return "", ""
+
+
+# ---- v4: noise that must never become a paid case ------------------------------------------------------------------------------
+_TRACKERS = ("google-analytics.com", "googletagmanager.com", "doubleclick.net", "facebook.net", "connect.facebook.net", "hotjar.com",
+             "clarity.ms", "segment.io", "sentry.io", "intercom.io", "mixpanel.com", "adservice.google.com", "googlesyndication.com",
+             "plausible.io", "posthog.com", "vercel-insights.com", "vitals.vercel-insights.com")
+_NOISE_TEXT = re.compile(r"(chrome-extension://|moz-extension://|safari-extension://|ResizeObserver loop|^Script error\.?$|"
+                         r"/favicon\.ico\b.*\b404\b|\b404\b.*/favicon\.ico)", re.I)
+
+
+def noise_reason(message: str, traceback: str) -> str:
+    """Why a monitor event is noise ('' when it is worth a case). Rate limits, browser extensions, trackers, favicons."""
+    ev = evidence_of(traceback)
+    host, status = _host_status(ev, message)
+    if str(status) == "429" or str(ev.get("status") or "") == "429":
+        return "rate limited by the other service (a limit on their side, not a bug in your code)"
+    if host and any(host == t or host.endswith("." + t) for t in _TRACKERS):
+        return "an analytics or advertising script failed (not part of your app)"
+    if _NOISE_TEXT.search(str(message or "").strip()) or _NOISE_TEXT.search(str(traceback or "")[:2000]):
+        return "a browser extension, a harmless browser warning or a missing favicon"
+    return ""

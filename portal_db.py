@@ -397,6 +397,8 @@ def init_db() -> None:
             ("incidents", "merged_count", "INTEGER NOT NULL DEFAULT 0"),
             ("incidents", "check_until", "TEXT NOT NULL DEFAULT ''"),
             ("incidents", "live_result", "TEXT NOT NULL DEFAULT ''"),
+            # v4: the owner decides which cases the agent works on
+            ("projects", "auto_start", "INTEGER NOT NULL DEFAULT 1"),
         ]
         for table, column, ddl in additions:
             if isinstance(conn, sqlite3.Connection):
@@ -804,6 +806,11 @@ def ingest_event(project_id: str, *, timestamp: str, level: str, message: str,
             if cur.rowcount == 1:
                 _execute(conn, "UPDATE log_events SET incident_id=? WHERE id=? AND project_id=?",
                          (incident_id,event_id,project_id))
+                if case_ok and not str(signature).startswith("user_report:"):
+                    auto = _execute(conn, "SELECT auto_start FROM projects WHERE id=?", (project_id,)).fetchone()
+                    if auto is not None and int(auto["auto_start"] or 0) == 0:
+                        _execute(conn, """UPDATE incidents SET status='paused',stage='paused',stage_detail=?,stage_at=? WHERE id=?""",
+                                 ("Found automatically. It waits until you press Start (auto-start is off for this project).", _now(), incident_id))
                 _execute(conn, "INSERT INTO incident_jobs(incident_id,status,available_at,updated_at) VALUES(?,?,?,?) ON CONFLICT(incident_id) DO NOTHING",
                          (incident_id,"queued",_now(),_now()))
                 conn.commit()
@@ -851,7 +858,7 @@ def ingest_event(project_id: str, *, timestamp: str, level: str, message: str,
         conn.close()
 
 
-CASE_ACTIVE = ("diagnosing", "queued", "processing", "awaiting_choice", "diagnosed")
+CASE_ACTIVE = ("diagnosing", "queued", "processing", "awaiting_choice", "diagnosed", "paused")
 
 
 def _attach_to_case(conn, project_id: str, event_id: str, signature: str, message: str, traceback: str,
@@ -2585,5 +2592,75 @@ def requeue_incident(incident_id: str, project_id: str, detail: str) -> bool:
     except Exception:
         conn.rollback()
         return False
+    finally:
+        conn.close()
+
+
+# ---- v4: pause / resume a case, auto-start, long engineer runs ------------------------------------------------------------------
+PAUSABLE = ("diagnosing", "queued", "processing", "awaiting_choice")
+
+
+def pause_incident(incident_id: str, project_id: str) -> bool:
+    """The owner pauses one case: the agent stops working on it (a running engineer stops at its next step) and spends nothing."""
+    now = _now()
+    conn = get_connection()
+    try:
+        marks = ",".join("'" + s + "'" for s in PAUSABLE)
+        cur = _execute(conn, f"""UPDATE incidents SET status='paused',stage='paused',stage_detail=?,stage_at=?
+            WHERE id=? AND project_id=? AND status IN ({marks})""", ("Paused by you. Nothing is spent while it is paused.", now, incident_id, project_id))
+        if cur.rowcount != 1:
+            conn.rollback()
+            return False
+        _execute(conn, "UPDATE incident_jobs SET status='paused',locked_until=NULL,updated_at=? WHERE incident_id=?", (now, incident_id))
+        _execute(conn, "INSERT INTO audit_log(id,project_id,action,detail,created_at) VALUES(?,?,?,?,?)",
+                 (_id(), project_id, "incident_paused", json.dumps({"incident_id": incident_id}), now))
+        conn.commit()
+        return True
+    finally:
+        conn.close()
+
+
+def resume_incident(incident_id: str, project_id: str) -> bool:
+    now = _now()
+    conn = get_connection()
+    try:
+        cur = _execute(conn, """UPDATE incidents SET status='diagnosing',stage='queued',stage_detail=?,stage_at=?
+            WHERE id=? AND project_id=? AND status='paused'""", ("Started. The agent picks it up in a few seconds.", now, incident_id, project_id))
+        if cur.rowcount != 1:
+            conn.rollback()
+            return False
+        _execute(conn, """INSERT INTO incident_jobs(incident_id,status,attempts,available_at,locked_until,last_error,updated_at)
+            VALUES(?,?,?,?,NULL,'',?) ON CONFLICT(incident_id) DO UPDATE SET status='queued',attempts=0,available_at=excluded.available_at,
+            locked_until=NULL,last_error='',updated_at=excluded.updated_at""", (incident_id, "queued", 0, now, now))
+        _execute(conn, "INSERT INTO audit_log(id,project_id,action,detail,created_at) VALUES(?,?,?,?,?)",
+                 (_id(), project_id, "incident_resumed", json.dumps({"incident_id": incident_id}), now))
+        conn.commit()
+        return True
+    finally:
+        conn.close()
+
+
+def pause_all_incidents(project_id: str) -> int:
+    rows = [r["id"] for r in list_incidents(project_id, 200) if r.get("status") in PAUSABLE]
+    return sum(1 for iid in rows if pause_incident(iid, project_id))
+
+
+def set_auto_start(project_id: str, user_id: str, on: bool) -> bool:
+    conn = get_connection()
+    try:
+        cur = _execute(conn, "UPDATE projects SET auto_start=? WHERE id=? AND user_id=?", (1 if on else 0, project_id, user_id))
+        conn.commit()
+        return cur.rowcount == 1
+    finally:
+        conn.close()
+
+
+def extend_lease(incident_id: str, seconds: int = 1200) -> None:
+    """A long engineer run keeps its claim on the case (otherwise the worker would think it died after 10 minutes)."""
+    until = (datetime.now(timezone.utc) + timedelta(seconds=seconds)).isoformat(timespec="seconds")
+    conn = get_connection()
+    try:
+        _execute(conn, "UPDATE incident_jobs SET locked_until=? WHERE incident_id=? AND status='processing'", (until, incident_id))
+        conn.commit()
     finally:
         conn.close()

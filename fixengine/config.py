@@ -92,6 +92,16 @@ DEFAULTS: dict = {
         "groq_request_limit": 7500,   # prompt + answer above this is rejected with HTTP 413: skip the free model instead
         "reasoning_out_multiplier": 1.0,
     },
+    # v4: the engineer (Claude with tools). Bounds for ONE run; Sonnet runs first, Opus once if Sonnet does not finish.
+    "agent": {
+        "max_steps": 45,
+        "max_seconds": 1500,
+        "max_inr_per_run": 90.0,        # about $1 of OpenRouter credit per run; Opus gets its own run
+        "max_check_runs": 5,
+        "max_page_visits": 5,
+        "max_web_searches": 6,
+        "effort": {"sonnet": "high", "opus": "high"},
+    },
     "ask_timeout_minutes": 30,
     "sandbox": {
         "mode": "docker",             # docker | remote | local_unsafe (tests only)

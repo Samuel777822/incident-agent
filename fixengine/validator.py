@@ -121,3 +121,105 @@ VERIFY_TEXT = {
     "smoke_only": "This project has no tests. It builds and starts, but the fix itself is NOT proven by a test. Review carefully.",
     "build_only": "NOT VERIFIED: no tests or start-up check were available. Only a syntax/build check passed. Review carefully.",
 }
+
+
+# =================================================================================================================================
+# v4: rules for the engineer's (agent's) final change. These are the mistakes the old engine actually pushed to Bible-Well:
+# a working key replaced by a placeholder, a fake Supabase client, an error message removed "so the monitor stops reporting it",
+# and a Bible version deleted to avoid an error. Each is now rejected before anything leaves the sandbox.
+# =================================================================================================================================
+AGENT_MAX_FILES = 30
+AGENT_MAX_LINES = 2500
+LOCK_FILES = {"package-lock.json", "yarn.lock", "pnpm-lock.yaml", "poetry.lock", "pipfile.lock", "composer.lock", "gemfile.lock", "cargo.lock"}
+MONITOR_FILES = re.compile(r"(^|/)(incident[-_]agent[-_](monitor|config)[\w.-]*|INCIDENT_AGENT_SETUP\.md)$", re.I)
+PLACEHOLDER = re.compile(r"""['"`](public[-_]anon[-_]key|anon[-_]key[-_]here|your[-_ ]?(?:api[-_ ]?|anon[-_ ]?|secret[-_ ]?)?key(?:[-_ ]?here)?|"""
+                         r"""changeme|change[-_]me|replace[-_]?me|placeholder|x{4,}|<your[^>'"`]*>|YOUR_[A-Z0-9_]+|todo[-_ ]?key|dummy[-_ ]?key)['"`]""", re.I)
+LONG_LITERAL = re.compile(r"""['"`]([A-Za-z0-9_\-\.=+/]{32,})['"`]""")
+ENV_READ = re.compile(r"(import\.meta\.env\.|process\.env\.|os\.(?:getenv|environ)|System\.getenv|Deno\.env)")
+STUB_WORD = re.compile(r"\b(stub(?:bed|s)?|mock(?:ed|s)?|fake|dummy|no-?op client)\b", re.I)
+ERROR_REPORT = re.compile(r"(console\.(?:error|warn)\s*\(|\blogger\.(?:error|exception|warning)\s*\(|\blogging\.(?:error|exception)\s*\(|"
+                          r"\bthrow\b|\braise\b|captureException|reportError)")
+QUOTED = re.compile(r"""['"]([^'"\n]{1,40})['"]""")
+BUILD_FILES = {"package.json", "requirements.txt", "pyproject.toml", "pom.xml", "build.gradle", "tsconfig.json", "vite.config.js",
+               "vite.config.ts", "next.config.js", "webpack.config.js"}
+
+
+def agent_path_problem(path: str, *, existed: bool) -> str:
+    """'' when the agent may write this file, else the reason. New test files are allowed (a reproduction); existing ones are not."""
+    name = PurePosixPath(path).name.lower()
+    if prompts.is_secret_path(path):
+        return f"{path} is a secret / key file: never written"
+    if DENY_PATH.search(path):
+        return f"{path} is a CI, deploy or infrastructure file: not changed automatically"
+    if name in LOCK_FILES:
+        return f"{path} is a lock file: not changed automatically"
+    if MONITOR_FILES.search(path):
+        return f"{path} is part of the Agent Daemon monitor: it must not be changed to make a report go away"
+    if existed and is_test_path(path):
+        return f"{path} is an existing test: tests are not edited (add a NEW test to reproduce the bug)"
+    if name in ("dockerfile", "procfile", "render.yaml", "vercel.json", "netlify.toml", ".gitignore"):
+        return f"{path} is a deployment file: not changed automatically"
+    return ""
+
+
+def _added_removed(old: str, new: str) -> tuple[list[str], list[str]]:
+    added, removed = [], []
+    for line in difflib.unified_diff(old.splitlines(), new.splitlines(), lineterm="", n=0):
+        if line.startswith("+") and not line.startswith("+++"):
+            added.append(line[1:])
+        elif line.startswith("-") and not line.startswith("---"):
+            removed.append(line[1:])
+    return added, removed
+
+
+def agent_change_problems(original: dict[str, str], changed: dict[str, str]) -> list[str]:
+    """Why the agent's final change must not go out ([] = acceptable). Pure function, unit-tested with the Bible-Well commits."""
+    problems: list[str] = []
+    if len(changed) > AGENT_MAX_FILES:
+        problems.append(f"changes {len(changed)} files (limit {AGENT_MAX_FILES}); split the work or explain it to the owner")
+    total = 0
+    for path, new in sorted(changed.items()):
+        old = original.get(path, "")
+        why = agent_path_problem(path, existed=path in original)
+        if why:
+            problems.append(why)
+            continue
+        added, removed = _added_removed(old, new)
+        total += max(len(added), len(removed))
+        test_file = is_test_path(path)
+        add_text, rem_text = "\n".join(added), "\n".join(removed)
+        if prompts.contains_secret(add_text):
+            problems.append(f"{path}: the change adds something that looks like a secret key")
+        flag = prompts.new_suspicious(old, new)
+        if flag and not test_file:
+            problems.append(f"{path}: the change adds a risky construct ({flag})")
+        if path.endswith(".py") and new.strip():
+            try:
+                ast.parse(new, filename=path)
+            except SyntaxError as exc:
+                problems.append(f"{path}: would not parse (line {exc.lineno})")
+        if test_file:
+            continue
+        if PLACEHOLDER.search(add_text) and not PLACEHOLDER.search(rem_text):
+            problems.append(f"{path}: replaces a real value with a placeholder (that breaks the site; keep the real value)")
+        lost = [m.group(1) for line in removed for m in LONG_LITERAL.finditer(line) if m.group(1) not in new]
+        if lost and ENV_READ.search(add_text):
+            problems.append(f"{path}: moves a hard-coded key/value into an environment variable the host may not have. Front-end keys "
+                            "(Supabase anon, Firebase web config, Stripe publishable) are public by design: keep them, or use needs_owner")
+        if STUB_WORD.search(add_text) and not STUB_WORD.search(old):
+            problems.append(f"{path}: adds a stub / fake / mock object; fix the real cause instead of pretending the service works")
+        lost_reports = len(ERROR_REPORT.findall(rem_text)) - len(ERROR_REPORT.findall(add_text))
+        if lost_reports > 0:
+            problems.append(f"{path}: removes error reporting (console.error / throw / logging) without replacing it; that hides the problem")
+        old_options = {q for line in removed if len(QUOTED.findall(line)) >= 2 for q in QUOTED.findall(line)}
+        gone = sorted(q for q in old_options if q.strip() and f'"{q}"' not in new and f"'{q}'" not in new)
+        if gone:
+            problems.append(f"{path}: removes option(s) {', '.join(repr(g) for g in gone[:4])}; do not remove features to avoid an error")
+    if total > AGENT_MAX_LINES:
+        problems.append(f"changes about {total} lines (limit {AGENT_MAX_LINES})")
+    return problems
+
+
+def agent_risk_notes(changed: dict[str, str]) -> list[str]:
+    """Not forbidden, but a person should look first (the change goes to a pull request, not straight to the live branch)."""
+    return [f"{p} changes a dependency or build setting" for p in changed if PurePosixPath(p).name.lower() in BUILD_FILES]
