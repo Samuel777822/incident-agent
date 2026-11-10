@@ -298,8 +298,79 @@ def _database_url() -> str:
     return os.getenv("DATABASE_URL", "").strip()
 
 
+import threading as _threading
+import time as _time
+
+_POOL = _threading.local()
+POOL_MAX_IDLE = 4            # open connections kept per thread
+POOL_MAX_AGE = 300.0         # seconds: older connections are replaced
+POOL_PING_AFTER = 60.0       # seconds idle: ping before reuse (the server may have closed it)
+
+
+class _PooledConnection:
+    """A PostgreSQL connection that goes back to a small per-thread pool on close() instead of being closed.
+
+    Why: every query used to open a NEW connection (network + TLS handshake to the database). One dashboard load made dozens,
+    which made the projects page take seconds. close() rolls back anything uncommitted first, so nothing leaks between uses; a
+    nested get_connection() always gets a DIFFERENT connection, so one function never rolls back another's transaction."""
+
+    __slots__ = ("_raw", "_born", "_done")
+
+    def __init__(self, raw, born: float):
+        self._raw, self._born, self._done = raw, born, False
+
+    def __getattr__(self, name):
+        return getattr(self._raw, name)
+
+    def close(self) -> None:
+        if self._done:
+            return
+        self._done = True
+        raw = self._raw
+        try:
+            if raw.closed or raw.broken:
+                raise RuntimeError("connection is gone")
+            from psycopg import pq
+            if raw.info.transaction_status != pq.TransactionStatus.IDLE:
+                raw.rollback()
+            idle = getattr(_POOL, "idle", None)
+            if idle is None:
+                idle = _POOL.idle = []
+            if len(idle) < POOL_MAX_IDLE and _time.monotonic() - self._born < POOL_MAX_AGE:
+                idle.append((raw, self._born, _time.monotonic()))
+                return
+        except Exception:
+            pass
+        try:
+            raw.close()
+        except Exception:
+            pass
+
+
+def _pooled_pg(url: str):
+    import psycopg
+    from psycopg.rows import dict_row
+    idle = getattr(_POOL, "idle", None) or []
+    now = _time.monotonic()
+    while idle:
+        raw, born, last = idle.pop()
+        try:
+            if raw.closed or raw.broken or now - born > POOL_MAX_AGE:
+                raise RuntimeError("stale")
+            if now - last > POOL_PING_AFTER:
+                raw.execute("SELECT 1")
+                raw.rollback()
+            return _PooledConnection(raw, born)
+        except Exception:
+            try:
+                raw.close()
+            except Exception:
+                pass
+    return _PooledConnection(psycopg.connect(url, row_factory=dict_row, connect_timeout=10), now)
+
+
 def get_connection():
-    """Open one short-lived connection; production must provide PostgreSQL."""
+    """A PostgreSQL connection (reused from a small per-thread pool) or SQLite locally; production must provide PostgreSQL."""
     url = _database_url()
     if url.startswith(("postgres://", "postgresql://")):
         try:
@@ -307,7 +378,9 @@ def get_connection():
             from psycopg.rows import dict_row
         except ImportError as exc:
             raise RuntimeError("PostgreSQL support requires psycopg; install requirements.txt") from exc
-        return psycopg.connect(url, row_factory=dict_row, connect_timeout=10)
+        if os.getenv("DB_POOL", "1").strip().lower() in ("0", "false", "no", "off"):
+            return psycopg.connect(url, row_factory=dict_row, connect_timeout=10)
+        return _pooled_pg(url)
     if os.getenv("APP_ENV", "development").lower() == "production":
         raise RuntimeError("DATABASE_URL must point to PostgreSQL in production")
     path = os.getenv("PORTAL_DB_PATH", "portal.db")

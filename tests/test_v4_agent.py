@@ -286,7 +286,7 @@ def test_case_buttons_on_the_project_page(web_env, monkeypatch):
     _, headers, _ = _request(f"/projects/{project_id}/incidents/{inc['id']}/pause", method="POST", cookie=cookie, form={"csrf": csrf})
     assert "case=paused" in str(headers) and portal_db.get_incident_row(inc["id"])["status"] == "paused"
     _, _, page = _request(f"/projects/{project_id}?case=paused", cookie=cookie)
-    assert "Start this case" in page and "spends nothing" in page
+    assert "Resume (continues where it stopped)" in page and "spends nothing" in page
     _request(f"/projects/{project_id}/incidents/{inc['id']}/resume", method="POST", cookie=cookie, form={"csrf": csrf})
     assert portal_db.get_incident_row(inc["id"])["status"] == "diagnosing"
     # a fix waiting as a pull request: the beginner steps and the "I merged it" button
@@ -473,3 +473,73 @@ def test_the_report_box_teaches_how_to_write_a_request():
     for text in ("How to write a request the engineer can act on", "One problem (or one change) per request", "What you did",
                  "copied word for word", "Leave out", "Too broad"):
         assert text in card, text
+
+
+# ============================================================================================ dashboard, speed, run again
+def test_project_cards_never_put_a_link_inside_a_link(web_env):
+    import re
+    from test_v3_web import _setup
+    from test_web_app import _request
+    _user, csrf, cookie, project_id = _setup()
+    _request(f"/projects/{project_id}/report", method="POST", cookie=cookie, form={"csrf": csrf, "text": "the Send button does nothing"})
+    _, _, page = _request("/dashboard", cookie=cookie)
+    card = page[page.index("class='card project-card'"):]
+    card = card[:card.index("</article>")]
+    assert "Open project" in card and "Latest:" in card
+    assert not re.search(r"<a [^>]*>(?:(?!</a>).)*<a ", card, re.S)          # no <a> opened inside another <a>
+
+
+def test_the_connection_pool_reuses_rolls_back_and_never_shares(monkeypatch):
+    class Info:
+        transaction_status = 0
+
+    class Raw:
+        made = 0
+
+        def __init__(self):
+            Raw.made += 1
+            self.closed = self.broken = False
+            self.info = Info()
+            self.rollbacks = 0
+
+        def execute(self, *a):
+            return None
+
+        def rollback(self):
+            self.rollbacks += 1
+            self.info.transaction_status = 0
+
+        def close(self):
+            self.closed = True
+    import types
+    fake = types.SimpleNamespace(connect=lambda *a, **k: Raw(), pq=types.SimpleNamespace(TransactionStatus=types.SimpleNamespace(IDLE=0)))
+    monkeypatch.setitem(__import__("sys").modules, "psycopg", fake)
+    monkeypatch.setitem(__import__("sys").modules, "psycopg.rows", types.SimpleNamespace(dict_row=None))
+    monkeypatch.setitem(__import__("sys").modules, "psycopg.pq", fake.pq)
+    monkeypatch.setattr(portal_db, "_database_url", lambda: "postgresql://x")
+    portal_db._POOL.idle = []
+    a = portal_db.get_connection()
+    b = portal_db.get_connection()                         # nested: a different connection
+    assert a._raw is not b._raw and Raw.made == 2
+    a._raw.info.transaction_status = 2                     # left in a transaction
+    a.close()
+    assert a._raw.rollbacks == 1                           # rolled back before reuse
+    c = portal_db.get_connection()
+    assert c._raw is a._raw and Raw.made == 2              # reused, no new connection
+    b.close(); c.close()
+    monkeypatch.setenv("DB_POOL", "0")
+    assert isinstance(portal_db.get_connection(), Raw)     # the switch turns pooling off
+
+
+def test_run_again_reopens_the_same_case_without_retyping(web_env):
+    from test_v3_web import _setup
+    from test_web_app import _request
+    _user, csrf, cookie, project_id = _setup()
+    _request(f"/projects/{project_id}/report", method="POST", cookie=cookie, form={"csrf": csrf, "text": "the cart total is wrong"})
+    inc = portal_db.list_incidents(project_id)[0]
+    portal_db.mark_remediation_needs_human(inc["id"], project_id, "stopped")
+    _, _, page = _request(f"/projects/{project_id}", cookie=cookie)
+    assert "Run again" in page
+    _, headers, _ = _request(f"/projects/{project_id}/incidents/{inc['id']}/rerun", method="POST", cookie=cookie, form={"csrf": csrf})
+    assert "case=rerun" in str(headers) and portal_db.get_incident_row(inc["id"])["status"] == "diagnosing"
+    assert len(portal_db.list_incidents(project_id)) == 1                   # the same case, not a new one

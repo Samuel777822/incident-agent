@@ -485,6 +485,14 @@ pre.log{max-height:260px;overflow:auto;white-space:pre-wrap;background:#0a0610;b
 fieldset.choice{border:1px solid var(--line);border-radius:12px;padding:12px 14px}fieldset.choice legend{font-weight:650;padding:0 6px}
 fieldset.choice .checkbox{margin:8px 0}
 .project-card .stats{margin:8px 0}
+.project-card{display:flex;flex-direction:column;gap:2px;min-width:0;overflow:hidden}
+.project-card .pc-head{display:flex;align-items:flex-start;justify-content:space-between;gap:10px}
+.project-card .pc-head h3{margin:0;min-width:0;overflow-wrap:anywhere;line-height:1.25}
+.project-card .pc-head h3 a{color:inherit;text-decoration:none}.project-card .pc-head h3 a:hover{text-decoration:underline}
+.project-card .pc-head .pill{flex:none;white-space:nowrap;max-width:55%;overflow:hidden;text-overflow:ellipsis}
+.project-card p{margin:6px 0;overflow-wrap:anywhere;word-break:break-word}
+.project-card .pc-latest a{overflow-wrap:anywhere}
+.project-card .pc-foot{margin-top:auto;padding-top:12px}
 .price-grid{display:grid;grid-template-columns:repeat(auto-fit,minmax(260px,1fr));gap:18px;margin-top:30px}
 .price-card{display:flex;flex-direction:column;gap:6px;background:linear-gradient(145deg,#170d22,#0f0817);border:1px solid var(--line);border-radius:16px;padding:22px}
 .price-card.featured{border-color:#e11d2a99;box-shadow:0 0 28px #e11d2a2a}
@@ -2630,7 +2638,9 @@ def _page_dashboard(request):
         latest = project.get("latest_incident")
         if latest:
             pr = (f" · <a href='{_escape(latest['pr_url'])}' target='_blank' rel='noopener'>PR</a>" if latest.get("pr_url") else "")
-            activity = (f"<p class='muted'>Latest: <a href='/projects/{_escape(project['id'])}/incidents/{_escape(latest['id'])}'>{_escape(str(latest['signature'])[:80])}</a>"
+            sig = str(latest["signature"])
+            activity = (f"<p class='muted pc-latest'>Latest: <a href='/projects/{_escape(project['id'])}/incidents/{_escape(latest['id'])}' "
+                        f"title='{_escape(sig[:300])}'>{_escape(sig[:60] + ('…' if len(sig) > 60 else ''))}</a>"
                         f" · {_escape(_incident_label(latest['status']))}{pr}</p>")
         else:
             activity = "<p class='muted'>No bugs so far.</p>" if css == "green" else ""
@@ -2648,10 +2658,12 @@ def _page_dashboard(request):
             hint = "<p class='muted'>Live monitoring starts when your app redeploys. Push checks already work.</p>"
         elif state in ("Never checked in", "Monitor offline"):
             hint = "<p class='bad'>The monitor is not checking in. Open the project to see how to fix it.</p>"
-        cards.append(f"<a class='card project-card' href='/projects/{_escape(project['id'])}'><div class='row'><h3>{_escape(project['name'])}</h3>{_pill(state, css)}</div>"
-                     f"<p class='muted'>{_escape(project['repo_owner'])}/{_escape(project['repo_name'])} · {_escape(project['branch'])}</p>"
+        purl = f"/projects/{_escape(project['id'])}"
+        cards.append(f"<article class='card project-card'><div class='pc-head'><h3><a href='{purl}'>{_escape(project['name'])}</a></h3>{_pill(state, css)}</div>"
+                     f"<p class='muted pc-repo'>{_escape(project['repo_owner'])}/{_escape(project['repo_name'])} · {_escape(project['branch'])}</p>"
                      f"<div class='stats'>{_pill(WATCH_LABELS.get(project.get('watch_mode') or 'both', 'Push guard'))}{_pill(MODE_LABELS.get(project['mode'], project['mode']))}</div>"
-                     f"{check}<p class='muted'>Open bugs: {project['incident_open']} of {project['incident_total']}</p>{activity}{hint}</a>")
+                     f"{check}<p class='muted'>Open bugs: {project['incident_open']} of {project['incident_total']}</p>{activity}{hint}"
+                     f"<div class='pc-foot'><a class='button primary' href='{purl}'>Open project</a></div></article>")
     listing = "".join(cards) or "<div class='empty'>No projects yet. Connect a GitHub repository and your next push is tested automatically.</div>"
     for waiting in [p for p in projects if p.get("gate_state") == portal_db.GATE_WAITING]:
         banner = (f"<article class='card gate-banner'><div class='row'><div><div class='eyebrow'>Action needed</div>"
@@ -3597,6 +3609,14 @@ def _page_case_action(request, project_id, incident_id, action):
         return _redirect(back + "?case=started#case-" + incident_id)
     from fixengine import store as fx_store
     bug = fx_store.get_bug_by_incident(incident_id)
+    if action == "rerun":
+        target = row.get("case_id") or incident_id
+        if bug:
+            fx_store.add_client_reply(target, "Run again: the owner asked the agent to work on this case once more (same request).")
+            fx_store.update_bug(bug["id"], status="open", closed_at=None, stop_reason="")
+        portal_db.set_live_result(target, "")
+        portal_db.reopen_incident_with_reply(target, project_id, "Run again (requested by the owner)")
+        return _redirect(back + "?case=rerun#case-" + target)
     if action == "keepgoing":
         if bug:
             from fixengine import config as fx_cfg
@@ -3693,6 +3713,7 @@ CASE_FLASH = {
     "escalate_none": ("amber", "The strongest model already looked at this case. Reply on the case to tell it what it got wrong."),
     "paused": ("amber", "Paused. The agent stops working on this case and spends nothing until you press Start."),
     "started": ("green", "Started. The agent picks this case up in a few seconds."),
+    "rerun": ("green", "Running again with your original request. The agent picks it up in a few seconds and starts from what was already found."),
     "paused_all": ("amber", "All open cases are paused. Start the ones you want the agent to work on."),
     "auto_on": ("green", "Auto-start is on: problems the agent finds by itself are worked on right away."),
     "auto_off": ("amber", "Auto-start is off: problems the agent finds by itself wait (paused) until you press Start. Your own reports always start."),
@@ -4403,7 +4424,7 @@ def _dispatch(request: Request) -> Response:
     match = re.fullmatch(r"/projects/([0-9a-f-]{36})/site-url", request.path)
     if match:
         return _page_site_url(request, match.group(1))
-    match = re.fullmatch(r"/projects/([0-9a-f-]{36})/incidents/([0-9a-f-]{36})/(pause|resume|merged|undo|escalate|keepgoing)", request.path)
+    match = re.fullmatch(r"/projects/([0-9a-f-]{36})/incidents/([0-9a-f-]{36})/(pause|resume|merged|undo|escalate|keepgoing|rerun)", request.path)
     if match:
         return _page_case_action(request, match.group(1), match.group(2), match.group(3))
     match = re.fullmatch(r"/projects/([0-9a-f-]{36})/host-ready", request.path)

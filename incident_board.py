@@ -309,8 +309,9 @@ def guide_html(inc: dict, project_id: str, csrf: str, pr_url: str) -> str:
     if status in ("diagnosing", "queued", "processing", "awaiting_choice"):
         parts.append(_post_button(base + "/pause", csrf, "Pause this case"))
     if status == "paused":
-        parts.append("<p class='guide-line'>This case is paused. The agent does nothing (and spends nothing) until you start it.</p>"
-                     + _post_button(base + "/resume", csrf, "Start this case", primary=True))
+        parts.append("<p class='guide-line'>This case is paused. The agent does nothing (and spends nothing) until you resume it. "
+                     "It continues where it stopped: earlier findings and edits are kept.</p>"
+                     + _post_button(base + "/resume", csrf, "Resume (continues where it stopped)", primary=True))
     if live.startswith("BUDGET:"):
         parts.append("<div class='guide'><b>Keep going?</b><div class='guide-text'>" + _e(live[7:].strip()) + "</div>"
                      + _post_button(base + "/keepgoing", csrf, "Keep going", primary=True)
@@ -335,6 +336,10 @@ def guide_html(inc: dict, project_id: str, csrf: str, pr_url: str) -> str:
             "<b>Deployments</b> page.</li>"
             "<li>Come back here and press the button below. The agent opens your live site and tells you if the problem is gone.</li></ol>"
             + _post_button(base + "/merged", csrf, "I merged it, check my site", primary=True) + "</div>")
+    if status in ("needs_human", "resolved", "diagnosed") and not live.startswith(("NEEDS YOU", "BUDGET:")):
+        parts.append(_post_button(base + "/rerun", csrf, "Run again",
+                                  confirm="The agent works on this case again with your original request and everything found so far. Continue?")
+                     + "<span class='guide-line'> Same request, no need to type it again; it starts from what was already found.</span>")
     if status == "resolved" and stage in ("pushed", "verified", "verifying", "merged", "resolved") and (inc.get("pr_url") or "pushed" in stage
                                                                                                     or stage in ("verified", "verifying")):
         parts.append(_post_button(base + "/undo", csrf, "Undo this fix", danger=True,
