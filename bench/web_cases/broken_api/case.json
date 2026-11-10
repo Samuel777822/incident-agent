@@ -1,0 +1,40 @@
+{
+ "what": "The chapter page calls the Bible API with a space instead of a slash; the API answers 404 and the page says 'Failed to load chapter'.",
+ "events": [
+  {
+   "message": "GET https://bible-api.example/isaiah 1 failed with HTTP 404",
+   "evidence": {
+    "kind": "failed_request",
+    "page": "/isaiah/1",
+    "request": "GET https://bible-api.example/isaiah 1",
+    "status": 404,
+    "response": "{\"error\":\"not found\"}"
+   }
+  },
+  {
+   "message": "Failed to load chapter",
+   "evidence": {
+    "kind": "ui_error_text",
+    "page": "/isaiah/1",
+    "dom": "div#error"
+   }
+  }
+ ],
+ "repo": {
+  "index.html": "<div id='verses'></div><div id='error'></div><script src='app.js'></script>",
+  "app.js": "async function load(book, ch){\n  const r = await fetch('https://bible-api.example/' + book + ' ' + ch);\n  if(!r.ok){ document.getElementById('error').textContent='Failed to load chapter'; return; }\n  document.getElementById('verses').textContent = (await r.json()).text;\n}\nload('isaiah', 1);\n"
+ },
+ "expect": {
+  "cases": 1,
+  "paid_diagnoses": 1,
+  "files": [
+   "app.js"
+  ],
+  "fix_contains": "'/' + ch",
+  "verification": [
+   {
+    "goto": "/isaiah/1"
+   }
+  ]
+ }
+}

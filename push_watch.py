@@ -308,7 +308,7 @@ def run_check(check: dict, *, runner=None, snapshot=None, cfg: dict | None = Non
     traceback_text = (f"Commit {check['sha']} on {check.get('branch') or check.get('project_branch')}: {summary}\n\n"
                       f"{result.output}")[-6000:]
     incident_id, _new = portal_db.ingest_event(check["project_id"], timestamp=portal_db._now(), level="ERROR", message=message[:2000],
-                                               traceback=traceback_text, signature=_signature(first))
+                                               traceback=traceback_text, signature=_signature(first), case_ok=False)
     if incident_id:
         portal_db.mark_incident_source(incident_id, "push", check["sha"])
         own_fix = AGENT_MARK in str(check.get("commit_message") or "")
@@ -417,3 +417,35 @@ def handle_webhook(project_id: str, event: str, body: bytes, signature: str) -> 
     if not check_id:
         return 429, {"error": "too many pushes this hour; the newest one will be checked by the poller"}
     return 202, {"ok": True, "check_id": check_id, "queued": created}
+
+
+def clean_repository(project: dict, token: str) -> dict:
+    """On project delete, if the owner ticks 'also clean my repository' (v3.1): remove OUR webhook and OUR agent-daemon/fix-...
+    branches. Never touches the owner's own branches, code or the installed monitor files. Best effort; reports what it did."""
+    done = {"webhook": False, "branches": 0, "errors": []}
+    try:
+        api = _api(project)
+    except RemediationError as exc:
+        done["errors"].append(str(exc))
+        return done
+    url = webhook_url(project["id"])
+    headers = _headers(token)
+    try:
+        with httpx.Client(headers=headers, timeout=httpx.Timeout(20, connect=8)) as client:
+            hooks = client.get(f"{api}/hooks", params={"per_page": 100})
+            if hooks.status_code == 200:
+                for h in hooks.json():
+                    if str((h.get("config") or {}).get("url", "")).rstrip("/") == url:
+                        done["webhook"] = client.delete(f"{api}/hooks/{h['id']}").status_code in (204, 404)
+            refs = client.get(f"{api}/git/matching-refs/heads/agent-daemon/fix-")
+            if refs.status_code == 200:
+                for ref in refs.json()[:100]:
+                    name = str(ref.get("ref", ""))
+                    if name.startswith("refs/heads/agent-daemon/fix-"):
+                        if client.delete(f"{api}/git/{name}").status_code in (204, 422):
+                            done["branches"] += 1
+    except httpx.HTTPError:
+        done["errors"].append("Could not reach GitHub.")
+    finally:
+        headers["Authorization"] = ""
+    return done

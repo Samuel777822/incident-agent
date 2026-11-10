@@ -208,8 +208,14 @@ def render_board(project_id: str, incidents: list, mode: str) -> str:
             ago_label = f"<span title='{_e(ist_ts)}'>{ago_label} ({_e(ist_ts)})</span>"
         meta = [("caught on push " + _e(str(inc.get("commit_sha") or "")[:7])) if inc.get("source") == "push"
                 else f"{_e(inc.get('occurrences'))} events", ago_label]
+        merged = int(inc.get("merged_count") or 0)
+        if merged:
+            meta.insert(0, f"<span class='pill tone-blue'>{merged} more report{'s' if merged != 1 else ''} merged into this case</span>")
         if stage.get("detail"):
-            meta.insert(0, "<b>" + _e(stage["detail"][:140]) + "</b>")
+            meta.insert(0, "<b>" + _e(stage["detail"][:200]) + "</b>")
+        live = str(inc.get("live_result") or "")
+        if live:
+            meta.insert(0, "<b>" + _e(live.splitlines()[0][:220]) + "</b>")
         if category:
             meta.append(_e(category + (f" · {confidence} confidence" if confidence else "")))
         if inc.get("fx_path"):
@@ -219,7 +225,7 @@ def render_board(project_id: str, incidents: list, mode: str) -> str:
             buttons.append(f"<a class='button primary' href='{_e(pr_url)}' target='_blank' rel='noopener'>Open fix pull request</a>")
         buttons.append(f"<a class='button' href='/projects/{_e(project_id)}/incidents/{_e(iid)}'>Full details &amp; diff</a>")
         cards.append(
-            f"<article class='inc' data-active='{1 if stage['active'] else 0}'>"
+            f"<article class='inc' id='case-{_e(iid)}' data-active='{1 if stage['active'] else 0}'>"
             f"<details data-id='{_e(iid)}'><summary>"
             f"<div class='inc-top'><strong>Incident {_e(iid[:8])}</strong>"
             f"<span class='pill tone-{_e(stage['tone'])}'>{_e(stage['headline'])}</span></div>"

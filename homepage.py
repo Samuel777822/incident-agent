@@ -1,4 +1,40 @@
 HOME_JS = """(function() {
+  // v3.1: every form submits ONCE. A second click (or Enter) while the first request is still running is ignored, and the
+  // button says "Working…" so it is clear something is happening. Restored when the page is shown again from the back button.
+  document.addEventListener('submit', function(ev) {
+    var form = ev.target;
+    if (!form || form.tagName !== 'FORM' || form.hasAttribute('data-no-once')) { return; }
+    if (form.getAttribute('data-busy') === '1') { ev.preventDefault(); ev.fxDuplicate = true; return; }
+    form.setAttribute('data-busy', '1');
+    var btns = form.querySelectorAll('button[type=submit], button:not([type]), input[type=submit]');
+    for (var i = 0; i < btns.length; i++) {
+      (function(b) {
+        b.setAttribute('data-label', b.tagName === 'INPUT' ? b.value : b.textContent);
+        if (b.tagName === 'INPUT') { b.value = 'Working…'; } else { b.textContent = 'Working…'; }
+        b.setAttribute('aria-busy', 'true');
+        setTimeout(function() { b.disabled = true; }, 0);   // after the browser has read the clicked button's value
+      })(btns[i]);
+    }
+  }, true);
+  function restore(form) {
+    form.removeAttribute('data-busy');
+    var btns = form.querySelectorAll('[data-label]');
+    for (var j = 0; j < btns.length; j++) {
+      var b = btns[j];
+      if (b.tagName === 'INPUT') { b.value = b.getAttribute('data-label'); } else { b.textContent = b.getAttribute('data-label'); }
+      b.removeAttribute('data-label'); b.disabled = false; b.removeAttribute('aria-busy');
+    }
+  }
+  // A form handled by a script (fetch, payment widget) cancels the normal submit: give its button back right away.
+  document.addEventListener('submit', function(ev) {
+    if (ev.defaultPrevented && !ev.fxDuplicate && ev.target && ev.target.getAttribute && ev.target.getAttribute('data-busy') === '1') {
+      setTimeout(function() { restore(ev.target); }, 0);
+    }
+  }, false);
+  window.addEventListener('pageshow', function() {
+    var forms = document.querySelectorAll('form[data-busy="1"]');
+    for (var i = 0; i < forms.length; i++) { restore(forms[i]); }
+  });
   // Nav dropdowns open on tap too (iOS Safari does not focus buttons, so :focus-within alone is not enough).
   document.addEventListener('click', function(ev) {
     var trigger = ev.target.closest ? ev.target.closest('.nav-trigger') : null;

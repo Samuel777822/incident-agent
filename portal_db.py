@@ -318,10 +318,19 @@ def get_connection():
     return conn
 
 
+def pg_sql(sql: str) -> str:
+    """SQLite-style SQL ('?' placeholders) to psycopg style ('%s').
+
+    A literal '%' (for example in LIKE 'user_report:%') must be doubled first: psycopg reads every single '%' as the start of a
+    placeholder, which crashed the 'Tell the agent what's broken' box on PostgreSQL ("Something went wrong on our side").
+    Values with '%' are always passed as parameters, so doubling the SQL text itself is always correct."""
+    return sql.replace("%", "%%").replace("?", "%s")
+
+
 def _execute(conn, sql: str, params=()):
     if isinstance(conn, sqlite3.Connection):
         return conn.execute(sql, params)
-    return conn.execute(sql.replace("?", "%s"), params)
+    return conn.execute(pg_sql(sql), params)
 
 
 def init_db() -> None:
@@ -382,6 +391,12 @@ def init_db() -> None:
             ("projects", "monitor_installed_at", "TEXT NOT NULL DEFAULT ''"),
             ("projects", "monitor_alerted_at", "TEXT NOT NULL DEFAULT ''"),
             ("push_checks", "static_done", "INTEGER NOT NULL DEFAULT 0"),
+            # v3.1: one case = one fix. Followers point at their case leader and never get their own AI diagnosis.
+            ("incidents", "case_id", "TEXT NOT NULL DEFAULT ''"),
+            ("incidents", "case_key", "TEXT NOT NULL DEFAULT ''"),
+            ("incidents", "merged_count", "INTEGER NOT NULL DEFAULT 0"),
+            ("incidents", "check_until", "TEXT NOT NULL DEFAULT ''"),
+            ("incidents", "live_result", "TEXT NOT NULL DEFAULT ''"),
         ]
         for table, column, ddl in additions:
             if isinstance(conn, sqlite3.Connection):
@@ -403,8 +418,38 @@ def init_db() -> None:
             conn.commit()
         except Exception:
             conn.rollback()
+        _ensure_one_open_incident_index(conn)
     finally:
         conn.close()
+
+
+OPEN_SQL = "status NOT IN ('resolved','reverted','merged')"
+
+
+def _ensure_one_open_incident_index(conn) -> None:
+    """At most ONE open incident per (project, signature), enforced by the database (v3.1).
+
+    Older databases can already hold duplicates (the old check-then-insert could race on PostgreSQL). They are merged first:
+    the newest one stays, the others become followers of it (status 'merged'), so the unique index can be created safely."""
+    try:
+        groups = _execute(conn, f"""SELECT project_id, signature, COUNT(*) AS n FROM incidents WHERE {OPEN_SQL}
+                                    GROUP BY project_id, signature HAVING COUNT(*) > 1""").fetchall()
+        for g in groups:
+            rows = _execute(conn, f"""SELECT id FROM incidents WHERE project_id=? AND signature=? AND {OPEN_SQL}
+                                      ORDER BY created_at DESC""", (g["project_id"], g["signature"])).fetchall()
+            keep = rows[0]["id"]
+            for r in rows[1:]:
+                _execute(conn, "UPDATE incidents SET status='merged',case_id=?,stage='merged',stage_detail=? WHERE id=?",
+                         (keep, "Merged into the newer incident with the same error", r["id"]))
+                _execute(conn, "UPDATE incident_jobs SET status='done',locked_until=NULL WHERE incident_id=?", (r["id"],))
+            _execute(conn, "UPDATE incidents SET merged_count=merged_count+? WHERE id=?", (len(rows) - 1, keep))
+        _execute(conn, f"CREATE UNIQUE INDEX IF NOT EXISTS idx_incidents_one_open ON incidents(project_id, signature) WHERE {OPEN_SQL}")
+        _execute(conn, "CREATE INDEX IF NOT EXISTS idx_incidents_case ON incidents(project_id, case_id)")
+        conn.commit()
+    except Exception:
+        conn.rollback()
+        import logging
+        logging.getLogger("portal_db").exception("could not create the one-open-incident index")
 
 
 def create_user(email: str, password_hash: str, name: str = "") -> str:
@@ -726,8 +771,10 @@ def allow_ingest(project_id: str, maximum: int = 300, window_seconds: int = 60) 
 
 
 def ingest_event(project_id: str, *, timestamp: str, level: str, message: str,
-                 traceback: str = "", signature: str = "unknown") -> tuple[str | None, bool]:
-    """Deduplicate and attach an event to a project-scoped open incident."""
+                 traceback: str = "", signature: str = "unknown", case_ok: bool = True) -> tuple[str | None, bool]:
+    """Deduplicate and attach an event to a project-scoped open incident.
+
+    case_ok=False (a failed push check): never attach to another case or to a just-fixed incident: a broken build is always handled."""
     digest = hashlib.sha256("\0".join((timestamp, level, message, traceback)).encode("utf-8")).hexdigest()
     conn = get_connection()
     try:
@@ -739,9 +786,31 @@ def ingest_event(project_id: str, *, timestamp: str, level: str, message: str,
         if cur.rowcount == 0:
             conn.commit()
             return None, False
-        row = _execute(conn, """SELECT id,occurrences,status,last_seen FROM incidents
-          WHERE project_id=? AND signature=? AND status NOT IN ('resolved','reverted')
+        row = _execute(conn, f"""SELECT id,occurrences,status,last_seen FROM incidents
+          WHERE project_id=? AND signature=? AND {OPEN_SQL}
           ORDER BY created_at DESC LIMIT 1""", (project_id,signature)).fetchone()
+        if not row:
+            attached = _attach_to_case(conn, project_id, event_id, signature, message, traceback, timestamp) if case_ok else None
+            if attached:
+                conn.commit()
+                return attached, True
+            incident_id = _id()
+            import cases
+            key = json.dumps(cases.key_for(signature, message, traceback), sort_keys=True) if case_ok else ""
+            cur = _execute(conn, f"""INSERT INTO incidents
+              (id,project_id,signature,first_seen,last_seen,created_at,case_key)
+              VALUES(?,?,?,?,?,?,?) ON CONFLICT (project_id,signature) WHERE {OPEN_SQL} DO NOTHING""",
+              (incident_id,project_id,signature,timestamp,timestamp,_now(),key))
+            if cur.rowcount == 1:
+                _execute(conn, "UPDATE log_events SET incident_id=? WHERE id=? AND project_id=?",
+                         (incident_id,event_id,project_id))
+                _execute(conn, "INSERT INTO incident_jobs(incident_id,status,available_at,updated_at) VALUES(?,?,?,?) ON CONFLICT(incident_id) DO NOTHING",
+                         (incident_id,"queued",_now(),_now()))
+                conn.commit()
+                return incident_id, True
+            # Another worker created the same open incident a moment ago (the race the unique index closes): join it.
+            row = _execute(conn, f"""SELECT id,occurrences,status,last_seen FROM incidents
+              WHERE project_id=? AND signature=? AND {OPEN_SQL} ORDER BY created_at DESC LIMIT 1""", (project_id,signature)).fetchone()
         if row:
             incident_id = row["id"]
             reopened = False
@@ -768,10 +837,7 @@ def ingest_event(project_id: str, *, timestamp: str, level: str, message: str,
                 _execute(conn, "UPDATE incidents SET occurrences=occurrences+1,last_seen=? WHERE id=? AND project_id=?",
                          (timestamp,incident_id,project_id))
         else:
-            incident_id = _id()
-            _execute(conn, """INSERT INTO incidents
-              (id,project_id,signature,first_seen,last_seen,created_at)
-              VALUES(?,?,?,?,?,?)""", (incident_id,project_id,signature,timestamp,timestamp,_now()))
+            raise RuntimeError("could not create or find the open incident")
         _execute(conn, "UPDATE log_events SET incident_id=? WHERE id=? AND project_id=?",
                  (incident_id,event_id,project_id))
         _execute(conn, "INSERT INTO incident_jobs(incident_id,status,available_at,updated_at) VALUES(?,?,?,?) ON CONFLICT(incident_id) DO NOTHING",
@@ -785,10 +851,102 @@ def ingest_event(project_id: str, *, timestamp: str, level: str, message: str,
         conn.close()
 
 
+CASE_ACTIVE = ("diagnosing", "queued", "processing", "awaiting_choice", "diagnosed")
+
+
+def _attach_to_case(conn, project_id: str, event_id: str, signature: str, message: str, traceback: str,
+                    timestamp: str) -> str | None:
+    """Attach a new event to an existing case instead of opening a new paid investigation. Returns the incident id it was
+    attached to, or None when this is a genuinely new problem. Runs inside ingest_event's transaction."""
+    import cases
+    now = _now()
+    active = ",".join("'" + s + "'" for s in CASE_ACTIVE)
+    # 1. The same error was just fixed (inside the check window) or already belongs to a case: count it, spend nothing.
+    prior = _execute(conn, """SELECT id,status,case_id,check_until FROM incidents WHERE project_id=? AND signature=?
+        AND status IN ('resolved','merged') ORDER BY created_at DESC LIMIT 1""", (project_id, signature)).fetchone()
+    if prior:
+        leader_id = prior["case_id"] if prior["status"] == "merged" and prior["case_id"] else prior["id"]
+        leader = _execute(conn, "SELECT id,status,check_until FROM incidents WHERE id=? AND project_id=?",
+                          (leader_id, project_id)).fetchone()
+        if leader and (leader["status"] in CASE_ACTIVE or (leader["check_until"] and leader["check_until"] > now)):
+            _execute(conn, "UPDATE incidents SET occurrences=occurrences+1,last_seen=? WHERE id=?", (timestamp, prior["id"]))
+            _execute(conn, "UPDATE log_events SET incident_id=? WHERE id=? AND project_id=?", (prior["id"], event_id, project_id))
+            return prior["id"]
+    # 2. A different error text with the same cause (same model, same outside host, same page, report + monitor at once).
+    key = cases.key_for(signature, message, traceback)
+    if not any(key.values()):
+        return None
+    rows = _execute(conn, f"""SELECT id,case_key,first_seen,last_seen,status,check_until FROM incidents
+        WHERE project_id=? AND case_id='' AND case_key<>'' AND (status IN ({active}) OR (status='resolved' AND check_until>?))
+        ORDER BY last_seen DESC LIMIT 25""", (project_id, now)).fetchall()
+    leader_id, why = cases.find_leader([dict(r) for r in rows], key, now_iso=now)
+    if not leader_id:
+        return None
+    follower = _id()
+    _execute(conn, """INSERT INTO incidents (id,project_id,signature,status,first_seen,last_seen,created_at,case_id,case_key,stage,stage_detail,stage_at)
+        VALUES(?,?,?,'merged',?,?,?,?,?,'merged',?,?)""",
+        (follower, project_id, signature, timestamp, timestamp, now, leader_id, json.dumps(key, sort_keys=True),
+         ("Same cause as an open case: " + why)[:300], now))
+    _execute(conn, "UPDATE log_events SET incident_id=? WHERE id=? AND project_id=?", (follower, event_id, project_id))
+    _execute(conn, "UPDATE incidents SET merged_count=merged_count+1,last_seen=? WHERE id=? AND project_id=?", (timestamp, leader_id, project_id))
+    _execute(conn, "INSERT INTO audit_log(id,project_id,action,detail,created_at) VALUES(?,?,?,?,?)",
+             (_id(), project_id, "incident_merged", json.dumps({"incident_id": follower, "case": leader_id, "why": why}, sort_keys=True), now))
+    return follower
+
+
+def case_followers(incident_id: str, limit: int = 8) -> list[dict]:
+    """The followers of a case (newest first), each with its first event: their evidence goes to the leader's fix."""
+    conn = get_connection()
+    try:
+        rows = _execute(conn, """SELECT i.id,i.signature,i.occurrences,i.first_seen,
+              (SELECT message FROM log_events e WHERE e.incident_id=i.id ORDER BY e.timestamp ASC LIMIT 1) AS message,
+              (SELECT traceback FROM log_events e WHERE e.incident_id=i.id ORDER BY e.timestamp ASC LIMIT 1) AS traceback
+            FROM incidents i WHERE i.case_id=? ORDER BY i.first_seen DESC LIMIT ?""", (incident_id, limit)).fetchall()
+        return [dict(r) for r in rows]
+    finally:
+        conn.close()
+
+
+def start_check_window(incident_id: str, seconds: int | None = None) -> str:
+    """After a fix is pushed: related events for a few minutes are the old problem draining away, not new work."""
+    import cases
+    until = (datetime.now(timezone.utc) + timedelta(seconds=seconds or cases.check_window_seconds())).isoformat(timespec="seconds")
+    conn = get_connection()
+    try:
+        _execute(conn, "UPDATE incidents SET check_until=? WHERE id=?", (until, incident_id))
+        conn.commit()
+    finally:
+        conn.close()
+    return until
+
+
+def set_live_result(incident_id: str, text: str) -> None:
+    conn = get_connection()
+    try:
+        _execute(conn, "UPDATE incidents SET live_result=? WHERE id=?", (text[:2000], incident_id))
+        conn.commit()
+    finally:
+        conn.close()
+
+
+def recent_open_report(project_id: str, signature: str, minutes: int = 5) -> str | None:
+    """The same report text sent again within a few minutes (double click, impatient re-send): the id of the case on it."""
+    since = (datetime.now(timezone.utc) - timedelta(minutes=minutes)).isoformat(timespec="seconds")
+    conn = get_connection()
+    try:
+        row = _execute(conn, """SELECT id,case_id FROM incidents WHERE project_id=? AND signature=? AND created_at>?
+            ORDER BY created_at DESC LIMIT 1""", (project_id, signature, since)).fetchone()
+        if not row:
+            return None
+        return row["case_id"] or row["id"]
+    finally:
+        conn.close()
+
+
 def list_incidents(project_id: str, limit: int = 100):
     conn = get_connection()
     try:
-        rows = _execute(conn, "SELECT * FROM incidents WHERE project_id=? ORDER BY last_seen DESC LIMIT ?",
+        rows = _execute(conn, "SELECT * FROM incidents WHERE project_id=? AND status<>'merged' ORDER BY last_seen DESC LIMIT ?",
                         (project_id,limit)).fetchall()
         return [dict(row) for row in rows]
     finally:
@@ -829,6 +987,9 @@ def claim_next_incident(*, min_occurrences: int = 5, min_age_seconds: int = 30,
           JOIN projects p ON p.id=i.project_id
           WHERE i.status IN ('diagnosing','queued','processing') AND i.occurrences>=? AND i.first_seen<=?
             AND p.paused=0 AND p.ai_consent_at<>'' AND p.active_until>? AND j.attempts<?
+            AND NOT EXISTS (SELECT 1 FROM incidents o WHERE o.project_id=i.project_id AND o.id<>i.id AND o.status='processing')
+            AND NOT EXISTS (SELECT 1 FROM fx_bugs b WHERE b.project_id=i.project_id AND b.incident_id<>i.id
+                            AND b.status IN ('github_testing','verifying'))
             AND ((j.status='queued' AND j.available_at<=?)
               OR (j.status='processing' AND j.locked_until<=?))
           ORDER BY i.first_seen ASC LIMIT 1""" + lock_clause,
@@ -2078,7 +2239,7 @@ def user_live_work(user_id: str, limit: int = 12) -> dict:
     conn = get_connection()
     try:
         incidents = _execute(conn, """SELECT i.*, p.name AS project_name, p.mode AS project_mode, p.branch AS project_branch
-            FROM incidents i JOIN projects p ON p.id=i.project_id WHERE p.user_id=?
+            FROM incidents i JOIN projects p ON p.id=i.project_id WHERE p.user_id=? AND i.status<>'merged'
             ORDER BY CASE WHEN i.status IN ('resolved','reverted') THEN 1 ELSE 0 END, i.last_seen DESC LIMIT ?""",
             (user_id, limit)).fetchall()
         checks = _execute(conn, """SELECT c.*, p.name AS project_name FROM push_checks c JOIN projects p ON p.id=c.project_id
@@ -2359,5 +2520,70 @@ def unpark_gate_incidents(project_id: str) -> int:
                  (project_id,))
         conn.commit()
         return cur.rowcount or 0
+    finally:
+        conn.close()
+
+
+def project_history(project_id: str, limit: int = 6) -> list[dict]:
+    """Earlier cases of this project and what fixed them (the on-call engineer's memory of this client)."""
+    conn = get_connection()
+    try:
+        rows = _execute(conn, """SELECT signature,root_cause,status,COALESCE(resolved_at,last_seen) AS when_at FROM incidents
+            WHERE project_id=? AND case_id='' AND root_cause<>'' ORDER BY last_seen DESC LIMIT ?""", (project_id, limit)).fetchall()
+        return [{"signature": r["signature"], "root_cause": r["root_cause"], "status": r["status"], "when": r["when_at"] or ""} for r in rows]
+    finally:
+        conn.close()
+
+
+def reopen_incident_with_reply(incident_id: str, project_id: str, text: str) -> bool:
+    """The client replied on a case: answer to the agent's question, or 'it still does not work'. The SAME case continues
+    (never a new incident), and it is queued again right away."""
+    now = _now()
+    conn = get_connection()
+    try:
+        row = _execute(conn, "SELECT id,status,case_id FROM incidents WHERE id=? AND project_id=?", (incident_id, project_id)).fetchone()
+        if not row:
+            return False
+        target = row["case_id"] or row["id"]
+        _execute(conn, "INSERT INTO log_events(id,project_id,timestamp,level,message,traceback,signature,dedupe_hash,incident_id) "
+                       "VALUES(?,?,?,?,?,?,?,?,?)",
+                 (_id(), project_id, now, "INFO", "[client reply] " + text[:300], "", "client_reply",
+                  hashlib.sha256(f"{target}\0{now}\0{text}".encode("utf-8")).hexdigest(), target))
+        cur = _execute(conn, f"""UPDATE incidents SET status='diagnosing',stage='queued',stage_detail=?,stage_at=?,check_until=''
+            WHERE id=? AND project_id=? AND status NOT IN ('merged')""",
+            ("Your reply was added to this case. The agent continues now.", now, target, project_id))
+        if cur.rowcount != 1:
+            conn.rollback()
+            return False
+        _execute(conn, """INSERT INTO incident_jobs(incident_id,status,attempts,available_at,locked_until,last_error,updated_at)
+            VALUES(?,?,?,?,NULL,'',?) ON CONFLICT(incident_id) DO UPDATE SET status='queued',attempts=0,available_at=excluded.available_at,
+            locked_until=NULL,last_error='',updated_at=excluded.updated_at""", (target, "queued", 0, now, now))
+        conn.commit()
+        return True
+    except Exception:
+        conn.rollback()
+        raise
+    finally:
+        conn.close()
+
+
+def requeue_incident(incident_id: str, project_id: str, detail: str) -> bool:
+    """Put a case back in the queue (the live site still fails after the pushed fix)."""
+    now = _now()
+    conn = get_connection()
+    try:
+        cur = _execute(conn, """UPDATE incidents SET status='diagnosing',resolved_at=NULL,check_until='',stage='queued',stage_detail=?,stage_at=?
+            WHERE id=? AND project_id=? AND status<>'merged'""", (detail[:300], now, incident_id, project_id))
+        if cur.rowcount != 1:
+            conn.rollback()
+            return False
+        _execute(conn, """INSERT INTO incident_jobs(incident_id,status,attempts,available_at,locked_until,last_error,updated_at)
+            VALUES(?,?,?,?,NULL,'',?) ON CONFLICT(incident_id) DO UPDATE SET status='queued',attempts=0,available_at=excluded.available_at,
+            locked_until=NULL,last_error='',updated_at=excluded.updated_at""", (incident_id, "queued", 0, now, now))
+        conn.commit()
+        return True
+    except Exception:
+        conn.rollback()
+        return False
     finally:
         conn.close()

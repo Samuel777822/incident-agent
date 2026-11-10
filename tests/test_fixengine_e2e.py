@@ -94,7 +94,7 @@ def test_each_try_sees_the_previous_failure_but_not_the_whole_history(world):
     incident_id, outcome = w.run_once()
     assert outcome == "pr_opened" and w.tiers(incident_id)[-2:] == [("haiku", "fail"), ("haiku", "pass")]
     second_prompt = w.adapters["haiku"].seen_prompts[1]
-    assert "WHAT WAS TRIED" in second_prompt and "SANDBOX OUTPUT FROM THE LAST ATTEMPT" in second_prompt
+    assert "WHAT WAS TRIED" in second_prompt and "TEST OUTPUT FROM THE LAST ATTEMPT" in second_prompt   # header renamed in v3
     assert "pct / 50" not in w.adapters["haiku"].seen_prompts[0]
 
 

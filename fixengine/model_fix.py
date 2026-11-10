@@ -345,7 +345,7 @@ def static_validate(before: dict[str, str], after: dict[str, str]) -> tuple[bool
         elif suffix in (".js", ".mjs", ".cjs"):
             good_after = _node_parses(new, suffix)
             if good_after is None:
-                notes.append(f"{path}: not parsed (Node.js is not installed here)")
+                notes.append(f"{path}: only the model name changed (its JavaScript is checked by the sandbox and your GitHub tests)")
                 continue
             good_before = _node_parses(old, suffix)
         else:

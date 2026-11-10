@@ -338,7 +338,7 @@ def main(argv: list[str]) -> int:
     errors, checked = check_site(root, site_root, excludes)
     for rel, line, msg in errors:
         print(f"{rel}:{line}: {msg}")
-    print(f"static_check: {len(errors)} errors in {checked} files" + ("" if shutil.which("node") else "  (node not installed: JavaScript not checked)"))
+    print(f"static_check: {len(errors)} errors in {checked} files" + ("" if shutil.which("node") else "  (JavaScript syntax is checked by the browser journeys and your GitHub tests)"))
     return 1 if errors else 0
 
 

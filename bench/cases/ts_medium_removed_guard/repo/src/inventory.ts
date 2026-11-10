@@ -11,7 +11,7 @@ export function resetStock(): void {
 }
 resetStock();
 
-export function getStock(sku: string): number {
+export async function getStock(sku: string): Promise<number> {
   const have = STOCK.get(sku);
   if (have === undefined) {
     throw new OutOfStock(`unknown sku: ${sku}`);

@@ -1,0 +1,25 @@
+{
+ "what": "The Send button's id was renamed in the HTML but not in the script, so clicking does nothing.",
+ "events": [
+  {
+   "message": "Dead click: button#send was clicked twice and nothing happened",
+   "evidence": {
+    "kind": "dead_click",
+    "page": "/",
+    "dom": "button#send \"Send\""
+   }
+  }
+ ],
+ "repo": {
+  "index.html": "<input id='msg'><button id='send-btn'>Send</button><ul id='log'></ul><script src='chat.js'></script>",
+  "chat.js": "document.getElementById('send').addEventListener('click', () => {\n  const li = document.createElement('li'); li.textContent = document.getElementById('msg').value;\n  document.getElementById('log').appendChild(li);\n});\n"
+ },
+ "expect": {
+  "cases": 1,
+  "files": [
+   "chat.js",
+   "index.html"
+  ],
+  "proof": "journey_fixed"
+ }
+}

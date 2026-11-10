@@ -54,6 +54,9 @@ DEFAULTS: dict = {
         "new_bugs_per_hour_per_user": 20,
         "cooldown_after_failures": 4,       # consecutive failed bugs
         "cooldown_minutes": 30,
+        # v3.1 on-call engineer: how much one try may look around before it must answer (each round is one model call)
+        "investigation_rounds": 3,
+        "investigation_requests_per_round": 3,
     },
     # Global monthly budget B (INR). For the ₹500 test: credits 500, B 400.
     "budget": {
@@ -63,6 +66,8 @@ DEFAULTS: dict = {
         "reserve_floor_fraction_of_credits": 0.95,
         "spike_hour_multiple": 6.0,          # last hour vs average hourly spend this month
         "spike_hour_min_inr": 40.0,          # ignore spikes below this
+        "project_hour_cap_inr": 150.0,       # v3.1: one project's AI spend per hour (~2.5 problems at the per-bug cap); above it ONLY that project waits
+        "project_pause_minutes": 60,
         "auto_grant_projection_fraction": 0.70,
         "auto_grant_high_tries": 2,
     },
@@ -98,6 +103,12 @@ DEFAULTS: dict = {
         "image_java": "fixengine-sandbox-java:1",
         "image_browser": "fixengine-sandbox-browser:1",   # optional: headless-browser journeys for static sites (see sandbox/Dockerfile.browser)
         "journey_timeout_seconds": 150,
+        # v3.1 live investigator (a real browser on the client's PUBLIC site; sandbox server only, one job at a time)
+        "investigate_memory": "1g",           # fits a 2 GB server when nothing else runs at the same time
+        "investigate_cpus": "1",
+        "investigate_pids": 512,
+        "investigate_timeout_seconds": 90,
+        "investigate_network": "fx-investigate",   # docker network with private ranges blocked (DEPLOY.md); "bridge" works too
         "max_repo_mb": 50,
         "max_repo_files": 6000,
     },

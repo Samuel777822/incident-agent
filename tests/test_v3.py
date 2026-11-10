@@ -438,7 +438,7 @@ def test_site_probe_opens_an_incident_only_after_two_bad_answers_and_never_for_o
 # ============================================================================================================ UI
 def test_ui_pieces_render_and_escape():
     import ui_flow
-    assert ui_flow.flow_diagram_html().count("flow-node") == 7 and "3 rounds" in ui_flow.flow_diagram_html()
+    assert ui_flow.flow_diagram_html().count("flow-node") == 8 and "3 failed GitHub rounds" in ui_flow.flow_diagram_html()
     card = ui_flow.report_card_html("abc", "tok<en>")
     assert "action='/projects/abc/report'" in card and "tok&lt;en&gt;" in card and "New" in card
     assert "Tell the agent" in ui_flow.new_feature_banner_html() and ui_flow.flash_html("nope") == ""

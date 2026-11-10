@@ -6,6 +6,8 @@ FROM mcr.microsoft.com/playwright/python:v1.48.0-jammy
 RUN useradd --uid 10001 --no-create-home --shell /usr/sbin/nologin sandbox \
  && mkdir -p /work && chown 10001:10001 /work
 COPY journey_runner.py /opt/journey_runner.py
+# v3.1: the live investigator (opens the client's PUBLIC site with network; see sandbox_service.py /investigate)
+COPY investigate.py /opt/investigate.py
 ENV HOME=/tmp
 USER 10001
 WORKDIR /work

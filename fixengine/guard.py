@@ -69,20 +69,69 @@ class Guard:
         self._spike_breaker(spend)
         return level
 
+    # ---- v3.1: one flooding project waits; everyone else keeps working ------------------------------------
+    def project_paused(self, project_id: str) -> str:
+        """'' when the project may use paid AI now, else a plain sentence for the customer (with when it continues).
+
+        Above `project_hour_cap_inr` of AI spend in the last hour, ONLY this project waits (its cases resume by themselves).
+        This replaced the old behaviour where one project's flood paused every paid model for every customer."""
+        if not project_id:
+            return ""
+        cfgb = self.cfg["budget"]
+        now = datetime.now(timezone.utc)
+        until = store.get_flag(f"project_pause:{project_id}")
+        if until and until > now.isoformat(timespec="seconds"):
+            return self._pause_text(until)
+        cap = float(cfgb.get("project_hour_cap_inr", 150.0) or 0)
+        if cap <= 0:
+            return ""
+        hour = store.spend_inr(project_id=project_id, since=(now - timedelta(hours=1)).isoformat(timespec="microseconds"))
+        if hour < cap:
+            return ""
+        until = (now + timedelta(minutes=int(cfgb.get("project_pause_minutes", 60) or 60))).isoformat(timespec="seconds")
+        store.set_flag(f"project_pause:{project_id}", until)
+        store.log_admin_action("project_pause", detail={"project_id": project_id, "last_hour": round(hour, 2), "until": until})
+        return self._pause_text(until)
+
+    @staticmethod
+    def _pause_text(until: str) -> str:
+        try:
+            at = datetime.fromisoformat(until).astimezone(timezone(timedelta(hours=5, minutes=30))).strftime("%H:%M IST")
+        except ValueError:
+            at = "within the hour"
+        return (f"This project used its AI budget for this hour, so the agent is waiting and continues by itself at {at}. "
+                "Nothing is lost and nothing is charged meanwhile.")
+
     def _spike_breaker(self, spend: float) -> None:
         cfgb = self.cfg["budget"]
         now = datetime.now(timezone.utc)
-        hour = store.spend_inr(since=(now - timedelta(hours=1)).isoformat(timespec="microseconds"))
+        since = (now - timedelta(hours=1)).isoformat(timespec="microseconds")
+        hour = store.spend_inr(since=since)
         if hour < float(cfgb["spike_hour_min_inr"]) or store.get_flag("spike_paused") == "1":
             return
         hours_elapsed = max(1.0, (now - now.replace(day=1, hour=0, minute=0, second=0, microsecond=0)).total_seconds() / 3600)
         normal = spend / hours_elapsed
-        if hour > normal * float(cfgb["spike_hour_multiple"]):
-            for tier in fx_config.PAID_TIERS:
-                store.set_flag(f"pause_{tier}", "1")
-            store.set_flag("spike_paused", "1")
-            store.log_admin_action("spike_breaker", detail={"last_hour": round(hour, 2), "normal_per_hour": round(normal, 2)})
-            notify.admin_spike(hour, normal)
+        if hour <= normal * float(cfgb["spike_hour_multiple"]):
+            return
+        # First pause the projects that cause the spike. Only if the rest of the spend is STILL a spike, pause everyone.
+        cap = float(cfgb.get("project_hour_cap_inr", 150.0) or 0)
+        rest = hour
+        for row in store.spend_by_project(since):
+            share = float(row["spend"] or 0)
+            if share < max(cap * 0.5, hour * 0.3):
+                break
+            until = (now + timedelta(minutes=int(cfgb.get("project_pause_minutes", 60) or 60))).isoformat(timespec="seconds")
+            store.set_flag(f"project_pause:{row['project_id']}", until)
+            store.log_admin_action("project_pause", detail={"project_id": row["project_id"], "last_hour": round(share, 2), "until": until})
+            rest -= share
+        if rest < float(cfgb["spike_hour_min_inr"]) or rest <= normal * float(cfgb["spike_hour_multiple"]):
+            return
+        # Last resort: the spike is spread over many projects (or a bug in our own loop). Pause every paid model.
+        for tier in fx_config.PAID_TIERS:
+            store.set_flag(f"pause_{tier}", "1")
+        store.set_flag("spike_paused", "1")
+        store.log_admin_action("spike_breaker", detail={"last_hour": round(hour, 2), "normal_per_hour": round(normal, 2)})
+        notify.admin_spike(hour, normal)
 
     def tier_paused_by_budget(self, tier: str, *, pack: bool, level: int | None = None) -> bool:
         """Kill-switch table from plan 9.3. Paid packs survive levels 3 and 4 but not the reserve floor."""

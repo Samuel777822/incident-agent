@@ -98,6 +98,28 @@ blocked), no Docker daemon, no PostgreSQL, no real GitHub, no AI provider keys.
 * Next.js 13/14 needs `experimental.instrumentationHook` for the server monitor, and Next.js 15.3+ for the browser part; the
   install result says so when it applies. An app with its own `instrumentation` file is not edited (the result explains the one line to add).
 
+## v3.1 "on-call engineer": checks for you (10 November 2026)
+
+Here (Windows laptop, no Docker, fake models): `python -m pytest -q` → `tests/test_v31.py` 33 passed. The other failures that remain
+were already failing on this laptop before the release (Windows paths in the static checker, the `edit7-lines` policy test, a
+monitor-install case); the full list and the comparison are at the end of the release message.
+
+After deploying, in this order:
+1. **Report box** (the crash in your screenshot): on a project, type "the home page title is wrong" and send. Expect the green
+   "Sent. The agent is opening your site…" message, never "Something went wrong". Send the same text again within 5 minutes:
+   "Already working on this".
+2. **Double click:** click "Send to the agent" twice quickly: one case only, the button says "Working…".
+3. **Sandbox server:** DEPLOY.md "Upgrading to the on-call engineer" step 2, then the one-line `run_in_docker` test.
+4. **Live investigator from the portal:** send a report on a project with a site address. The case shows "Looking at your live site
+   and code" and the report on the incident page lists what the browser saw. If it says "plain page fetch", the browser image or
+   `/investigate` is not reachable (check `systemctl status fx-sandbox`).
+5. **One case:** break one API call on a test site and reload the page 5 times: ONE case card with "N more reports merged".
+6. **After a push:** the card says "Pushed · check again in 30 seconds…", then "Verified on your live site" (or "Still failing…").
+7. **Reply:** on the incident page, send "it still does not work on Psalms": the same case goes back to work (no new card).
+8. **Delete with clean-up** (a throw-away project): tick "Also clean my repository": the webhook and `agent-daemon/fix-…` branches
+   are gone on GitHub; your code and the monitor files are untouched.
+9. **Cost:** with real keys, run `bench/web_cases` with a small budget (RUN_TESTS.md layer 4) before turning it on for customers.
+
 ## Manual steps for you (before / after deploying)
 
 1. **Before pushing:** `pip install -r requirements-test.txt` and `python -m pytest -q` on your laptop (expect 378 passed).

@@ -1,5 +1,13 @@
 # Changelog
 
+## The on-call engineer (plan v3.1, 10 November 2026)
+The report box works on PostgreSQL again; one cause = one case = one fix (unique open incident per signature, grouping, a check
+window after a push, one active fix per project); a flooding project pauses only itself; the agent opens the client's live site in a
+real browser (sandbox `/investigate`), looks around in the code with a bounded menu of look-ups, starts typed reports with High mode,
+asks the client one question when it must, holds unproven live-site fixes for review unless an independent reviewer approves, checks
+the live site after the push ("Verified" / "Still failing") and undoes a fix that makes it worse. Clients can reply on a case.
+Details: [CHANGES.md](CHANGES.md); deploy: [DEPLOY.md](DEPLOY.md) "Upgrading to the on-call engineer".
+
 ## Monitoring v2 (7 November 2026)
 Monitors for every language with 30-second check-ins, "never checked in" / "offline" states, the public-repo gate, a first scan right after connecting, automatic fixes for retired AI models, and animated architecture diagrams. Full details: [CHANGES.md](CHANGES.md); release checks: [RELEASE_CHECKLIST.md](RELEASE_CHECKLIST.md).
 

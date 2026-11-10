@@ -47,9 +47,9 @@ def test_report_box_rejects_empty_text_bad_csrf_other_users_and_floods(web_env):
 def test_project_page_shows_flow_report_card_and_flash_and_dashboard_the_banner(web_env):
     _user, csrf, cookie, project_id = _setup()
     _, _, page = _request(f"/projects/{project_id}?reported=1", cookie=cookie)
-    assert page.count("flow-node") == 7 and "Tell the agent what&#x27;s broken" in page.replace("'", "&#x27;") or "Tell the agent what's broken" in page
-    assert f"action='/projects/{project_id}/report'" in page and "Sent. The agent is looking at your code now" in page
-    assert "up to 3 rounds" in page and "Site check" in page
+    assert page.count("flow-node") == 8 and "Tell the agent what&#x27;s broken" in page.replace("'", "&#x27;") or "Tell the agent what's broken" in page
+    assert f"action='/projects/{project_id}/report'" in page and "Sent. The agent is opening your site and reading your code now" in page
+    assert "3 failed GitHub rounds" in page and "one case" in page and "Site check" in page
     _, _, dash = _request("/dashboard", cookie=cookie)
     assert "new-banner" in dash and "Tell the agent" in dash
 

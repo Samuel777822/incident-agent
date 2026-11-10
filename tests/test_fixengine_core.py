@@ -236,9 +236,22 @@ def test_hourly_rate_limit(fx_db, cfg):
     assert fx_guard.Guard(cfg).check(uid, "haiku").code == "rate"
 
 
-def test_spike_breaker_pauses_paid_models(fx_db, cfg):
+def test_spike_from_one_project_pauses_only_that_project(fx_db, cfg):
+    """v3.1: one project flooding no longer pauses every paid model for every customer."""
     uid, pid = make_user_and_project()
-    _attempt(uid, pid, "haiku", cost=60.0)
+    _attempt(uid, pid, "haiku", cost=160.0)
+    g = fx_guard.Guard(cfg)
+    g.check_alerts()
+    assert not ({"haiku", "sonnet", "opus"} & store.paused_tiers()) and store.get_flag("spike_paused") != "1"
+    assert "continues by itself" in g.project_paused(pid)
+    other_uid, other_pid = make_user_and_project(email="other@example.com")
+    assert g.project_paused(other_pid) == "" and g.check(other_uid, "haiku").ok
+
+
+def test_spike_spread_over_many_projects_still_pauses_paid_models(fx_db, cfg):
+    for i in range(8):
+        uid, pid = make_user_and_project(email=f"u{i}@example.com")
+        _attempt(uid, pid, "haiku", cost=9.0)
     fx_guard.Guard(cfg).check_alerts()
     assert {"haiku", "sonnet", "opus"} <= store.paused_tiers()
     assert store.get_flag("spike_paused") == "1"

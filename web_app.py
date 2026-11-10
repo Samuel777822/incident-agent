@@ -2671,8 +2671,17 @@ def _page_dashboard(request):
     signed_label = f"Signed in as <b>{_escape(name_val)}</b> ({_escape(request.session['email'])}) · <a href='/onboarding/name'>Edit name</a>" if name_val else f"Signed in as {_escape(request.session['email'])} · <a href='/onboarding/name'>Add your name</a>"
     body = (f"<section class='section'><div class='row page-head'><div><div class='eyebrow'>Workspace</div><h1>Your projects</h1>"
             f"<p class='muted'>{signed_label}</p></div><div class='actions'>{actions}</div></div>{banner}{meters}{live}"
-            f"{ui_flow.new_feature_banner_html()}<h2>Projects</h2>{slot_note}<div class='grid'>{listing}</div>{incident_board._STYLE}</section>")
+            f"{ui_flow.new_feature_banner_html()}<h2>Projects</h2>{_deleted_flash(request)}{slot_note}<div class='grid'>{listing}</div>{incident_board._STYLE}</section>")
     return _response(body, request)
+
+
+def _deleted_flash(request) -> str:
+    code = (request.query.get("deleted") or [""])[0]
+    text = {"1": ("green", "Project deleted."),
+            "repo": ("green", "Project deleted. The Agent Daemon webhook and fix branches were removed from your repository."),
+            "partial": ("amber", "Project deleted. Your repository could not be fully cleaned (the token may lack admin rights): remove "
+                                 "the Agent Daemon webhook and any agent-daemon/fix-… branches on GitHub if you want them gone.")}.get(code)
+    return f"<div class='pill {text[0]}'>{_escape(text[1])}</div>" if text else ""
 
 
 def _encrypt_token(token: str) -> str:
@@ -2732,9 +2741,10 @@ def _push_summary(result: dict) -> str:
         first = "<p class='muted'>We are testing your latest commit now. Watch it on the dashboard.</p>" if result.get("queued") else ""
         return ("<div class='card'><h3>Push guard is on</h3><p class='muted'>A GitHub webhook was added. Every push to your branch is "
                 "installed, built, tested and started in our sandbox, and the result appears on the commit in GitHub.</p>" + first + "</div>")
-    return ("<div class='card'><h3>Push guard is on (polling)</h3><p class='muted'>We could not add a webhook "
-            f"({_escape(hook.get('error', 'unknown reason'))}), so the agent checks your branch for new commits every few minutes instead. "
-            "To get instant checks, give the token admin rights on the repository and press <b>Reconnect webhook</b> on the project page.</p></div>")
+    why = " ".join(str(hook.get("error") or "GitHub gave no reason").split()).rstrip(". ") + "."
+    return ("<div class='card'><h3>Push guard is on (polling)</h3><p class='muted'>We could not add a webhook: "
+            f"{_escape(why)} Until then, the agent checks your branch for new commits every few minutes. "
+            "For instant checks, give the token admin rights on the repository, then press <b>Reconnect webhook</b> on the project page.</p></div>")
 
 
 def _page_new_project(request):
@@ -3083,7 +3093,7 @@ def _page_project(request, project_id):
     cards.append(f"<article class='card'><h3>Update GitHub token</h3><p class='muted'>Use a classic token with the repo and workflow scopes ticked. The new token replaces the saved one and is never shown again.</p><form method='post' action='/projects/{_escape(project_id)}/github-token'><input type='hidden' name='csrf' value='{csrf}'><div class='field'><label>New GitHub token</label><input name='github_token' type='password' autocomplete='new-password' required minlength='20' maxlength='500'></div><button class='button primary' type='submit'>Validate and save token</button></form></article>")
     if watch in ("runtime", "both"):
         cards.append(f"<article class='card'><h3>Monitor key</h3><p class='muted'>The monitor uses a key that can only <b>send</b> check-ins and error reports for this project. If you think it leaked, replace it: the old key stops working and we put the new one into your code for you.</p><form method='post' action='/projects/{_escape(project_id)}/rotate-key'><input type='hidden' name='csrf' value='{csrf}'><button class='button' type='submit'>Replace key</button></form></article>")
-    cards.append(f"<article class='card'><h3>Delete project data</h3><p class='muted'>Remove this project, its incidents, checks, fixes, and stored GitHub token. The project slot stays on your account.</p><form method='post' action='/projects/{_escape(project_id)}/delete'><input type='hidden' name='csrf' value='{csrf}'><div class='field'><label>Type DELETE to confirm</label><input name='confirm' required autocomplete='off'></div><button class='button danger' type='submit'>Delete project</button></form></article>")
+    cards.append(f"<article class='card'><h3>Delete project data</h3><p class='muted'>Remove this project, its incidents, checks, fixes, and stored GitHub token. The project slot stays on your account.</p><form method='post' action='/projects/{_escape(project_id)}/delete'><input type='hidden' name='csrf' value='{csrf}'><label class='check'><input type='checkbox' name='clean_repo' value='yes'> Also clean my repository: remove the Agent Daemon webhook and the <code>agent-daemon/fix-…</code> branches (your code and the monitor files stay)</label><div class='field'><label>Type DELETE to confirm</label><input name='confirm' required autocomplete='off'></div><button class='button danger' type='submit'>Delete project</button></form></article>")
     state, css = _project_state(project)
     checkin = ""
     monitor_panel = _monitor_status_html(project) if watch != "push" else ""
@@ -3268,8 +3278,8 @@ def _recent_reports(project_id: str) -> int:
     since = (datetime.now(timezone.utc) - timedelta(hours=1)).isoformat(timespec="seconds")
     conn = portal_db.get_connection()
     try:
-        row = portal_db._execute(conn, "SELECT COUNT(*) AS n FROM incidents WHERE project_id=? AND signature LIKE 'user_report:%' AND first_seen>?",
-                                 (project_id, since)).fetchone()
+        row = portal_db._execute(conn, "SELECT COUNT(*) AS n FROM incidents WHERE project_id=? AND signature LIKE ? AND first_seen>?",
+                                 (project_id, "user_report:%", since)).fetchone()
         return int(row["n"]) if row else 0
     finally:
         conn.close()
@@ -3290,14 +3300,24 @@ def _page_report(request, project_id):
     text = " ".join(str(request.form.get("text", "")).split())[:1500]
     if len(text) < 8:
         return _redirect(f"/projects/{project_id}?reported=short")
+    signature = "user_report:" + hashlib.sha1(text.lower().encode("utf-8")).hexdigest()[:12]
+    already = portal_db.recent_open_report(project_id, signature, minutes=5)
+    if already:      # the same words again within 5 minutes (double click, impatient re-send): one case, one fix
+        return _redirect(f"/projects/{project_id}?reported=dup#case-{already}")
     if _recent_reports(project_id) >= REPORTS_PER_HOUR:
         return _redirect(f"/projects/{project_id}?reported=limit")
+    page = str(request.form.get("page", "")).strip()[:300]
     evidence = {"kind": "user_report", "owner_report": text}
-    portal_db.ingest_event(project_id, timestamp=datetime.now(timezone.utc).isoformat(timespec="seconds"), level="ERROR",
-                           message="[user report] " + text[:300], traceback="[evidence] " + json.dumps(evidence) + "\n",
-                           signature="user_report:" + hashlib.sha1(text.lower().encode("utf-8")).hexdigest()[:12])
+    if page:
+        evidence["page"] = page
+    incident_id, _accepted = portal_db.ingest_event(
+        project_id, timestamp=datetime.now(timezone.utc).isoformat(timespec="seconds"), level="ERROR",
+        message="[user report] " + text[:300], traceback="[evidence] " + json.dumps(evidence) + "\n", signature=signature)
     portal_db.audit(project_id, "user_report_sent", {"chars": len(text)})
-    return _redirect(f"/projects/{project_id}?reported=1")
+    row = portal_db.get_incident_row(incident_id) if incident_id else None
+    if row and row.get("case_id"):
+        return _redirect(f"/projects/{project_id}?reported=joined#case-{row['case_id']}")
+    return _redirect(f"/projects/{project_id}?reported=1" + (f"#case-{incident_id}" if incident_id else ""))
 
 
 def _page_install_monitoring(request, project_id):
@@ -3395,10 +3415,23 @@ def _page_delete_project(request, project_id):
         return _response("<div class='alert'>Request expired or invalid.</div>", request, "403 Forbidden")
     if request.form.get("confirm") != "DELETE":
         return _response("<div class='alert'>Type DELETE exactly to confirm removal.</div>", request, "400 Bad Request")
+    project = portal_db.get_project(project_id, request.session["user_id"])
+    if not project:
+        return _response("<h1>Project not found</h1>", request, "404 Not Found")
+    cleaned = ""
+    if request.form.get("clean_repo") == "yes":
+        try:
+            import push_watch
+            from portal_remediation import _token
+            result = push_watch.clean_repository(project, _token(project.get("github_token_ciphertext", "")))
+            cleaned = "repo" if (result.get("webhook") or result.get("branches")) and not result.get("errors") else "partial"
+        except Exception:
+            LOG.warning("repository clean-up for project %s failed", project_id)
+            cleaned = "partial"
     deleted = portal_db.delete_project(project_id, request.session["user_id"])
     if not deleted:
         return _response("<h1>Project not found</h1>", request, "404 Not Found")
-    return _redirect("/dashboard")
+    return _redirect("/dashboard" + (f"?deleted={cleaned}" if cleaned else "?deleted=1"))
 
 
 def _with_fx_paths(incidents):
@@ -3438,8 +3471,66 @@ def _page_incident(request, project_id, incident_id):
     diff = "".join(f"<article class='card'><div class='row'><strong>{_escape(f['file_path'])}</strong><span class='pill'>{_escape(f['ci_result'])}</span></div><pre style='overflow:auto;white-space:pre-wrap;color:#c7d2e4'>{_escape(f['diff'])}</pre></article>" for f in fixes) or "<div class='empty'>No proposed fix has been saved yet.</div>"
     pr_link = (f"<p><a class='button primary' href='{_escape(incident['pr_url'])}' target='_blank' rel='noopener'>Open fix pull request</a></p>"
                if incident.get("pr_url") else "")
-    body = f"<section class='section'><p><a href='/projects/{_escape(project_id)}'>← {_escape(project['name'])}</a></p><div class='eyebrow'>Incident</div><h1>{_escape(incident['signature'])}</h1><div class='stats'><span class='pill'>{_escape(incident_board.stage_for(incident, project['mode'])['headline'])}</span><span class='pill'>Occurrences · {_escape(incident['occurrences'])}</span><span class='pill'>CI · {_escape(incident['ci_status'])}</span><span class='pill'>Last seen · {_escape(_fmt_time(incident.get('last_seen')))}</span></div>{pr_link}<article class='card'><h2>What happened</h2><p>{_escape(incident['root_cause']) or 'Diagnosis is pending.'}</p><p class='muted' style='white-space:pre-wrap'>{_escape(incident['report'])}</p></article>{_fx_trail_html(incident_id, request.session["user_id"])}<h2>Proposed changes</h2>{diff}</section>"
+    body = f"<section class='section'><p><a href='/projects/{_escape(project_id)}'>← {_escape(project['name'])}</a></p><div class='eyebrow'>Incident</div><h1>{_escape(incident['signature'])}</h1><div class='stats'><span class='pill'>{_escape(incident_board.stage_for(incident, project['mode'])['headline'])}</span><span class='pill'>Occurrences · {_escape(incident['occurrences'])}</span><span class='pill'>CI · {_escape(incident['ci_status'])}</span><span class='pill'>Last seen · {_escape(_fmt_time(incident.get('last_seen')))}</span></div>{pr_link}<article class='card'><h2>What happened</h2><p>{_escape(incident['root_cause']) or 'Diagnosis is pending.'}</p><p class='muted' style='white-space:pre-wrap'>{_escape(incident['report'])}</p></article>{_case_panel_html(incident, project_id, request)}{_fx_trail_html(incident_id, request.session["user_id"])}<h2>Proposed changes</h2>{diff}</section>"
     return _response(body, request)
+
+
+def _case_panel_html(incident: dict, project_id: str, request) -> str:
+    """v3.1 case panel: what the live check found, the reports merged into this case, and a reply box for the client."""
+    parts = []
+    live = str(incident.get("live_result") or "")
+    if live:
+        parts.append(f"<article class='card'><h2>{'Question for you' if live.startswith('QUESTION: ') else 'Live site check'}</h2>"
+                     f"<p style='white-space:pre-wrap'>{_escape(live[10:] if live.startswith('QUESTION: ') else live)}</p></article>")
+    if int(incident.get("merged_count") or 0):
+        try:
+            followers = portal_db.case_followers(incident["id"], limit=12)
+        except Exception:
+            followers = []
+        rows = "".join(f"<li>{_escape(str(f.get('message') or f.get('signature') or '')[:200])} "
+                       f"<small class='muted'>({_escape(f.get('occurrences'))}x)</small></li>" for f in followers)
+        parts.append(f"<article class='card'><h2>{int(incident['merged_count'])} more reports in this case</h2>"
+                     "<p class='muted'>Same cause, so they are fixed together: one fix, nothing paid twice.</p>"
+                     f"<ul>{rows}</ul></article>")
+    csrf = _escape(_csrf(request))
+    parts.append(f"<article class='card report-card'><h2>Reply to the agent</h2><p class='muted'>Answer its question, or tell it what you "
+                 "still see (for example <i>“it still does not work on Psalms”</i>). Your reply is added to this case, not a new one, and "
+                 "the agent continues right away.</p>"
+                 f"<form method='post' action='/projects/{_escape(project_id)}/incidents/{_escape(incident['id'])}/reply'>"
+                 f"<input type='hidden' name='csrf' value='{csrf}'><textarea name='text' rows='3' maxlength='1000' required></textarea>"
+                 "<button class='button primary' type='submit'>Send reply</button></form></article>")
+    return "".join(parts)
+
+
+def _page_case_reply(request, project_id, incident_id):
+    gate = _require_access(request)
+    if gate:
+        return gate
+    if request.method != "POST" or not _csrf_valid(request):
+        return _response("<div class='alert'>Request expired or invalid.</div>", request, "403 Forbidden")
+    project = portal_db.get_project(project_id, request.session["user_id"])
+    if not project:
+        return _response("<h1>Project not found</h1>", request, "404 Not Found")
+    text = " ".join(str(request.form.get("text", "")).split())[:1000]
+    if len(text) < 2:
+        return _redirect(f"/projects/{project_id}/incidents/{incident_id}")
+    row = portal_db.get_incident_row(incident_id)
+    if not row or row.get("project_id") != project_id:
+        return _response("<h1>Incident not found</h1>", request, "404 Not Found")
+    target = row.get("case_id") or incident_id
+    try:
+        from fixengine import store as fx_store
+        if text not in fx_store.client_replies(target)[-1:]:          # the same reply twice (double click) counts once
+            fx_store.add_client_reply(target, text)
+            bug = fx_store.get_bug_by_incident(target)
+            if bug and bug.get("status") in ("awaiting_client", "needs_human", "resolved", "pr_opened"):
+                fx_store.update_bug(bug["id"], status="open", closed_at=None, stop_reason="")
+            portal_db.reopen_incident_with_reply(target, project_id, text)
+    except Exception:
+        LOG.exception("could not add the client reply to case %s", target)
+        return _response("<div class='alert'>Your reply could not be saved. Please try again in a minute.</div>", request, "500 Internal Server Error")
+    portal_db.audit(project_id, "client_reply", {"incident_id": target, "chars": len(text)})
+    return _redirect(f"/projects/{project_id}/incidents/{target}?replied=1")
 
 
 
@@ -4090,6 +4181,9 @@ def _dispatch(request: Request) -> Response:
     match = re.fullmatch(r"/projects/([0-9a-f-]{36})/report", request.path)
     if match:
         return _page_report(request, match.group(1))
+    match = re.fullmatch(r"/projects/([0-9a-f-]{36})/incidents/([0-9a-f-]{36})/reply", request.path)
+    if match:
+        return _page_case_reply(request, match.group(1), match.group(2))
     match = re.fullmatch(r"/projects/([0-9a-f-]{36})/rotate-key", request.path)
     if match:
         return _page_rotate_ingest_key(request, match.group(1))

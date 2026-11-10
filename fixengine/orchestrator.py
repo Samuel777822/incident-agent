@@ -17,7 +17,7 @@ from pathlib import Path
 import portal_db
 
 from . import adapters as fx_adapters
-from . import admin_tools, fingerprint, journeys, notify, prompts, repo_context, review, router, sandbox, store, triage, validator
+from . import admin_tools, fingerprint, investigator, journeys, notify, oncall, project_map, prompts, repo_context, review, router, sandbox, store, triage, validator
 from . import config as fx_config
 from . import git_ops
 from .guard import Guard
@@ -54,7 +54,7 @@ def _failed_test_names(output: str) -> list[str]:
 
 class Engine:
     def __init__(self, cfg: dict | None = None, *, adapters=None, runner=None, repo_provider=None, commits_provider=None,
-                 pr_opener=None, guard: Guard | None = None, gh=None):
+                 pr_opener=None, guard: Guard | None = None, gh=None, investigate=None):
         self.cfg = cfg or fx_config.load()
         self.adapters = adapters or fx_adapters.build_adapters(self.cfg)
         self.runner = runner or sandbox.make_runner(self.cfg)
@@ -63,6 +63,7 @@ class Engine:
         self.pr_opener = pr_opener or git_ops.open_pr
         self.guard = guard or Guard(self.cfg)
         self.gh = gh or git_ops          # the GitHub calls of the proof loop (tests pass a fake)
+        self.investigate = investigate or investigator.investigate     # the live browser on the client's site (tests pass a fake)
 
     # ---- entry points ---------------------------------------------------------------------------------------------
     def handle_incident(self, claimed: dict) -> str:
@@ -124,18 +125,22 @@ class Engine:
         store.recover_pending(bug["id"])
         commits = self.commits_provider(project) if self.commits_provider else ""
         repo_tok = repo_context.repo_tokens(files)
+        ctx = self._case_context(claimed, project, bug, files)
         blocked: set[str] = set()
         for _ in range(int(self.cfg["caps"]["per_bug_max_tries"]) + 4):
             bug = store.get_bug(bug["id"])
-            attempts = [a for a in store.list_attempts(bug["id"]) if a["result"] != "pending"]
+            attempts = [a for a in store.list_attempts(bug["id"]) if a["result"] not in ("pending", "review")]
             if bug["user_pinned_tier"] == "__review__":
                 return self._finish_review(claimed, project, bug, attempts, event, "you chose human review")
-            inp = self._router_input(user_id, bug, attempts, blocked, repo_tok)
+            inp = self._router_input(user_id, bug, attempts, blocked, repo_tok, kind=ctx["kind"])
             decision = router.decide(inp, self.cfg, router.ProbTable(self.cfg, store.success_stats()))
             store.log_decision(bug["id"], inp.__dict__, decision.options, decision.action, decision.reason)
             if decision.action == "stop":
                 return self._finish_review(claimed, project, bug, attempts, event, decision.reason)
             tier = decision.action
+            pause = self.guard.project_paused(project_id) if tier != "groq" else ""
+            if pause:      # this project used its AI budget for the hour: only this project waits, the others carry on
+                return self._fault_wait(claimed, bug, pause, 900)
             gate = self.guard.check(user_id, tier)
             if not gate.ok:
                 if gate.code in ("rate", "cooldown"):
@@ -146,18 +151,26 @@ class Engine:
             if pause:
                 return pause
             import live_status
-            _stage(incident_id, "thinking", live_status.customer_reason(decision.reason, decision.action), tier)
+            why = live_status.customer_reason(decision.reason, decision.action)
+            if decision.reason == "you chose this mode" and bug["user_pinned_tier"] != tier:
+                why = "Your report goes straight to a strong AI, which looks at your live site and code before changing anything"
+            _stage(incident_id, "thinking", why, tier)
             result = self._attempt(claimed, project, bug, tier, gate.pack_try, files, root, profile, message,
-                                   traceback_text, commits, attempts)
+                                   traceback_text, commits, attempts, ctx=ctx)
             self.guard.check_alerts()
             if result[0] == "dry_run":
                 log.info("Dry run for bug %s: %s", bug["id"], result[1])
                 return "dry_run"
             if result[0] == "pass":
                 result[1]["from_push"] = from_push
+                hold = self._push_policy(claimed, project, bug, result[1], ctx)
+                if hold:
+                    result[1]["hold_reason"] = hold
                 if self._direct_push(project, claimed):
                     return self._start_github_proof(claimed, project, bug, result[1])
                 return self._open_pr(claimed, project, bug, result[1])
+            if result[0] == "question":
+                return self._ask_client(claimed, project, bug, result[1])
             if result[0] == "fault":
                 return self._fault_wait(claimed, bug, result[1], 300)
         bug = store.get_bug(bug["id"])
@@ -174,7 +187,120 @@ class Engine:
         except Exception:
             log.debug("could not prepare browser journeys")
 
-    def _router_input(self, user_id, bug, attempts, blocked, repo_tok) -> router.RouterInput:
+    # ---- v3.1: everything an on-call engineer gathers before touching the code ----------------------------------------------
+    def _case_context(self, claimed: dict, project: dict, bug: dict, files: dict) -> dict:
+        """The big picture (project map + history), the other reports of the same case, the client's replies, and what the live
+        site shows right now. The live look is done ONCE per case (kept in the bug's state) so retries do not repeat it."""
+        incident_id = claimed["incident_id"]
+        evidence = _evidence_of(claimed)
+        kind = str(evidence.get("kind") or "")
+        site = ""
+        try:
+            import site_probe
+            site = site_probe.safe_url(project.get("app_url") or "") if project.get("app_url") else ""
+        except Exception:
+            site = ""
+        try:
+            history = portal_db.project_history(claimed["project_id"])
+        except Exception:
+            history = []
+        try:
+            followers = portal_db.case_followers(incident_id)
+        except Exception:
+            followers = []
+        reports = []
+        for f in followers:
+            ev = _evidence_of({"first_event": {"message": f.get("message"), "traceback": f.get("traceback")}})
+            line = str(f.get("message") or f.get("signature") or "")[:200]
+            extra = prompts.format_evidence({k: v for k, v in ev.items() if k != "kind"}).replace("\n", " | ")
+            reports.append(f"{line}" + (f" [{extra[:300]}]" if extra else "") + f" (seen {int(f.get('occurrences') or 1)}x)")
+        replies = store.client_replies(incident_id)
+        report_text = str(evidence.get("owner_report") or "")
+        hints = project_map.hint_words(report_text, str(evidence.get("page") or ""), str(evidence.get("request") or ""),
+                                       str(evidence.get("dom") or ""), " ".join(replies), " ".join(reports))
+        state = store.gh_state(bug["id"])
+        live_before = state.get("live_before")
+        web = kind in ("user_report", "failed_request", "external_api", "js_error", "ui_error_text", "dead_click", "journey_failed", "site_down")
+        if web and site and live_before is None:
+            _stage(incident_id, "investigating", "opening your live site like a visitor to see the problem for myself")
+            page = investigator.page_url(site, str(evidence.get("page") or ""))
+            steps = investigator.default_steps(report_text)
+            try:
+                live_before = self.investigate(page, steps)
+            except Exception as exc:
+                live_before = {"ok": False, "mode": "error", "reason": type(exc).__name__}
+            live_before["page"] = page
+            live_before["steps_used"] = steps
+            state = store.gh_state(bug["id"])
+            state["live_before"] = live_before
+            store.save_gh_state(bug["id"], state)
+        return {"kind": kind, "site": site, "map": project_map.build(files, history=history, site_url=site), "reports": reports,
+                "replies": replies, "hints": hints, "live_before": live_before or {},
+                "live_text": investigator.format_report(live_before) if live_before else ""}
+
+    def _ask_client(self, claimed, project, bug, question) -> str:
+        """The model needs ONE thing only the owner knows. The case waits for the answer (no tries are spent while waiting)."""
+        incident_id = claimed["incident_id"]
+        q = " ".join(str(question).split())[:600]
+        store.update_bug(bug["id"], status="awaiting_client")
+        store.park_incident(incident_id, claimed["project_id"], waiting_for_choice=True)
+        _stage(incident_id, "waiting_user", f"Question for you: {q}"[:300])
+        try:
+            portal_db.set_live_result(incident_id, "QUESTION: " + q)
+        except Exception:
+            pass
+        notify.user_question(project["user_id"], project["name"], claimed["project_id"], incident_id, q)
+        return "awaiting_client"
+
+    def _push_policy(self, claimed, project, bug, win: dict, ctx: dict) -> str:
+        """'' = may go live once GitHub agrees. Otherwise the reason a person must look first (a pull request instead of a push).
+
+        Problems seen on the live site or reported by the owner are pushed automatically only when the fix is PROVEN (a failing
+        test or browser journey now passes, or the failing push check now passes), or when an independent reviewer model approves
+        the diff against the evidence. 'GitHub green' alone is not proof that the reported problem is gone."""
+        if ctx.get("kind") not in ("user_report", "failed_request", "external_api", "js_error", "ui_error_text", "dead_click",
+                                   "journey_failed", "site_down"):
+            return ""
+        if win.get("level") in validator.PROVEN_LEVELS:
+            return ""
+        if os.getenv("FIX_REVIEWER_ENABLED", "1").strip().lower() in ("0", "false", "no", "off"):
+            return "the fix could not be proven by a test or a browser check"
+        verdict = self._independent_review(claimed, project, bug, win, ctx)
+        if verdict.get("approve"):
+            win["reviewed"] = verdict.get("reason", "")
+            return ""
+        return "the fix could not be proven by a test or a browser check, and the reviewer did not approve it: " + str(verdict.get("reason") or "no reason given")[:300]
+
+    def _independent_review(self, claimed, project, bug, win: dict, ctx: dict) -> dict:
+        """A DIFFERENT model reads the diff against the evidence. Charged like a try (ledger row 'review'), never fixes anything."""
+        user_id = project["user_id"]
+        for tier in ([t for t in ("sonnet", "opus", "haiku") if t != win.get("tier")]):
+            adapter = self.adapters.get(tier)
+            if not adapter or not adapter.configured() or getattr(adapter, "dry_run", False) or not self.guard.check(user_id, tier).ok:
+                continue
+            attempt_id = store.add_attempt(bug=bug, tier=tier, model=adapter.model, used_strong_diag=False,
+                                           info_hash=prompts.info_hash("review", win.get("diff", "")[:200]), pack_try=False)
+            body = ("=== CLIENT REQUEST / PROBLEM ===\n" + (ctx.get("live_text") or "")[:2500] + "\n\n"
+                    + "=== UNTRUSTED: EVIDENCE ===\n" + prompts.redact(prompts.format_evidence(_evidence_of(claimed)))[:2000] + "\n\n"
+                    + ("=== UNTRUSTED: OTHER REPORTS IN THIS CASE ===\n" + "\n".join(ctx.get("reports") or [])[:1500] + "\n\n" if ctx.get("reports") else "")
+                    + "=== THE FIXER'S DIAGNOSIS ===\n" + str(win.get("diagnosis", ""))[:1500] + "\n\n"
+                    + "=== UNTRUSTED: THE DIFF ===\n" + prompts.redact(str(win.get("diff", "")))[:12000])
+            try:
+                res = adapter.call(prompts.REVIEW_PROMPT, [fx_adapters.Block(body)], 700)
+            except fx_adapters.AdapterError as exc:
+                store.finish_attempt(attempt_id, result="system_fault", error_summary=exc.summary())
+                continue
+            cost = fx_config.estimate_cost_inr(self.cfg, tier, res.tokens_in, res.tokens_out, res.cache_read)
+            verdict = prompts.parse_review(res.text)
+            store.finish_attempt(attempt_id, result="review", tokens_in=res.tokens_in, tokens_out=res.tokens_out, cache_read=res.cache_read,
+                                 cost_inr=cost, model=res.model or adapter.model,
+                                 diagnosis=("approved: " if verdict["approve"] else "rejected: ") + verdict["reason"][:450])
+            bug = store.get_bug(bug["id"])
+            store.update_bug(bug["id"], spent_inr=float(bug["spent_inr"] or 0) + cost)
+            return verdict
+        return {"approve": False, "reason": "no independent reviewer model was available"}
+
+    def _router_input(self, user_id, bug, attempts, blocked, repo_tok, kind: str = "") -> router.RouterInput:
         counted = [a for a in attempts if a["result"] != "system_fault"]
         n = lambda t: sum(1 for a in counted if a["tier"] == t)
         last = counted[-1] if counted else None
@@ -197,6 +323,12 @@ class Engine:
                 break
         cur_info = prompts.info_hash(last["error_summary"] if last else "start", (bug["strong_diagnosis"] or "")[:200])
         pinned = bug["user_pinned_tier"] if bug["user_pinned_tier"] in PAID else ""
+        start = os.getenv("FIX_REPORT_START_TIER", "sonnet").strip().lower()
+        if not pinned and not counted and kind == "user_report" and start in PAID and start not in blocked \
+                and self.adapters[start].configured() and left[PAID.index(start)] > 0:
+            # The owner is waiting on a plain-words report: start with the model that can actually investigate, instead of
+            # climbing the whole ladder blind (free -> Haiku -> ...).
+            pinned = start
         return router.RouterInput(
             bug_class=bug["bug_class"], mode=store.get_mode(user_id), free_tries=n("groq"), haiku_tries=n("haiku"),
             sonnet_tries=n("sonnet"), opus_tries=n("opus"), last_tier=last["tier"] if last else "",
@@ -245,7 +377,8 @@ class Engine:
         return count
 
     # ---- one try -----------------------------------------------------------------------------------------------------------------------
-    def _attempt(self, claimed, project, bug, tier, pack_try, files, root, profile, message, traceback_text, commits, attempts):
+    def _attempt(self, claimed, project, bug, tier, pack_try, files, root, profile, message, traceback_text, commits, attempts, ctx=None):
+        ctx = ctx or {}
         user_id = project["user_id"]
         adapter = self.adapters[tier]
         if getattr(adapter, "dry_run", False):
@@ -258,26 +391,63 @@ class Engine:
         attempt_id = store.add_attempt(bug=bug, tier=tier, model=model, used_strong_diag=bool(bug["strong_diagnosis"]),
                                        info_hash=cur_info, pack_try=pack_try)
         budget = int(self.cfg["tokens"]["groq_prompt_tokens"] if tier == "groq" else self.cfg["tokens"]["max_prompt_tokens"])
-        chosen, tests = repo_context.select(files, traceback_text, budget)
+        chosen, tests = repo_context.select(files, traceback_text, budget, hints=ctx.get("hints"))
         history = [{"tier": a["tier"], "result": a["result"], "error_summary": a["error_summary"]} for a in counted]
-        blocks = prompts.build_blocks(
-            message=message, traceback=traceback_text, files=chosen, context_files=tests, commits=commits,
-            history=history, strong_diagnosis=bug["strong_diagnosis"], has_tests=profile.has_tests,
-            sandbox_output=(last["error_summary"] if last and last["result"] == "fail" else ""),
-            baseline_output=bug["baseline_output"] if not counted else "",
-            previous_patch=(last["patch_json"] if last and last["result"] == "fail" else ""),
-            evidence={**_evidence_of(claimed), **(store.gh_state(bug["id"]).get("evidence") or {})})
-        try:
-            res = adapter.call(prompts.SYSTEM_PROMPT, blocks, 2500 if tier == "groq" else 4000)
-            _stage(claimed["incident_id"], "testing_fix", "applying the patch, then install → build → tests → start-up", tier)
-        except fx_adapters.AdapterError as exc:
-            # The ledger keeps WHO failed, with WHICH model, with what HTTP status, why, and whether retrying can help. Redacted.
-            store.finish_attempt(attempt_id, result="system_fault", model=exc.model or model, error_summary=exc.summary())
-            self._note_provider_fault(tier, exc, adapter)
-            return ("fault", f"{tier} model call failed: {exc.summary()}")
+        # The free model gets one shot (small context); paid models may look around first, a few bounded rounds.
+        rounds = 1 if tier == "groq" else max(1, int(self.cfg["caps"].get("investigation_rounds", 3)))
+        per_round = int(self.cfg["caps"].get("investigation_requests_per_round", 3))
+        looked_up: list[str] = []
+        look_budget = oncall.LookupBudget()
+        tok_in = tok_out = cache_read = 0
+        res = None
+        parsed = None
+        parse_error: prompts.Unusable | None = None
+        for rnd in range(rounds):
+            last_round = rnd == rounds - 1
+            blocks = prompts.build_blocks(
+                message=message, traceback=traceback_text, files=chosen, context_files=tests, commits=commits,
+                history=history, strong_diagnosis=bug["strong_diagnosis"], has_tests=profile.has_tests,
+                sandbox_output=(last["error_summary"] if last and last["result"] == "fail" else ""),
+                baseline_output=bug["baseline_output"] if not counted else "",
+                previous_patch=(last["patch_json"] if last and last["result"] == "fail" else ""),
+                evidence={**_evidence_of(claimed), **(store.gh_state(bug["id"]).get("evidence") or {})},
+                project_map=ctx.get("map", ""), client_replies=ctx.get("replies"), case_reports=ctx.get("reports"),
+                live_report=ctx.get("live_text", ""), looked_up=looked_up, last_round=last_round and rounds > 1)
+            try:
+                res = adapter.call(prompts.SYSTEM_PROMPT, blocks, 2500 if tier == "groq" else 4000)
+            except fx_adapters.AdapterError as exc:
+                # The ledger keeps WHO failed, with WHICH model, with what HTTP status, why, and whether retrying can help. Redacted.
+                cost = fx_config.estimate_cost_inr(self.cfg, tier, tok_in, tok_out, cache_read) if tok_in else 0.0
+                store.finish_attempt(attempt_id, result="system_fault", model=exc.model or model, error_summary=exc.summary(),
+                                     tokens_in=tok_in, tokens_out=tok_out, cache_read=cache_read, cost_inr=cost)
+                if cost:
+                    store.update_bug(bug["id"], spent_inr=float(bug["spent_inr"] or 0) + cost)
+                self._note_provider_fault(tier, exc, adapter)
+                return ("fault", f"{tier} model call failed: {exc.summary()}")
+            tok_in, tok_out, cache_read = tok_in + res.tokens_in, tok_out + res.tokens_out, cache_read + res.cache_read
+            try:
+                parsed = prompts.parse_response(res.text, allow_requests=not last_round)
+                parse_error = None
+            except prompts.Unusable as exc:
+                parsed, parse_error = None, exc
+                break
+            if parsed.get("requests") and not parsed.get("edits"):
+                wanted = parsed["requests"][:per_round]
+                _stage(claimed["incident_id"], "investigating",
+                       "looking around: " + ", ".join(f"{r['kind'].replace('_', ' ')} {str(r['value'])[:40]}" for r in wanted)[:250], tier)
+                looked_up += oncall.run_requests(wanted, files=files, site_url=ctx.get("site", ""), budget=look_budget,
+                                                 investigate_fn=self.investigate)
+                # A file the model read is now also editable in full (old_text must match the real file).
+                for r in wanted:
+                    path = str(r.get("value") or "")
+                    if r["kind"] == "read_file" and path in files and path not in chosen:
+                        chosen[path] = files[path]
+                continue
+            break
+        _stage(claimed["incident_id"], "testing_fix", "applying the patch, then install → build → tests → start-up", tier)
         model = res.model or model          # a provider can fall back to a smaller model: record the one that really answered
-        cost = fx_config.estimate_cost_inr(self.cfg, tier, res.tokens_in, res.tokens_out, res.cache_read)
-        store.finish_attempt(attempt_id, tokens_in=res.tokens_in, tokens_out=res.tokens_out, cache_read=res.cache_read, cost_inr=cost,
+        cost = fx_config.estimate_cost_inr(self.cfg, tier, tok_in, tok_out, cache_read)
+        store.finish_attempt(attempt_id, tokens_in=tok_in, tokens_out=tok_out, cache_read=cache_read, cost_inr=cost,
                              model=model)
         store.update_bug(bug["id"], spent_inr=float(bug["spent_inr"] or 0) + cost, tries=int(bug["tries"] or 0) + 1)
         if bug["user_pinned_tier"] == tier:
@@ -285,7 +455,14 @@ class Engine:
         bug = store.get_bug(bug["id"])
         # 1. parse the answer
         try:
-            parsed = prompts.parse_response(res.text)
+            if parse_error is not None:
+                raise parse_error
+            if parsed is None or (parsed.get("requests") and not parsed.get("edits")):
+                raise prompts.Unusable("no edits in the answer (it kept asking to look around)")
+        except prompts.ClientQuestion as exc:
+            store.finish_attempt(attempt_id, result="unusable", error_summary=("asked the owner: " + exc.question)[:300],
+                                 diagnosis=exc.diagnosis[:500])
+            return ("question", exc.question)
         except prompts.Unusable as exc:
             diag = str(exc)
             if tier in router.STRONG and diag.startswith("cannot determine:"):
@@ -324,7 +501,9 @@ class Engine:
                                  failing_before=prev_failing, failing_after=sres.failing if sres.failing is not None else 0, progress=1,
                                  error_summary="")
             return ("pass", {"new_files": new_files, "diff": diff, "diagnosis": parsed["diagnosis"], "level": level,
-                             "tier": tier, "model": model, "attempt_id": attempt_id})
+                             "tier": tier, "model": model, "attempt_id": attempt_id,
+                             "client_message": parsed.get("client_message", ""),
+                             "verification": investigator.clean_steps(parsed.get("verification") or [])})
         after_fp = fingerprint.fingerprint(sres.output[:400], sres.output)
         before_fp = _fp_of(bug, last)
         progressed = fingerprint.made_progress(before_fp, after_fp, prev_failing if (prev_failing or 0) >= 0 else None, sres.failing)
@@ -393,6 +572,11 @@ class Engine:
             state["verified_text"] = str(win["verified_text"])[:600]
         if win.get("evidence"):
             state["evidence"] = win["evidence"]
+        for key in ("hold_reason", "client_message", "verification", "reviewed"):
+            if win.get(key):
+                state[key] = win[key]
+            else:
+                state.pop(key, None)
         store.save_gh_state(bug["id"], state)
         result = {"category": "code_bug", "confidence": "high" if win["level"] in validator.PROVEN_LEVELS else "medium",
                   "root_cause": win["diagnosis"], "report": f"Fixed by the {win['tier']} model. {validator.VERIFY_TEXT.get(win['level'], '')}"}
@@ -421,7 +605,132 @@ class Engine:
             except Exception as exc:
                 log.warning("proof check for bug %s deferred (%s)", bug["id"], exc.__class__.__name__)
             count += 1
+        for bug in store.bugs_by_status("verifying"):
+            try:
+                self._check_live(bug)
+            except Exception as exc:
+                log.warning("live check for bug %s deferred (%s)", bug["id"], exc.__class__.__name__)
+            count += 1
         return count
+
+    # ---- v3.1: after the push, look at the live site again -------------------------------------------------------------------
+    LIVE_FIRST_LOOK = int(os.getenv("LIVE_CHECK_FIRST_SECONDS", "45") or 45)
+    LIVE_MAX_WAIT = int(os.getenv("LIVE_CHECK_MAX_SECONDS", "300") or 300)
+    LIVE_MAX_ROUNDS = 2
+
+    @staticmethod
+    def _site_of(project: dict) -> str:
+        try:
+            import site_probe
+            return site_probe.safe_url(project.get("app_url") or "") if project.get("app_url") else ""
+        except Exception:
+            return ""
+
+    def _check_live(self, bug) -> None:
+        """Verified / still failing / worse. Polls until the deploy shows up (max 5 minutes), re-runs the same check as before
+        the fix (plus the model's own verification journey), and tells the client honestly."""
+        link = store.incident_for_bug(bug["id"])
+        state = store.gh_state(bug["id"])
+        verify = state.get("verify") or {}
+        if not link or not verify:
+            store.update_bug(bug["id"], status="resolved", closed_at=store.now())
+            return
+        project = store.get_project_row(link["project_id"])
+        site = self._site_of(project or {})
+        incident_id, project_id = link["incident_id"], link["project_id"]
+        age = time.time() - float(verify.get("since", 0) or 0)
+        if not project or not site or age < self.LIVE_FIRST_LOOK:
+            if not project or not site:
+                store.update_bug(bug["id"], status="resolved", closed_at=store.now())
+            return
+        before = state.get("live_before") or {}
+        page = before.get("page") or investigator.page_url(site, str((state.get("evidence") or {}).get("page") or ""))
+        steps = investigator.clean_steps((before.get("steps_used") or []) + list(state.get("verification") or []))
+        after = self.investigate(page, steps)
+        steps_ok = all(s.get("ok") for s in (after.get("steps") or [])) if after.get("mode") == "browser" else None
+        verdict = investigator.compare(before, after)
+        if after.get("mode") == "browser" and steps and steps_ok is False and verdict == "fixed":
+            verdict = "same"
+        seen = investigator.format_report(after, limit=1500)
+        state["live_after"] = after
+        store.save_gh_state(bug["id"], state)
+        if verdict == "fixed" or (verdict == "better" and steps_ok):
+            text = ("Verified on your live site: " + ("the check that failed before now passes. " if before.get("ok") else "")
+                    + "No errors were seen on " + page + ".")
+            if after.get("mode") != "browser":
+                text = "Partly verified: the page answers normally (plain fetch; a real browser was not available). " + page
+            self._live_done(bug, incident_id, project, text, ok=True)
+            return
+        if verdict == "worse" and age >= 90 and os.getenv("AGENT_AUTO_REVERT", "1").strip().lower() not in ("0", "false", "no", "off"):
+            self._revert(bug, incident_id, project, state, seen)
+            return
+        if age < self.LIVE_MAX_WAIT:
+            _stage(incident_id, "verifying", "Pushed. Waiting for your host to deploy it, then the agent checks the live site again "
+                   f"(checked {int(age)} s after the push).", state.get("tier", ""))
+            return
+        # Five minutes after the push the live site still shows the problem.
+        rnd = int(verify.get("round", 1))
+        top = (investigator.problems(after) or ["the reported problem"])[0]
+        if rnd < self.LIVE_MAX_ROUNDS and self._requeue_after_live_failure(bug, incident_id, project_id, state, after, seen):
+            _stage(incident_id, "queued", f"Still failing on your live site: {top[:160]}. Trying again with what the live site shows.")
+            notify.user_live_still_failing(project["user_id"], project["name"],
+                                           f"The fix was pushed, but your live site still shows: {top}.\n\nThe agent is trying again with "
+                                           "what it sees on the live site. Nothing else is needed from you.")
+            return
+        self._live_done(bug, incident_id, project, f"Still failing on your live site after the fix: {top}. Here is what the agent "
+                        f"sees:\n{seen}\n\nThis needs a human look.", ok=False)
+
+    def _live_done(self, bug, incident_id, project, text: str, *, ok: bool, tell: bool = True) -> None:
+        try:
+            portal_db.set_live_result(incident_id, text)
+        except Exception:
+            pass
+        if ok:
+            store.update_bug(bug["id"], status="resolved", closed_at=store.now(), stop_reason="")
+            _stage(incident_id, "verified", text[:300])
+            notify.user_live_verified(project["user_id"], project["name"], text)
+        else:
+            store.update_bug(bug["id"], status="needs_human", closed_at=store.now(), stop_reason=text[:300])
+            _stage(incident_id, "needs_human", text[:300])
+            portal_db.mark_remediation_needs_human(incident_id, project["id"], text[:500])
+            if tell:
+                notify.user_live_still_failing(project["user_id"], project["name"], text)
+
+    def _requeue_after_live_failure(self, bug, incident_id, project_id, state, after, seen) -> bool:
+        """Hand the live failure back to the model as the failure of its last try, and put the case back in the queue."""
+        try:
+            if state.get("attempt_id"):
+                store.finish_attempt(state["attempt_id"], result="fail", progress=0,
+                                     error_summary=("The fix was pushed and deployed, but the LIVE SITE still fails:\n" + seen)[:6000])
+            keep = {k: state[k] for k in ("evidence", "verify") if k in state}
+            keep["live_before"] = after              # the new baseline: what the site shows WITH the first fix
+            keep["live_before"]["page"] = (state.get("live_before") or {}).get("page", "")
+            keep["live_before"]["steps_used"] = (state.get("live_before") or {}).get("steps_used", [])
+            store.save_gh_state(bug["id"], keep)
+            store.update_bug(bug["id"], status="open", closed_at=None)
+            return portal_db.requeue_incident(incident_id, project_id, "Still failing on the live site: trying again")
+        except Exception as exc:
+            log.warning("could not requeue bug %s after the live check (%s)", bug["id"], type(exc).__name__)
+            return False
+
+    def _revert(self, bug, incident_id, project, state, seen) -> None:
+        """The live site is clearly WORSE after the fix: undo it with a new commit (nothing is forced), then ask a human."""
+        outcome = "nothing"
+        revert = getattr(self.gh, "revert_files", None)
+        if revert and state.get("base_sha") and state.get("files"):
+            try:
+                outcome = revert(project, base_sha=state["base_sha"], paths=list(state["files"]),
+                                 title=f"revert: undo the agent's fix for incident {incident_id[:8]} (live site got worse) {AGENT_MARK}")
+            except Exception as exc:
+                outcome = f"failed ({type(exc).__name__})"
+        if outcome == "ok":
+            text = ("The fix made your live site worse, so the agent UNDID it with a new commit (your other changes are kept). "
+                    f"What the live site showed with the fix:\n{seen}\n\nThis needs a human look.")
+            notify.user_fix_reverted(project["user_id"], project["name"], text)
+        else:
+            text = (f"The fix seems to make your live site worse, and it could not be undone automatically ({outcome}). "
+                    f"Please revert the agent's last commit. What the live site shows:\n{seen}")
+        self._live_done(bug, incident_id, project, text, ok=False, tell=outcome != "ok")
 
     def _check_proof(self, bug) -> None:
         link = store.incident_for_bug(bug["id"])
@@ -478,6 +787,11 @@ class Engine:
 
     def _push_to_branch(self, claimed, project, bug, state) -> None:
         incident_id = claimed["incident_id"]
+        if state.get("hold_reason"):
+            # v3.1 policy: a live-site / owner-reported problem is not pushed on "GitHub green" alone.
+            self._needs_review(claimed, project, bug, state,
+                               f"GitHub's tests passed, but {state['hold_reason']}. A person should look before it goes live.")
+            return
         _stage(incident_id, "pushing", "GitHub tests passed · pushing the fix to your branch", state.get("tier", ""))
         outcome = self.gh.fast_forward_base(project, state["head_sha"], state["base_sha"])
         level = state.get("level", "")
@@ -488,8 +802,23 @@ class Engine:
             self.gh.delete_branch(project, state["branch"])
             store.record_direct_push(incident_id, claimed["project_id"], branch=state["branch"], file_path=", ".join(state.get("files", [])),
                                      diff=state.get("diff", ""), head_sha=state["head_sha"], verification_text=verified)
-            _stage(incident_id, "pushed", f"pushed to {project.get('branch', 'your branch')} after the sandbox and GitHub tests passed", state.get("tier", ""))
-            store.update_bug(bug["id"], status="resolved", closed_at=store.now(), stop_reason="")
+            try:
+                portal_db.start_check_window(incident_id)       # related events in the next minutes are the old problem draining away
+            except Exception:
+                log.debug("could not start the check window")
+            if state.get("client_message"):
+                verified = state["client_message"] + "\n\n" + verified
+            site = self._site_of(project)
+            if site and investigator.enabled():
+                state["verify"] = {"since": time.time(), "round": int((state.get("verify") or {}).get("round", 0)) + 1}
+                store.save_gh_state(bug["id"], state)
+                store.update_bug(bug["id"], status="verifying", stop_reason="")
+                _stage(incident_id, "verifying", "Pushed. Check again in 30 seconds to a minute: your host needs a moment to deploy, "
+                       "and the agent is opening your live site to confirm the fix.", state.get("tier", ""))
+            else:
+                _stage(incident_id, "pushed", f"Pushed to {project.get('branch', 'your branch')} after the sandbox and GitHub tests passed. "
+                       "Check again in 30 seconds to a minute (your host needs a moment to deploy).", state.get("tier", ""))
+                store.update_bug(bug["id"], status="resolved", closed_at=store.now(), stop_reason="")
             notify.user_fix_pushed(project["user_id"], project["name"], project.get("branch", "main"), verified)
         elif outcome == "moved":
             moved = int(state.get("moved", 0)) + 1

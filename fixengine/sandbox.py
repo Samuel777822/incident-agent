@@ -601,6 +601,8 @@ class LocalUnsafeRunner(_BaseRunner):
             if profile.language != "python":
                 return self._run_generic(target, work, profile)
             env = {"PATH": os.environ.get("PATH", ""), "PYTHONPATH": str(target), "HOME": str(work), "PYTHONDONTWRITEBYTECODE": "1"}
+            # Windows: Python cannot even start its socket layer without these (WinError 10106). Dev/test runner only.
+            env.update({k: os.environ[k] for k in ("SystemRoot", "SYSTEMROOT", "TEMP", "TMP", "COMSPEC", "WINDIR") if k in os.environ})
             plan = []
             if profile.build:
                 plan.append(("build", [sys.executable, "-m", "compileall", "-q", "."], 60))

@@ -14,10 +14,13 @@ export interface Order {
 
 export function createOrder(sku: string, qty: number, discountPct = 0): Order {
   const entry = CATALOG.find((p) => p.sku === sku);
+  if (!entry) {
+    throw new OrderError(`unknown product: ${sku}`);
+  }
   if (getStock(sku) < qty) {
     throw new OutOfStock(`out of stock: ${sku}`);
   }
-  const total = lineTotal(entry!.price, qty, discountPct);
+  const total = lineTotal(entry.price, String(qty), discountPct);
   reserve(sku, qty);
   return { sku, qty, total, totalWithTax: addTax(total) };
 }

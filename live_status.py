@@ -19,6 +19,7 @@ INCIDENT_STAGES = {
     "downloading": ("Downloading your code from GitHub", "blue", 1, True),
     "reproducing": ("Reproducing the bug in the sandbox", "blue", 1, True),
     "diagnosing": ("Diagnosing the error", "blue", 1, True),
+    "investigating": ("Looking at your live site and code", "blue", 1, True),
     "thinking": ("{mode} mode is writing a fix", "blue", 2, True),
     "testing_fix": ("Testing the fix in the sandbox", "blue", 3, True),
     "waiting_user": ("Waiting for your decision", "amber", 2, True),
@@ -30,6 +31,9 @@ INCIDENT_STAGES = {
     "github_testing": ("GitHub is testing the fix", "blue", 4, True),
     "github_failed": ("GitHub test failed · sending the error back to the AI", "amber", 2, True),
     "pushed": ("Fixed · pushed to your branch", "green", 6, False),
+    "verifying": ("Pushed · check again in 30 seconds, the agent is checking your live site", "blue", 5, True),
+    "verified": ("Verified on your live site", "green", 6, False),
+    "merged_case": ("Part of another case (same cause)", "muted", None, False),
     "needs_human": ("Needs human review", "red", None, False),
     "resolved": ("Resolved", "green", 6, False),
 }
@@ -104,7 +108,7 @@ def incident_view(inc: dict, mode: str, quota: dict | None = None) -> dict:
     if not stage:
         stage = {"pr_opened": "pr_open", "needs_human": "needs_human", "resolved": "resolved", "awaiting_choice": "waiting_user",
                  "diagnosed": "resolved" if mode == "report" else "thinking"}.get(status, "diagnosing")
-    if status == "resolved" and stage not in ("merged", "resolved", "pushed"):
+    if status == "resolved" and stage not in ("merged", "resolved", "pushed", "verifying", "verified"):
         stage = "merged" if inc.get("pr_url") else "resolved"
     if status == "needs_human":
         stage = "needs_human"

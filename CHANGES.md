@@ -1,3 +1,106 @@
+# CHANGES: v3.1 "The on-call engineer" (release of 10 November 2026)
+
+Why: the "Tell the agent what's broken" box crashed on PostgreSQL ("Something went wrong on our side"), one broken API became
+several paid investigations, one flooding project paused paid AI for everyone, and a typed report was a blind guess: the agent only
+read code, could not see the live site, and pushed fixes that nothing had proven. This release makes the agent behave like an
+on-call engineer: understand the request, look at the real site, find the cause, fix it, prove it, push it, check the live site
+again, and tell the client honestly.
+
+## P0: the crash, double clicks, plain words
+
+| Problem | Fix |
+| --- | --- |
+| Report box crashed on PostgreSQL (`LIKE 'user_report:%'`: psycopg read `%` as a placeholder) | the query uses `LIKE ?`; `portal_db.pg_sql()` now doubles every literal `%` for PostgreSQL; a test runs EVERY SQL string through the PostgreSQL placeholder conversion, and another forbids a hard-coded `LIKE` wildcard |
+| Double clicks sent everything twice | every form submits once ("Working…"), restored on Back; the same report text within 5 minutes answers "Already working on this" |
+| "every allowed mode is used up or capped" | three plain reasons, each with the next step (Economy only / month used up / per-problem limit reached) |
+| Loop wording mixed up sandbox and GitHub | "sandbox fails → a stronger model takes over; 3 failed GitHub rounds → a pull request for you" |
+| Webhook message ended in ".)." | one clean sentence |
+| "Node.js is not installed here" in customer text | removed; the sandbox and GitHub tests check the JavaScript |
+| Deleting a project left our webhook and branches | an "Also clean my repository" box removes our webhook and `agent-daemon/fix-…` branches (your code and the monitor files stay) |
+
+## P1: one case, one fix (stops the credit burn)
+
+* **Cases** (`cases.py`, `portal_db.ingest_event`): the first incident is the case leader; related ones become followers (status
+  `merged`), never get their own AI diagnosis, and their evidence goes to the leader's fix. Grouping, cheapest first: same AI model,
+  same outside host + status, same page within 15 minutes, an owner's report and a monitor problem at the same time (or naming the same
+  page / host), two reports that say the same thing.
+* **One open incident per (project, signature)**, enforced by a partial unique index; the insert is an atomic `ON CONFLICT DO NOTHING`.
+  Existing duplicates are merged first, so the migration is safe on live PostgreSQL data.
+* **One active fix per project**: the worker does not start a second case of a project while one is being fixed, tested on GitHub or
+  checked on the live site.
+* **Check window** after a push (5 minutes): matching events are attached to the case and ignored. Ten clicks produce one fix.
+* **Project pause instead of a global pause**: above ₹150 of AI spend in an hour (`budget.project_hour_cap_inr`) only THAT project waits,
+  with a plain message saying when it continues. The spike breaker pauses the projects causing the spike first; it pauses all paid
+  models only if the rest is still a spike.
+
+## P2: prove it on the live site, undo it if worse
+
+* **Push policy** for problems seen on the live site or reported by the owner: pushed automatically only when PROVEN (a failing test
+  or browser journey now passes, or the failing push check passes) or when an **independent reviewer model** approves the diff against
+  the evidence. Otherwise GitHub still tests it, and then a pull request is opened for review instead of a push. Server crashes keep
+  the v3 behaviour.
+* **Live check after the push**: "Pushed. Check again in 30 seconds to a minute"; from 45 s the agent opens the same page again (plus
+  the model's own verification journey) until the deploy shows up (max 5 minutes), then says **Verified on your live site** or
+  **Still failing: here is what I see** (and tries once more with what the live site shows), or **undoes the fix with a new commit**
+  when the site is clearly worse (`AGENT_AUTO_REVERT`).
+
+## P3: the live investigator (a real browser on the real site)
+
+* `sandbox_service.py /investigate` (signed like `/run`, one job at a time) starts the browser image with network and runs
+  `sandbox/investigate.py`: headless Chromium opens the client's PUBLIC page and returns final address, status, page errors, console
+  errors, failed requests (host, path without query, status, first 300 characters of the answer), visible error messages and the
+  result of each journey step. No screenshots, no cookies kept, no logins.
+* Safety: every address (and every request the page makes) must be a public internet address; private, loopback, link-local and
+  reserved ones are refused in the portal AND in the container; a separate Docker network blocks private ranges (DEPLOY.md);
+  service workers blocked; 1 GB memory, 90 s limit. If the browser is not available: an honest plain page fetch.
+* Used before the first try (what does the client see?), by the model's own "open this page" requests, and after the push.
+
+## P4: the on-call engineer
+
+* **New system prompt** (`fixengine/prompts.py`): understand → look at the evidence → follow the data → ask for more instead of
+  guessing → fix the root cause everywhere → say how it is proven. The client's typed request and replies are a TRUSTED instruction
+  about what they want (bugs AND small requested changes); page text, console, API answers and code stay untrusted.
+* **Answer format**: understanding, findings, root cause, plan, edits, a verification journey, a plain message for the client, and
+  optionally `requests` or ONE `question_for_client`.
+* **Controlled look-around** (`fixengine/oncall.py`): up to 3 rounds per try, 3 requests each, from a fixed menu: read a file range,
+  search the code, open a live page, run a journey, check a model id. Our code runs them; results go back as untrusted data. Bounded
+  and charged to the same try.
+* **Big picture** (`fixengine/project_map.py`), the first and cached prompt block: file tree, frameworks, entry points, pages, routes,
+  every outside host and AI model id in the code, environment variable NAMES, and this project's earlier cases and what fixed them.
+* **Right files for a typed report**: with no stack trace, files are chosen by the words of the report and the evidence (before: the
+  smallest files in the repo).
+* **Models**: a typed report starts with High mode (Sonnet; `FIX_REPORT_START_TIER`) instead of climbing the whole ladder blind.
+* **Asking the client**: the case waits ("Question for you: …", plus an email); the answer continues the same case.
+
+## P5: what the user sees
+
+* Case cards: "N more reports merged into this case", the live result line, the stages Investigating / Pushed, checking your live
+  site / Verified on your live site, and an 8th flow step "Live check".
+* After sending a report: the flash says what happens next; a duplicate says "Already working on this"; a report that joined an
+  existing case says so.
+* **Reply on the case** (incident page): answer the agent's question or say "it still does not work on Psalms". It is added to the
+  case and the case continues: never a new incident.
+
+## P6: proof
+
+* `tests/test_v31.py` (33 tests): the SQL check over every query, grouping, the unique index and its migration, the check window, one fix
+  per project, report de-duplication, replies, the project pause, the prompt and parser, the look-ups, the investigator's refusals and
+  its Docker command, before/after comparison, the push policy and reviewer, and the whole loop for an owner's report (live look →
+  High mode searches the code → fix → sandbox → GitHub → push → live check → Verified), plus revert and still-failing.
+* `bench/web_cases/`: broken API, dead button, retired free model, vague report, duplicate flood.
+* The local test runner now keeps the Windows variables Python needs (`SystemRoot`), so the whole-loop tests also run on Windows.
+
+## Honest limits
+
+* Not run here: Docker, Chromium, the real GitHub calls, real models. Everything around them is tested with fakes; the final check is
+  on the sandbox server (DEPLOY.md has a one-line test) and with real keys.
+* Pages behind a login are not investigated. A live check can only see what a visitor sees.
+* "Worse" is decided conservatively (the page now errors, or clearly more errors); a subtle regression is caught by the client's
+  reply, not by the revert.
+* The independent review costs one extra model call, only for live-site fixes that could not be proven.
+
+---
+
 # CHANGES: v3 "Prove it, then push" (release of 8 November 2026)
 
 Why: the v2 monitor still missed website errors (a failing outside API, a dead button, a retired OpenRouter free model), a plain

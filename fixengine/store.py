@@ -221,8 +221,10 @@ def recent_failed_bugs(user_id, minutes) -> int:
     return int(row["n"]) if row else 0
 
 
-def spend_inr(*, period=None, user_id=None, since: str | None = None, tier: str | None = None) -> float:
+def spend_inr(*, period=None, user_id=None, since: str | None = None, tier: str | None = None, project_id: str | None = None) -> float:
     sql, params = "SELECT COALESCE(SUM(cost_inr),0) AS s FROM fx_attempts WHERE 1=1", []
+    if project_id:
+        sql += " AND project_id=?"; params.append(project_id)
     if period:
         sql += " AND period=?"; params.append(period)
     if user_id:
@@ -233,6 +235,12 @@ def spend_inr(*, period=None, user_id=None, since: str | None = None, tier: str 
         sql += " AND tier=?"; params.append(tier)
     row = _one(sql, tuple(params))
     return float(row["s"]) if row else 0.0
+
+
+def spend_by_project(since: str) -> list[dict]:
+    """Spend per project since a time, biggest first (the spike breaker uses it to pause ONE project, not everyone)."""
+    return _all("""SELECT project_id, COALESCE(SUM(cost_inr),0) AS spend FROM fx_attempts WHERE created_at>=?
+                   GROUP BY project_id ORDER BY spend DESC""", (since,))
 
 
 def month_spend_by_user(period=None) -> list[dict]:
@@ -392,7 +400,7 @@ def resolve_hold(hold_id, status) -> bool:
 
 # ---- incident / project plumbing used by the orchestrator -------------------------------------------------------------------
 def get_project_row(project_id):
-    return _one("SELECT id,user_id,name,repo_owner,repo_name,branch,mode,github_token_ciphertext FROM projects WHERE id=?", (project_id,))
+    return _one("SELECT id,user_id,name,repo_owner,repo_name,branch,mode,github_token_ciphertext,app_url FROM projects WHERE id=?", (project_id,))
 
 
 def park_incident(incident_id, project_id, *, waiting_for_choice: bool, delay_seconds: int = 0) -> None:
@@ -519,3 +527,19 @@ def record_direct_push(incident_id, project_id, *, branch, file_path, diff, head
     finally:
         conn.close()
     portal_db.update_portal_pr_status(incident_id, "merged", merged=True)
+
+
+# ---- v3.1: the client's replies on a case (answers to the agent's question, "it still does not work on Psalms") ----------------
+def add_client_reply(incident_id: str, text: str) -> list[str]:
+    replies = client_replies(incident_id)
+    replies.append(" ".join(str(text).split())[:1000])
+    set_flag(f"replies:{incident_id}", json.dumps(replies[-10:]))
+    return replies
+
+
+def client_replies(incident_id: str) -> list[str]:
+    try:
+        data = json.loads(get_flag(f"replies:{incident_id}", "") or "[]")
+        return [str(x) for x in data] if isinstance(data, list) else []
+    except ValueError:
+        return []

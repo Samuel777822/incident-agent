@@ -209,7 +209,15 @@ def decide(s: RouterInput, cfg: dict, probs: ProbTable | None = None) -> Decisio
         return Decision("groq", f"free first: try {s.free_tries + 1} of {r['free_tries']}", True)
     allowed, forced, forced_reason = allowed_actions(s, cfg)
     if not allowed:
-        why = "economy mode never escalates" if s.mode == "economy" else "every allowed mode is used up or capped"
+        # Plain words: this text is shown to the customer as the reason the agent stopped, so it says what to do next.
+        if s.mode == "economy":
+            why = ("Economy mode only uses the free AI, and its tries for this problem are used up. Next step: switch to Auto mode "
+                   "on the Usage page, or read the report below.")
+        elif not any(int(x or 0) > 0 for x in (s.quota_left or ())):
+            why = "This month's AI tries are used up. Next step: add a pack on the Usage page, or wait for the new month."
+        else:
+            why = ("The agent used every try it may spend on one problem and no fix passed the tests. Nothing was pushed. "
+                   "Next step: read the report below; this one needs a human look.")
         return Decision("stop", why, True)
     if forced:
         cost = round(_est_cost(cfg, forced, s), 2)

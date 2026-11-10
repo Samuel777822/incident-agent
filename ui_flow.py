@@ -12,6 +12,7 @@ FLOW_NODES = [
     ("5", "Sandbox test", "Built and clicked in a safe box"),
     ("6", "GitHub test", "Your own tests must pass"),
     ("7", "Pushed", "Straight to your branch"),
+    ("8", "Live check", "We open your site again"),
 ]
 
 
@@ -21,18 +22,23 @@ def flow_diagram_html() -> str:
         for n, t, d in FLOW_NODES)
     return ("<section class='flow-card'><div class='row'><h3>How Agent Daemon looks after your site</h3></div>"
             f"<ol class='flow'>{nodes}</ol>"
-            "<div class='flow-loop'><span class='loop-arrow'>↩</span> If the sandbox or GitHub test fails, the exact error goes back to the "
-            "AI model and it tries again (up to 3 rounds). After that, a pull request is opened and <b>you</b> review it.</div></section>")
+            "<div class='flow-loop'><span class='loop-arrow'>↩</span> If the <b>sandbox</b> test fails, the exact error goes back to the AI "
+            "and, when needed, a stronger AI model takes over. If <b>GitHub's</b> test fails, the agent tries again; after 3 failed GitHub "
+            "rounds it opens a pull request for <b>you</b> to review instead of pushing. Problems with the same cause are handled as "
+            "<b>one case</b>: one fix, however many reports.</div></section>")
 
 
 def report_card_html(project_id: str, csrf: str) -> str:
     pid, token = html.escape(project_id), html.escape(csrf)
     return ("<article class='card report-card'><div class='row'><h3>Tell the agent what's broken</h3><span class='pill green'>New</span></div>"
-            "<p class='muted'>Something is wrong and the agent did not notice? Describe it in your own words, for example "
-            "<i>“Isaiah chapter 1 does not load”</i> or <i>“the Send button does nothing”</i>. The agent downloads your code, looks for the "
-            "cause, fixes it, tests it and pushes the fix. It does everything by itself.</p>"
-            f"<form method='post' action='/projects/{pid}/report'><input type='hidden' name='csrf' value='{token}'>"
+            "<p class='muted'>Something is wrong, or you want a small change? Describe it in your own words, for example "
+            "<i>“Isaiah chapter 1 does not load”</i> or <i>“the Send button does nothing”</i>. The agent opens your live site, looks at "
+            "your code, finds the cause, fixes it, tests it, pushes it and then checks your site again. If it truly needs something "
+            "from you, it asks one clear question.</p>"
+            f"<form method='post' action='/projects/{pid}/report' data-once><input type='hidden' name='csrf' value='{token}'>"
             "<textarea name='text' rows='3' maxlength='1500' required placeholder='What is not working, and where?'></textarea>"
+            "<div class='field'><label>Page where it happens (optional)</label>"
+            "<input name='page' maxlength='300' placeholder='https://your-site.com/isaiah/1 or /isaiah/1'></div>"
             "<button class='button primary' type='submit'>Send to the agent</button></form></article>")
 
 
@@ -43,9 +49,14 @@ def new_feature_banner_html() -> str:
 
 
 def flash_html(code: str) -> str:
-    msgs = {"1": ("green", "Sent. The agent is looking at your code now. Watch the progress in “Bugs and fixes” below."),
+    msgs = {"1": ("green", "Sent. The agent is opening your site and reading your code now. Watch the case in “Bugs and fixes” below: "
+                           "after a fix is pushed it says “Pushed, check again in 30 seconds to a minute”, then “Verified” once it has "
+                           "checked your live site."),
+            "dup": ("amber", "Already working on this: you sent the same report a moment ago. It is one case, so nothing is paid twice."),
+            "joined": ("green", "Sent. This looks like the same cause as a problem the agent is already fixing, so your report was added "
+                                "to that case (one fix, nothing paid twice)."),
             "short": ("amber", "Please describe the problem in a few more words."),
-            "limit": ("amber", "You sent several reports in the last hour. Please wait a little; the agent is still working on them.")}
+            "limit": ("amber", "You sent 5 reports in the last hour. Please wait a little; the agent is still working on them.")}
     tone, text = msgs.get(code, ("", ""))
     return f"<div class='pill {tone}'>{html.escape(text)}</div>" if text else ""
 

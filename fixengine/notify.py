@@ -81,6 +81,25 @@ def user_fix_pushed(user_id: str, project_name: str, branch: str, verified: str)
              f"Verification: {verified}\nOpen {_base()}/dashboard to see what changed.", "fix_pushed")
 
 
+def user_question(user_id: str, project_name: str, project_id: str, incident_id: str, question: str) -> None:
+    _to_user(user_id, f"One question about {project_name}",
+             f"The agent is working on your report and needs one thing only you know:\n\n{question}\n\n"
+             f"Answer it here (one line is enough): {_base()}/projects/{project_id}/incidents/{incident_id}\n"
+             "The agent continues by itself as soon as you reply.", "fix_question")
+
+
+def user_live_verified(user_id: str, project_name: str, text: str) -> None:
+    _to_user(user_id, f"Verified on your live site: {project_name}", text + f"\n\nOpen {_base()}/dashboard for the details.", "fix_verified")
+
+
+def user_live_still_failing(user_id: str, project_name: str, text: str) -> None:
+    _to_user(user_id, f"Still failing on your live site: {project_name}", text + f"\n\nOpen {_base()}/dashboard for the details.", "fix_still_failing")
+
+
+def user_fix_reverted(user_id: str, project_name: str, text: str) -> None:
+    _to_user(user_id, f"Fix undone on {project_name}", text + f"\n\nOpen {_base()}/dashboard for the details.", "fix_reverted")
+
+
 def user_needs_review(user_id: str, project_name: str, pr_url: str, why: str) -> None:
     _to_user(user_id, f"Needs your review: {project_name}",
              f"The agent could not get a fix through your GitHub tests, so it opened a pull request for you: {pr_url}\n\n{why}\n"

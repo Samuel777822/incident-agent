@@ -1,0 +1,23 @@
+{
+ "what": "The chatbot asks OpenRouter for a free model that was retired ('No endpoints found').",
+ "events": [
+  {
+   "message": "POST https://openrouter.ai/api/v1/chat/completions failed with HTTP 404",
+   "evidence": {
+    "kind": "retired_model",
+    "model": "mistralai/mistral-7b-instruct:free",
+    "request": "POST https://openrouter.ai/api/v1/chat/completions",
+    "status": 404,
+    "response": "No endpoints found for mistralai/mistral-7b-instruct:free"
+   }
+  }
+ ],
+ "repo": {
+  "chat.js": "const MODEL = 'mistralai/mistral-7b-instruct:free';\n"
+ },
+ "expect": {
+  "cases": 1,
+  "ai_tries": 0,
+  "replacement_is_free": true
+ }
+}

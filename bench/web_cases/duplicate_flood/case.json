@@ -1,0 +1,28 @@
+{
+ "what": "Ten visitors click the broken button and the owner sends the same report three times.",
+ "events": [
+  {
+   "message": "Dead click: button#send was clicked twice and nothing happened",
+   "evidence": {
+    "kind": "dead_click",
+    "page": "/",
+    "dom": "button#send"
+   },
+   "repeat": 10
+  },
+  {
+   "message": "[user report] the Send button does nothing",
+   "evidence": {
+    "kind": "user_report",
+    "owner_report": "the Send button does nothing"
+   },
+   "repeat": 3
+  }
+ ],
+ "repo_from": "dead_button",
+ "expect": {
+  "cases": 1,
+  "paid_diagnoses": 1,
+  "fixes": 1
+ }
+}

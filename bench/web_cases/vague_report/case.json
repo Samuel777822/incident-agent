@@ -1,0 +1,34 @@
+{
+ "what": "The owner writes only 'Isaiah 1 is not loading'. Nothing in the logs. The agent must open the live page, see the failing request, and find the code.",
+ "events": [
+  {
+   "message": "[user report] Isaiah 1 is not loading",
+   "evidence": {
+    "kind": "user_report",
+    "owner_report": "Isaiah 1 is not loading"
+   }
+  }
+ ],
+ "live": {
+  "failed_requests": [
+   {
+    "host": "bible-api.example",
+    "path": "/isaiah 1",
+    "status": 404,
+    "body": "{\"error\":\"not found\"}"
+   }
+  ],
+  "visible_errors": [
+   "Failed to load chapter"
+  ]
+ },
+ "repo_from": "broken_api",
+ "expect": {
+  "start_tier": "sonnet",
+  "looks_at_live_site": true,
+  "files": [
+   "app.js"
+  ],
+  "no_blind_ladder": true
+ }
+}

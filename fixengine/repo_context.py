@@ -178,7 +178,30 @@ def symbol_hits(files: dict[str, str], traceback: str, limit: int = 4) -> list[s
     return [p for p, _ in sorted(scores.items(), key=lambda kv: (-kv[1], len(files[kv[0]])))][:limit]
 
 
-def select(files: dict[str, str], traceback: str, budget_tokens: int) -> tuple[dict, dict]:
+def keyword_hits(files: dict[str, str], hints: list[str] | None, limit: int = 6) -> list[tuple[str, int]]:
+    """Files that mention the words of an owner's report or the live evidence (a URL path, an element id, 'chapter'), best first,
+    with the line of the first hit. This is what lets a plain-words report reach the right code when there is no traceback."""
+    if not hints:
+        return []
+    scored = []
+    for p, text in files.items():
+        if is_test_path(p) or PurePosixPath(p).suffix.lower() not in prompts.CODE_EXT:
+            continue
+        low = text.lower()
+        score, first_line = 0, 0
+        for h in hints:
+            n = low.count(h.lower())
+            if n:
+                score += min(n, 5) * (3 if ("/" in h or "_" in h or any(c.isupper() for c in h)) else 1)
+                if not first_line:
+                    first_line = low[:low.find(h.lower())].count("\n") + 1
+        if score:
+            scored.append((score, p, first_line))
+    scored.sort(key=lambda x: (-x[0], len(files[x[1]])))
+    return [(p, line) for _s, p, line in scored[:limit]]
+
+
+def select(files: dict[str, str], traceback: str, budget_tokens: int, hints: list[str] | None = None) -> tuple[dict, dict]:
     """Return (source files to show and allow editing, test files shown as context only)."""
     paths = set(files)
     frames = app_frames(traceback)
@@ -192,6 +215,8 @@ def select(files: dict[str, str], traceback: str, budget_tokens: int) -> tuple[d
         candidates.sort(key=lambda p: -len(os.path.commonprefix([p[::-1], fpath[::-1]])))
         if candidates and candidates[0] not in [x[0] for x in first]:
             first.append((candidates[0], line))
+    if not first:
+        first = keyword_hits(files, hints)       # no stack trace (an owner's report, a browser problem): follow the words
     order: list[tuple[str, int]] = list(first)
     seen = {p for p, _ in order}
     for p in symbol_hits(files, traceback):

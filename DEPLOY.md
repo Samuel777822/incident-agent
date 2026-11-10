@@ -96,6 +96,59 @@ Make a random secret: `python -c "import secrets; print(secrets.token_urlsafe(48
 web service, set `PORTAL_RUN_WORKER=1` on it so the worker runs inside it, and keep UptimeRobot pinging `/health` every 5 minutes
 (a sleeping free service misses webhooks; the poller then catches the push a few minutes later).
 
+## Upgrading to the on-call engineer (plan v3.1, 10 November 2026)
+
+What changes for you: the report box works on PostgreSQL again, one cause is one case (one fix, one bill), a flooding project only
+pauses itself, the agent opens the client's **live site** in a real browser before and after a fix, and it can undo a fix that makes
+the live site worse. Full list: CHANGES.md.
+
+**1. Render (portal + worker).** Deploy the new code. The database upgrades itself on start (new columns, and a unique index that
+first merges any duplicate open incidents). Nothing to set; these are optional:
+
+| Name | Default | Why |
+| --- | --- | --- |
+| `FIX_INVESTIGATOR_ENABLED` | `1` | `0` turns the live browser off (the agent then reads code only, as before) |
+| `FIX_REPORT_START_TIER` | `sonnet` | the first model for an owner's typed report (`haiku` to save quota) |
+| `FIX_REVIEWER_ENABLED` | `1` | the independent reviewer for fixes that could not be proven |
+| `AGENT_AUTO_REVERT` | `1` | undo a pushed fix when the live site is clearly worse afterwards |
+| `CASE_CHECK_WINDOW_SECONDS` | `300` | after a push, related events for this long are attached to the case and ignored |
+| `LIVE_CHECK_FIRST_SECONDS` / `LIVE_CHECK_MAX_SECONDS` | `45` / `300` | when the live check after a push starts, and when it gives up |
+| `FIXENGINE_CONFIG_JSON` | empty | e.g. `{"budget": {"project_hour_cap_inr": 150}}`: one project's AI spend per hour before only that project waits |
+
+**2. The sandbox server (your Veeble StarterFlex: 1 vCPU, 2 GB RAM, 40 GB disk). About 15 minutes.**
+It runs Chromium fine as long as only ONE job runs at a time (the service already does that) and it has swap. As `root`:
+
+```
+# a) swap, so a browser and a build never run the machine out of memory
+fallocate -l 2G /swapfile && chmod 600 /swapfile && mkswap /swapfile && swapon /swapfile
+echo '/swapfile none swap sw 0 0' >> /etc/fstab
+
+# b) a separate Docker network for the investigator that can reach the INTERNET but not private addresses
+docker network create --opt com.docker.network.bridge.name=fxinv0 fx-investigate
+for net in 10.0.0.0/8 172.16.0.0/12 192.168.0.0/16 169.254.0.0/16 100.64.0.0/10 127.0.0.0/8; do
+  iptables -I DOCKER-USER -i fxinv0 -d $net -j DROP
+done
+apt -y install iptables-persistent && netfilter-persistent save
+
+# c) new code + the browser image (about 1.5 GB download, once)
+su - sandbox
+cd app && git pull
+docker build -f sandbox/Dockerfile.browser -t fixengine-sandbox-browser:1 sandbox
+exit
+systemctl restart fx-sandbox
+```
+
+Test it on the server (as `sandbox`, in `app`):
+`python3 -c "from fixengine import investigator, config; print(investigator.run_in_docker({'url': 'https://example.com'}, config.load()))"`
+should print a report with `'ok': True, 'mode': 'browser', 'status': 200`. From the portal, `/investigate` is signed with the same
+secret as `/run`; port 8099 stays closed behind Caddy as before.
+
+If the browser image is missing or the server is down, nothing breaks: the agent says "I could not open your site in a real browser"
+and uses a plain page fetch instead. If browser checks often time out (busy server, heavy sites), move to a 4 GB plan.
+
+**Security note:** the server's root password was shared in a screenshot. Change it now (`passwd`), and turn password log-in off
+once your SSH key works (`PasswordAuthentication no` in `/etc/ssh/sshd_config`, then `systemctl restart ssh`).
+
 ## Step 3. The sandbox server (45 minutes)
 
 ### 3a. Rent a small server

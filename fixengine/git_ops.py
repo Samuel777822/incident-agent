@@ -296,3 +296,34 @@ def open_pr_for_branch(project: dict, *, branch: str, title: str, body: str) -> 
         existing = call(client, "GET", f"{api}/pulls?state=open&head={quote(owner + ':' + branch, safe='')}")
         pr = existing[0] if existing else call(client, "POST", f"{api}/pulls", {"title": title, "head": branch, "base": base, "body": body})
     return {"url": pr.get("html_url", ""), "number": pr.get("number"), "branch": branch}
+
+
+def revert_files(project: dict, *, base_sha: str, paths: list[str], title: str) -> str:
+    """Undo a pushed fix (v3.1): put the listed files back exactly as they were at base_sha, as a NEW commit on top of the branch.
+    Nothing is rewritten or forced, so later commits by the owner are kept. 'ok' | 'moved' | 'protected' | 'nothing'."""
+    owner, repo, base = _validate(project)
+    token = _tok(project)
+    import repo_guard
+    repo_guard.ensure_private(project, token, action="revert")
+    api = _api_root(project)
+    call = portal_remediation._api
+    with httpx.Client(headers=_headers(token), timeout=httpx.Timeout(30, connect=8), follow_redirects=False) as client:
+        old_commit = call(client, "GET", f"{api}/git/commits/{quote(base_sha, safe='')}")
+        old_tree = call(client, "GET", f"{api}/git/trees/{quote(str(old_commit.get('tree', {}).get('sha', '')), safe='')}?recursive=1")
+        old_blobs = {e.get("path"): e.get("sha") for e in old_tree.get("tree", []) if e.get("type") == "blob"}
+        ref = call(client, "GET", f"{api}/git/ref/heads/{quote(base, safe='/')}")
+        head_sha = str(ref.get("object", {}).get("sha", ""))
+        head = call(client, "GET", f"{api}/git/commits/{quote(head_sha, safe='')}")
+        entries = []
+        for path in paths[:20]:
+            sha = old_blobs.get(path)
+            entries.append({"path": path, "mode": "100644", "type": "blob", "sha": sha})   # sha None = the file did not exist: delete it
+        if not entries:
+            return "nothing"
+        tree = call(client, "POST", f"{api}/git/trees", {"base_tree": head.get("tree", {}).get("sha"), "tree": entries})
+        made = call(client, "POST", f"{api}/git/commits", {"message": title, "tree": tree.get("sha"), "parents": [head_sha]})
+        try:
+            call(client, "PATCH", f"{api}/git/refs/heads/{quote(base, safe='/')}", {"sha": made.get("sha"), "force": False})
+            return "ok"
+        except RemediationError as exc:
+            return "protected" if http_code(exc) in (403, 409, 422) else "moved"

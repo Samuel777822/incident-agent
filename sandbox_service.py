@@ -58,14 +58,27 @@ class Handler(BaseHTTPRequestHandler):
 
     def do_POST(self):
         secret = os.getenv("FIXENGINE_SANDBOX_SECRET", "")
-        length = int(self.headers.get("Content-Length", "0"))
-        if self.path != "/run" or not secret or length <= 0 or length > MAX_BODY:
+        try:
+            length = int(self.headers.get("Content-Length", "0"))
+        except ValueError:
+            length = 0
+        if self.path not in ("/run", "/investigate") or not secret or length <= 0 or length > MAX_BODY:
             return self._reply(400, {"error": "bad request"})
         body = self.rfile.read(length)
         ts = self.headers.get("X-Timestamp", "")
         good = hmac.compare_digest(sandbox.sign(secret, ts, body), self.headers.get("X-Signature", ""))
         if not good or not ts.isdigit() or abs(time.time() - int(ts)) > 300:
             return self._reply(401, {"error": "unauthorized"})
+        if self.path == "/investigate":
+            if len(body) > 64 * 1024:
+                return self._reply(400, {"error": "bad request"})
+            with LOCK:                      # one job at a time: a 2 GB server cannot run a browser next to a build
+                try:
+                    from fixengine import investigator
+                    self._reply(200, investigator.run_in_docker(json.loads(body), fx_config.load()))
+                except Exception as exc:  # never leak internals
+                    self._reply(200, {"ok": False, "mode": "browser", "reason": f"investigator host error: {type(exc).__name__}"})
+            return
         with LOCK:
             scratch = Path(tempfile.mkdtemp(prefix="fx-host-"))
             try:
