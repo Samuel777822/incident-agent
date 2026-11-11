@@ -33,7 +33,9 @@ const pages = (process.env.AD_PAGES || '/').split(/\s+/).filter(Boolean).slice(0
 const sizes = [{ name: 'phone', width: 375, height: 812, mobile: true }, { name: 'desktop', width: 1280, height: 800, mobile: false }];
 const out = { pages: [], served: true };
 fs.mkdirSync('ad-shots', { recursive: true });
-const browser = await chromium.launch();
+let browser;
+try { browser = await chromium.launch({ channel: 'chrome' }); }   // GitHub's machines already have Chrome
+catch (e) { browser = await chromium.launch(); }
 for (const path of pages) {
   for (const s of sizes) {
     const ctx = await browser.newContext({ viewport: { width: s.width, height: s.height }, isMobile: s.mobile, hasTouch: s.mobile,
@@ -75,7 +77,7 @@ on:
 jobs:
   browser:
     runs-on: ubuntu-latest
-    timeout-minutes: 12
+    timeout-minutes: 10
     steps:
       - uses: actions/checkout@v4
         with:
@@ -95,6 +97,7 @@ jobs:
           echo "AD_PAGES=${pages:-/}" >> "$GITHUB_ENV"
       - name: Build and serve the app
         continue-on-error: true
+        timeout-minutes: 5
         run: |
           dir=.
           if [ -f package.json ]; then
@@ -105,9 +108,12 @@ jobs:
           for i in $(seq 1 30); do curl -sf http://127.0.0.1:4173 > /dev/null && break; sleep 1; done
       - name: Open the pages in Chrome
         continue-on-error: true
+        timeout-minutes: 4
         run: |
           mkdir -p /tmp/pw && cd /tmp/pw && [ -d node_modules/playwright ] || (npm init -y > /dev/null && npm i --no-audit --no-fund playwright@1.48.2)
-          npx --prefix /tmp/pw playwright install --with-deps chromium
+          # GitHub's Ubuntu machines already have Google Chrome and every library it needs. Never install system packages here: when
+          # Ubuntu's package mirror is slow it hangs for minutes (11 Nov 2026). Only without Chrome is Chromium downloaded, no apt.
+          command -v google-chrome > /dev/null || timeout 150 npx --prefix /tmp/pw playwright install chromium || true
           cd "$GITHUB_WORKSPACE"
           mkdir -p ad-shots
           echo "CHECK_B64" | base64 -d > /tmp/check.mjs

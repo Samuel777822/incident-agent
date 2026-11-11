@@ -167,3 +167,12 @@ def test_without_workflow_permission_the_fix_still_goes_and_says_why(fx_db, cfg)
     assert engine._start_github_proof(claimed, project, bug, win) == "github_testing"
     assert gh.pushed and browser_check.WORKFLOW_PATH not in gh.pushed[0]
     assert "workflow" in store.gh_state(bug["id"])["browser"]["note"]
+
+
+def test_the_workflow_never_waits_for_ubuntus_package_mirror():
+    # 11 Nov 2026: "playwright install --with-deps" ran apt-get and hung for minutes on a slow Ubuntu mirror.
+    wf = browser_check.WORKFLOW_SOURCE
+    assert "--with-deps" not in wf and "apt-get" not in wf
+    assert "command -v google-chrome" in wf and "timeout 150" in wf
+    assert "timeout-minutes: 10" in wf and "timeout-minutes: 4" in wf and "timeout-minutes: 5" in wf
+    assert "channel: 'chrome'" in browser_check.CHECK_SCRIPT and "chromium.launch()" in browser_check.CHECK_SCRIPT
