@@ -388,3 +388,10 @@ THEME_CSS += """
 .guide>p{margin-top:14px}
 @media(max-width:980px){.connect-layout{grid-template-columns:1fr}}
 """
+
+THEME_CSS += """
+.live-question{margin:14px 0 0;padding:14px 16px;border-radius:12px;border:1px solid #9a4dff88;background:#2a164599;color:#efe7fa;
+  display:flex;flex-wrap:wrap;gap:10px 14px;align-items:center;line-height:1.55}
+.live-question b{color:#d9c6ff}
+.live-question .button{margin-left:auto}
+"""

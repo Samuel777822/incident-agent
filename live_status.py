@@ -222,6 +222,9 @@ def live_panel(work: dict, modes: dict, quota: dict | None) -> str:
         mode_pill = f"<span class='pill mode'>{e(v['mode_name'])} mode</span>" if v["mode_name"] else ""
         left = f"<span class='pill'>{e(v['left_text'])}</span>" if v["left_text"] else ""
         detail = f"<p class='live-detail'>{e(v['detail'])}</p>" if v["detail"] else ""
+        if str(inc.get("live_result") or "").startswith("QUESTION: "):
+            detail = (f"<div class='live-question'><b>The agent is asking you:</b> {e(str(inc['live_result'])[10:].strip()[:300])}"
+                      f"<a class='button primary' href='/projects/{e(inc['project_id'])}#answer-{e(inc['id'])}'>Answer it</a></div>")
         rows.append(f"<article class='live-item' data-active='{1 if v['active'] else 0}'>"
                     f"<div class='live-top'><a href='/projects/{e(inc['project_id'])}/incidents/{e(inc['id'])}'><b>{e(inc.get('project_name'))}</b>"
                     f" · {e(str(inc.get('signature') or '')[:90])}</a>"

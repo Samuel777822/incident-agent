@@ -199,6 +199,24 @@ def _case_title(inc: dict) -> str:
     return signature if len(signature) <= 90 else signature[:88] + "…"
 
 
+def question_box_html(inc: dict, project_id: str, csrf: str) -> str:
+    """The agent asked the owner something: show the question with a box to answer it, right on the case card.
+    It sits outside the <summary>, so typing a space never folds the card, and the live refresh leaves it alone while you type."""
+    live = str(inc.get("live_result") or "")
+    if not csrf or not live.startswith("QUESTION: "):
+        return ""
+    iid = str(inc.get("id") or "")
+    return (f"<div class='inc-question' id='answer-{_e(iid)}'><div class='q-head'><span class='q-badge'>The agent is asking you</span>"
+            "<small class='muted'>It waits for your answer and spends nothing meanwhile.</small></div>"
+            f"<p class='q-text'>{_e(live[10:].strip())}</p>"
+            f"<form method='post' action='/projects/{_e(project_id)}/incidents/{_e(iid)}/reply'>"
+            f"<input type='hidden' name='csrf' value='{_e(csrf)}'><input type='hidden' name='next' value='/projects/{_e(project_id)}#case-{_e(iid)}'>"
+            "<label class='sr-only' for='answer-text-" + _e(iid) + "'>Your answer</label>"
+            f"<textarea id='answer-text-{_e(iid)}' name='text' rows='3' maxlength='1000' required placeholder='Type your answer here'></textarea>"
+            "<div class='q-actions'><button class='button primary' type='submit'>Send answer</button>"
+            "<small class='muted'>The agent continues right away with your answer.</small></div></form></div>")
+
+
 def render_board(project_id: str, incidents: list, mode: str, csrf: str = "") -> str:
     """The HTML that sits inside #incident-board. This exact string is also what the live endpoint returns."""
     if not incidents:
@@ -246,7 +264,7 @@ def render_board(project_id: str, incidents: list, mode: str, csrf: str = "") ->
             f"{guide_html(inc, project_id, csrf, pr_url)}"
             f"<span class='hint'>Show report</span></summary>"
             f"<div class='inc-body'>{_render_report(inc, stage)}<div class='inc-actions'>{''.join(buttons)}</div></div>"
-            f"</details></article>")
+            f"</details>{question_box_html(inc, project_id, csrf)}</article>")
     return "".join(cards)
 
 
@@ -277,6 +295,14 @@ _STYLE = """<style>
 .inc-guide{margin:18px 0 0;display:flex;flex-wrap:wrap;gap:10px 12px;align-items:center}
 .inc-guide .guide{flex:1 1 100%;margin:0;padding:18px 20px;border-radius:14px;border:1px solid #6b5320;background:#33270f66;color:#f6e9c8;font-size:15px;line-height:1.65}
 .inc-guide .guide ol{margin:10px 0 14px 22px;padding:0}.inc-guide .guide li{margin:8px 0;padding-left:4px}
+.inc-question{margin:0 26px 24px;padding:18px 20px;border-radius:14px;border:1px solid #9a4dff88;background:linear-gradient(160deg,#2a1645cc,#140b20e6);box-shadow:0 0 30px #9a4dff26}
+.inc-question .q-head{display:flex;flex-wrap:wrap;gap:8px 14px;align-items:center}
+.inc-question .q-badge{font-size:12px;font-weight:700;letter-spacing:.12em;text-transform:uppercase;color:#d9c6ff}
+.inc-question .q-text{margin:10px 0 14px;font-size:16px;line-height:1.6;color:#fff;white-space:pre-wrap}
+.inc-question textarea{min-height:96px}
+.inc-question .q-actions{display:flex;flex-wrap:wrap;gap:10px 14px;align-items:center;margin-top:12px}
+.sr-only{position:absolute;width:1px;height:1px;overflow:hidden;clip:rect(0 0 0 0);white-space:nowrap}
+@media(max-width:640px){.inc-question{margin:0 18px 18px}}
 .inc-guide .guide-text{margin:8px 0 14px;white-space:normal}.inc-guide .guide-line{flex:1 1 280px;margin:0;color:var(--muted);font-size:14px;line-height:1.5}
 @media(max-width:640px){.inc>details>summary{padding:18px}.inc-body{padding:6px 18px 20px}}
 @media(prefers-reduced-motion:reduce){.steps .active .dot{animation:none}}
@@ -394,6 +420,13 @@ LIVE_JS = """(function () {
       }
     }
     function isActive() { return !!box.querySelector('[data-active="1"]'); }
+    function typing() {
+      var a = document.activeElement;
+      if (a && box.contains(a) && /^(TEXTAREA|INPUT|SELECT)$/.test(a.tagName)) { return true; }
+      var fields = box.querySelectorAll('textarea');
+      for (var i = 0; i < fields.length; i++) { if (fields[i].value.trim()) { return true; } }
+      return false;
+    }
     function schedule() {
       clearTimeout(timer);
       timer = setTimeout(tick, failures ? 15000 : 5000);
@@ -409,6 +442,7 @@ LIVE_JS = """(function () {
         .then(function (text) {
           if (text === null) { return; }
           failures = 0; setDot(true);
+          if (typing()) { return; }                       // never wipe an answer someone is writing
           if (text !== last) {
             var ids = openIds();
             box.innerHTML = text;

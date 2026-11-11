@@ -3727,6 +3727,7 @@ def _next_tier(bug) -> str:
 
 
 CASE_FLASH = {
+    "replied": ("green", "Sent. The agent read your answer and is continuing on this case."),
     "escalated": ("green", "OK. A stronger AI model is taking another look, starting from what was found so far."),
     "escalate_none": ("amber", "The strongest model already looked at this case. Reply on the case to tell it what it got wrong."),
     "paused": ("amber", "Paused. The agent stops working on this case and spends nothing until you press Start."),
@@ -3747,6 +3748,8 @@ CASE_FLASH = {
 
 def _case_flash(request) -> str:
     code = (request.query.get("case") or [""])[0]
+    if not code and request.query.get("replied") == ["1"]:
+        code = "replied"
     tone, text = CASE_FLASH.get(code, ("", ""))
     return f"<div class='pill {tone}' style='white-space:normal'>{_escape(text)}</div>" if text else ""
 
@@ -3783,6 +3786,11 @@ def _page_case_reply(request, project_id, incident_id):
         LOG.exception("could not add the client reply to case %s", target)
         return _response("<div class='alert'>Your reply could not be saved. Please try again in a minute.</div>", request, "500 Internal Server Error")
     portal_db.audit(project_id, "client_reply", {"incident_id": target, "chars": len(text)})
+    nxt = str(request.form.get("next", "") or "")
+    home = f"/projects/{project_id}"
+    if (nxt == home or nxt[len(home):len(home) + 1] in ("/", "#", "?")) and nxt.startswith(home) and "//" not in nxt and "\\" not in nxt:
+        base, _, frag = nxt.partition("#")
+        return _redirect(f"{base}{'&' if '?' in base else '?'}replied=1" + (f"#{frag}" if frag else ""))
     return _redirect(f"/projects/{project_id}/incidents/{target}?replied=1")
 
 
