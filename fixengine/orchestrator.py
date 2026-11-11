@@ -397,9 +397,8 @@ class Engine:
         """Why a stronger mode was not used, in plain words, with what to do about it. Never just 'paused'."""
         name = {"haiku": "Normal", "sonnet": "High", "opus": "Extra"}.get(tier, tier)
         if gate.code == "paused":
-            return (f"{name} mode was not used because it is switched off right now: it pauses itself after a problem with the AI provider "
-                    "(for example no credit left on OpenRouter) or when an admin pauses it. Fix: check the OpenRouter credit, then an admin "
-                    f"resumes {name} in Admin, Spending protection. Then reply on this case (for example: try again).")
+            return (f"{name} mode was not used because an admin paused it (Admin, AI spending, Mode switches). When it is "
+                    "resumed, reply on this case (for example: try again).")
         if gate.code == "exhausted":
             return f"{name} mode was not used because this month's {name} tries are used up. Fix: add a pack on the Usage page, then reply on this case (for example: try again)."
         if gate.code in ("busy", "ceiling", "budget"):
@@ -495,9 +494,7 @@ class Engine:
             store.finish_attempt(attempt_id, result="system_fault", model=model,
                                  error_summary=f"origin=provider provider=openrouter kind={exc.kind} http={exc.status} | {exc}"[:300])
             if exc.kind in ("auth", "credit", "not_configured"):
-                store.set_flag(f"pause_{tier}", "1")
-                store.log_admin_action("auto_pause", detail={"tier": tier, "why": exc.kind, "provider": "openrouter"})
-                notify._to_admins(f"Auto-fix: {tier} paused ({exc.kind})", f"{exc}. Fix it, then resume the mode in /admin.")
+                self._provider_problem_mail(tier, exc.kind, "openrouter", str(exc))
             return ("model_fault", f"{tier}: {exc}")
         finally:
             ws.close()
@@ -891,15 +888,23 @@ class Engine:
             store.update_bug(bug["id"], strong_diagnosis=parsed["diagnosis"][:1500])
         return ("fail", sres.output[-200:])
 
+    @staticmethod
+    def _provider_problem_mail(tier: str, kind: str, provider: str, detail: str) -> None:
+        """A key, credit or model-setting problem. The mode is NOT paused (only admins pause); the admins get one email a day."""
+        store.log_admin_action("provider_problem", detail={"tier": tier, "why": kind, "provider": provider})
+        key = f"provider_problem_mail:{tier}:{kind}:{store.now()[:10]}"
+        if store.get_flag(key):
+            return
+        store.set_flag(key, "1")
+        notify._to_admins(f"Auto-fix: {notify.mode_name(tier)} mode cannot reach the AI ({kind}); nothing was paused",
+                          f"{detail[:600]}\n\nThe agent moves on to the next mode for each case. Fix the key, the credit or the model "
+                          "setting (OpenRouter). If you want to stop this mode meanwhile: Admin, AI spending, Mode switches.", "fix_pause")
+
     def _note_provider_fault(self, tier, exc, adapter=None) -> None:
         provider = getattr(exc, "provider", "") or getattr(adapter, "provider", "") or ("groq" if tier == "groq" else "anthropic")
         if exc.kind in ("auth", "not_configured", "config"):
             # Persistent problems (bad key, no credit, unknown model, a provider rule that blocks the model): retrying changes nothing.
-            store.set_flag(f"pause_{tier}", "1")
-            store.log_admin_action("auto_pause", detail={"tier": tier, "why": exc.kind, "provider": provider,
-                                                        "model": getattr(exc, "model", ""), "http": getattr(exc, "status", None)})
-            notify._to_admins(f"Auto-fix: {tier} paused ({exc.kind})", f"{exc.summary() if hasattr(exc, 'summary') else exc}. "
-                              "Fix the key or the model setting, then resume it in /admin.")
+            self._provider_problem_mail(tier, exc.kind, provider, exc.summary() if hasattr(exc, "summary") else str(exc))
         elif exc.kind in ("outage", "timeout", "rate_limit"):
             key = f"outage_{provider}_streak"
             streak = int(store.get_flag(key, "0") or 0) + 1

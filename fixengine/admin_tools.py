@@ -85,8 +85,6 @@ def pause_tier(tier: str, paused: bool, admin_email: str) -> None:
     if tier not in fx_config.TIERS:
         raise ValueError("unknown mode")
     store.set_flag(f"pause_{tier}", "1" if paused else "0")
-    if not paused and store.get_flag("spike_paused") == "1" and not store.paused_tiers():
-        store.set_flag("spike_paused", "0")
     store.log_admin_action("pause" if paused else "resume", detail={"tier": tier, "by": admin_email})
 
 

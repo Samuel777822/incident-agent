@@ -185,14 +185,15 @@ def test_provider_outage_waits_and_pauses_after_repeated_faults(world):
     assert Guard(w.cfg).quota(w.user_id, "haiku")["used"] == 0           # outages never cost the user a try
 
 
-def test_bad_api_key_pauses_the_model_and_alerts_admins(world, monkeypatch):
+def test_bad_api_key_alerts_admins_and_never_pauses_the_model(world, monkeypatch):
     sent = []
     monkeypatch.setattr("fixengine.notify._to_admins", lambda s, b="", k="x": sent.append(s))
     bad = adapters.AdapterError("auth", "Anthropic rejected the API key (HTTP 401)")
     w = world(scripts={"groq": ["garbage"], "haiku": [bad], "sonnet": [bad], "opus": [bad]})
     w.silence_warnings()
     incident_id, outcome = w.run_once()
-    assert outcome == "waiting" and "haiku" in store.paused_tiers() and any("paused" in s for s in sent)
+    assert outcome == "waiting" and not ({"haiku", "sonnet", "opus"} & store.paused_tiers())
+    assert any("nothing was paused" in s for s in sent)
 
 
 def test_warning_waits_for_the_user_then_continues(world):

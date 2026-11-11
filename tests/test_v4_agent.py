@@ -496,7 +496,7 @@ def test_an_unavailable_stronger_mode_is_explained_with_the_fix(tmp_path, monkey
     inc = H.make_incident(pid)
     assert engine.handle_incident(H.claim()) == "needs_human"
     why = store.get_bug_by_incident(inc)["stop_reason"] + store.get_bug_by_incident(inc)["review_report"]
-    assert "High mode was not used because it is switched off right now" in why and "OpenRouter" in why
+    assert "High mode was not used because an admin paused it" in why and "Mode switches" in why
 
 
 def test_the_report_box_teaches_how_to_write_a_request():
@@ -584,7 +584,7 @@ def test_spending_limits_grow_with_the_budget(monkeypatch):
     assert b["spike_hour_min_inr"] == 200.0 and b["project_hour_cap_inr"] == 750.0
 
 
-def test_a_project_pause_emails_the_admins(fx_db, cfg, monkeypatch):
+def test_fast_spending_emails_the_admins_and_pauses_nothing(fx_db, cfg, monkeypatch):
     from fixengine import guard as fx_guard, notify
     sent = []
     monkeypatch.setattr(notify, "_to_admins", lambda subject, body="", kind="": sent.append(subject))
@@ -592,8 +592,19 @@ def test_a_project_pause_emails_the_admins(fx_db, cfg, monkeypatch):
     bug = store.create_bug(project_id=pid, user_id=uid, incident_id="i", fingerprint_json={"hash": "h"}, bug_class="medium", category="")
     aid = store.add_attempt(bug=bug, tier="sonnet", model="m", used_strong_diag=False, info_hash="x")
     store.finish_attempt(aid, result="fail", cost_inr=500.0)
-    assert fx_guard.Guard(cfg).project_paused(pid) and any("paused for one project" in s for s in sent)
-    assert fx_guard.Guard(cfg).user_ceiling_reached(uid) and any("monthly spending ceiling" in s for s in sent)
+    g = fx_guard.Guard(cfg)
+    assert g.project_paused(pid) == "" and any("spending fast" in s for s in sent)
+    assert g.user_ceiling_reached(uid) is False and any("monthly AI spending level" in s for s in sent)
+    assert g.check(uid, "sonnet").ok
+
+
+def test_a_provider_key_problem_emails_but_never_pauses_the_mode(fx_db, cfg, monkeypatch):
+    from fixengine import notify, orchestrator as orch
+    sent = []
+    monkeypatch.setattr(notify, "_to_admins", lambda subject, body="", kind="": sent.append(subject))
+    orch.Engine._provider_problem_mail("sonnet", "credit", "openrouter", "402 no credit")
+    orch.Engine._provider_problem_mail("sonnet", "credit", "openrouter", "402 no credit")
+    assert "sonnet" not in store.paused_tiers() and len([s for s in sent if "nothing was paused" in s]) == 1
 
 
 def test_email_check_names_what_is_missing():

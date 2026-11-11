@@ -1,7 +1,8 @@
 """Quota and budget guard (plan section 9). Every model call passes here first.
 
 Layers: prepaid provider credits, provider-side limit, our own global monthly budget B, per-user quotas
-and rupee ceiling, per-bug caps (router.py), per-user rate limits, and a spike breaker.
+and rupee ceiling, per-bug caps (router.py). The guard NEVER pauses a mode or a project by itself: budget levels, spikes,
+busy customers and fast-spending projects only email the admins, who decide.
 """
 from __future__ import annotations
 
@@ -14,8 +15,7 @@ from . import config as fx_config
 from . import notify, store
 
 log = logging.getLogger("fixengine.guard")
-LEVEL_NAMES = ["normal", "50% of budget", "80%: free bonus grants stopped", "90%: Extra paused",
-               "100%: High paused", "reserve floor: Low effort only"]
+LEVEL_NAMES = ["normal", "50% of budget", "80% of budget", "90% of budget", "100% of budget", "reserve floor of the credits"]
 FREE_SOURCES = ("bonus", "admin")
 
 
@@ -57,7 +57,8 @@ class Guard:
         return LEVEL_NAMES[self.level() if level is None else level]
 
     def check_alerts(self) -> int:
-        """Email admins once per level per month; run the spike breaker; return the level."""
+        """Email admins once per level per month, and when spending spikes. NOTHING is paused here: only an admin pauses a mode
+        (Admin, AI spending, Mode switches) or a project (its owner, or an admin)."""
         spend = self.month_spend()
         level = self.level(spend)
         period = store.current_period()
@@ -67,94 +68,72 @@ class Guard:
                 store.set_flag(key, "1")
                 notify.admin_level(lvl, LEVEL_NAMES[lvl], spend, self.budget())
                 store.log_admin_action("budget_level", detail={"level": lvl, "spend": round(spend, 2)})
-        self._spike_breaker(spend)
+        self._release_old_automatic_pause()
+        self._spike_alert(spend)
         return level
 
-    # ---- v3.1: one flooding project waits; everyone else keeps working ------------------------------------
-    def project_paused(self, project_id: str) -> str:
-        """'' when the project may use paid AI now, else a plain sentence for the customer (with when it continues).
-
-        Above `project_hour_cap_inr` of AI spend in the last hour, ONLY this project waits (its cases resume by themselves).
-        This replaced the old behaviour where one project's flood paused every paid model for every customer."""
-        if not project_id:
-            return ""
-        cfgb = self.cfg["budget"]
-        now = datetime.now(timezone.utc)
-        until = store.get_flag(f"project_pause:{project_id}")
-        if until and until > now.isoformat(timespec="seconds"):
-            return self._pause_text(until)
-        cap = float(cfgb.get("project_hour_cap_inr", 150.0) or 0)
-        if cap <= 0:
-            return ""
-        hour = store.spend_inr(project_id=project_id, since=(now - timedelta(hours=1)).isoformat(timespec="microseconds"))
-        if hour < cap:
-            return ""
-        until = (now + timedelta(minutes=int(cfgb.get("project_pause_minutes", 60) or 60))).isoformat(timespec="seconds")
-        store.set_flag(f"project_pause:{project_id}", until)
-        store.log_admin_action("project_pause", detail={"project_id": project_id, "last_hour": round(hour, 2), "until": until})
-        notify._to_admins("Agent paused for one project (hourly spending cap)",
-                          f"Project {project_id} spent Rs {hour:.2f} on AI in the last hour (cap Rs {cap:.0f}). Its cases wait until {until} "
-                          "(UTC) and then continue by themselves. Other customers are not affected.\n"
-                          "Raise the cap with FIXENGINE_CONFIG_JSON budget.project_hour_cap_inr, or raise the budget (FIXENGINE_BUDGET_INR).",
-                          "fix_pause")
-        return self._pause_text(until)
+    @staticmethod
+    def _release_old_automatic_pause() -> None:
+        """Older versions paused every paid mode by themselves on a spike. Undo that once, so only pauses made by an admin remain."""
+        if store.get_flag("spike_paused") != "1":
+            return
+        for tier in fx_config.PAID_TIERS:
+            store.set_flag(f"pause_{tier}", "0")
+        store.set_flag("spike_paused", "0")
+        store.log_admin_action("spike_pause_released", detail={"why": "automatic pausing was removed"})
+        notify._to_admins("Automatic pause removed: all modes are running again",
+                          "An older version had paused Normal, High and Extra by itself after a spending spike. The agent no longer "
+                          "pauses anything on its own, so they are running again. To pause a mode yourself: Admin, AI spending, "
+                          "Mode switches.", "fix_pause")
 
     @staticmethod
-    def _pause_text(until: str) -> str:
-        try:
-            at = datetime.fromisoformat(until).astimezone(timezone(timedelta(hours=5, minutes=30))).strftime("%H:%M IST")
-        except ValueError:
-            at = "within the hour"
-        return (f"This project used its AI budget for this hour, so the agent is waiting and continues by itself at {at}. "
-                "Nothing is lost and nothing is charged meanwhile.")
+    def _hour_key() -> str:
+        return datetime.now(timezone.utc).strftime("%Y%m%d%H")
 
-    def _spike_breaker(self, spend: float) -> None:
+    def project_paused(self, project_id: str) -> str:
+        """Always '': the agent never pauses a project by itself. Above `project_hour_cap_inr` of AI spend in the last hour the
+        admins get ONE email per project per hour with the numbers and how to pause it if they decide to."""
+        if not project_id:
+            return ""
+        cap = float(self.cfg["budget"].get("project_hour_cap_inr", 150.0) or 0)
+        if cap <= 0:
+            return ""
+        now = datetime.now(timezone.utc)
+        hour = store.spend_inr(project_id=project_id, since=(now - timedelta(hours=1)).isoformat(timespec="microseconds"))
+        if hour >= cap:
+            key = f"project_spend_mail:{project_id}:{self._hour_key()}"
+            if not store.get_flag(key):
+                store.set_flag(key, "1")
+                store.log_admin_action("project_spend_alert", detail={"project_id": project_id, "last_hour": round(hour, 2)})
+                notify._to_admins("A project is spending fast (nothing was paused)",
+                                  f"Project {project_id} spent Rs {hour:.2f} on AI in the last hour (alert level Rs {cap:.0f}). "
+                                  "The agent keeps working: it never pauses anything by itself.\n"
+                                  "If you want it to stop: pause a mode for everyone in Admin, AI spending, Mode switches, or ask the "
+                                  "owner to press Pause agent on the project.", "fix_spend_alert")
+        return ""
+
+    def _spike_alert(self, spend: float) -> None:
+        """A sudden jump in spending: email the admins (once an hour). Never pauses anything."""
         cfgb = self.cfg["budget"]
         now = datetime.now(timezone.utc)
         since = (now - timedelta(hours=1)).isoformat(timespec="microseconds")
         hour = store.spend_inr(since=since)
-        if hour < float(cfgb["spike_hour_min_inr"]) or store.get_flag("spike_paused") == "1":
+        if hour < float(cfgb["spike_hour_min_inr"]):
             return
         hours_elapsed = max(1.0, (now - now.replace(day=1, hour=0, minute=0, second=0, microsecond=0)).total_seconds() / 3600)
         normal = spend / hours_elapsed
         if hour <= normal * float(cfgb["spike_hour_multiple"]):
             return
-        # First pause the projects that cause the spike. Only if the rest of the spend is STILL a spike, pause everyone.
-        cap = float(cfgb.get("project_hour_cap_inr", 150.0) or 0)
-        rest = hour
-        for row in store.spend_by_project(since):
-            share = float(row["spend"] or 0)
-            if share < max(cap * 0.5, hour * 0.3):
-                break
-            until = (now + timedelta(minutes=int(cfgb.get("project_pause_minutes", 60) or 60))).isoformat(timespec="seconds")
-            store.set_flag(f"project_pause:{row['project_id']}", until)
-            store.log_admin_action("project_pause", detail={"project_id": row["project_id"], "last_hour": round(share, 2), "until": until})
-            notify._to_admins("Agent paused for one project (spending spike)",
-                              f"Project {row['project_id']} caused a spending spike: Rs {share:.2f} in the last hour. Its cases wait until "
-                              f"{until} (UTC); everyone else continues.", "fix_pause")
-            rest -= share
-        if rest < float(cfgb["spike_hour_min_inr"]) or rest <= normal * float(cfgb["spike_hour_multiple"]):
+        key = f"spike_mail:{self._hour_key()}"
+        if store.get_flag(key):
             return
-        # Last resort: the spike is spread over many projects (or a bug in our own loop). Pause every paid model.
-        for tier in fx_config.PAID_TIERS:
-            store.set_flag(f"pause_{tier}", "1")
-        store.set_flag("spike_paused", "1")
-        store.log_admin_action("spike_breaker", detail={"last_hour": round(hour, 2), "normal_per_hour": round(normal, 2)})
-        notify.admin_spike(hour, normal)
+        store.set_flag(key, "1")
+        top = [(r["project_id"], round(float(r["spend"] or 0), 2)) for r in store.spend_by_project(since)[:5]]
+        store.log_admin_action("spike_alert", detail={"last_hour": round(hour, 2), "normal_per_hour": round(normal, 2), "top": top})
+        notify.admin_spike(hour, normal, top)
 
     def tier_paused_by_budget(self, tier: str, *, pack: bool, level: int | None = None) -> bool:
-        """Kill-switch table from plan 9.3. Paid packs survive levels 3 and 4 but not the reserve floor."""
-        level = self.level() if level is None else level
-        if tier == "groq":
-            return False
-        if level >= 5:
-            return True
-        if pack:
-            return False
-        if tier == "opus" and level >= 3:
-            return True
-        if tier == "sonnet" and level >= 4:
-            return True
+        """Always False: budget levels only email the admins (check_alerts). A mode stops only when an admin pauses it."""
         return False
 
     # ---- quotas ------------------------------------------------------------------------------------
@@ -183,18 +162,18 @@ class Guard:
                 "warn_at": int(self.cfg["warn_at"].get(tier, 0)), "every_use": bool(self.cfg["warn_every_use"].get(tier))}
 
     def user_ceiling_reached(self, user_id: str) -> bool:
+        """Always False: a customer above the monthly level keeps being served. The admins get one email per customer per month."""
         spent = store.spend_inr(period=store.current_period(), user_id=user_id)
         ceiling = float(self.cfg["caps"]["user_month_ceiling_inr"])
-        if spent < ceiling:
-            return False
-        key = f"ceiling_mail:{user_id}:{store.current_period()}"
-        if not store.get_flag(key):
-            store.set_flag(key, "1")
-            notify._to_admins("Agent paused for one customer (monthly spending ceiling)",
-                              f"Customer {user_id} reached the monthly AI spending ceiling (Rs {spent:.2f} of Rs {ceiling:.0f}). Their cases "
-                              "wait and the customer sees a 'busy' message. Raise caps.user_month_ceiling_inr if this customer should continue.",
-                              "fix_pause")
-        return True
+        if spent >= ceiling:
+            key = f"ceiling_mail:{user_id}:{store.current_period()}"
+            if not store.get_flag(key):
+                store.set_flag(key, "1")
+                store.log_admin_action("user_ceiling_alert", user_id, {"spent": round(spent, 2), "ceiling": ceiling})
+                notify._to_admins("A customer passed the monthly AI spending level (nothing was paused)",
+                                  f"Customer {user_id} has used Rs {spent:.2f} of AI this month (alert level Rs {ceiling:.0f}). The agent "
+                                  "keeps working for them. If you want to stop it, pause a mode in Admin, AI spending.", "fix_spend_alert")
+        return False
 
     def quota_left_tuple(self, user_id: str) -> tuple[tuple, tuple]:
         """(left, total) for haiku, sonnet, opus, with the kill switch, admin pauses and user ceiling applied."""
@@ -215,14 +194,18 @@ class Guard:
 
     # ---- rate limits -------------------------------------------------------------------------------------
     def rate_check(self, user_id: str) -> GuardResult | None:
+        """Never blocks. Many tries in an hour, or several failed cases in a row, email the admins once an hour so a person decides."""
         caps = self.cfg["caps"]
-        if store.tries_last_hour(user_id) >= int(caps["tries_per_hour_per_user"]):
-            mins = store.minutes_until_try_frees(user_id)
-            return GuardResult(False, "rate", message=f"The agent used this hour's {caps['tries_per_hour_per_user']} AI tries "
-                               f"(a safety limit on spending). It continues by itself in about {mins} min", wait_seconds=mins * 60)
+        hour = store.tries_last_hour(user_id)
         n = int(caps["cooldown_after_failures"])
-        if n and store.recent_failed_bugs(user_id, int(caps["cooldown_minutes"])) >= n:
-            return GuardResult(False, "cooldown", message="Cooling down after repeated failures.")
+        failed = store.recent_failed_bugs(user_id, int(caps["cooldown_minutes"])) if n else 0
+        if hour >= int(caps["tries_per_hour_per_user"]) or (n and failed >= n):
+            key = f"rate_mail:{user_id}:{self._hour_key()}"
+            if not store.get_flag(key):
+                store.set_flag(key, "1")
+                notify._to_admins("A customer's agent is very busy (nothing was paused)",
+                                  f"Customer {user_id}: {hour} AI tries in the last hour and {failed} failed cases recently. The agent keeps "
+                                  "working. If this looks like a loop, pause a mode in Admin, AI spending.", "fix_spend_alert")
         return None
 
     def intake_allowed(self, user_id: str) -> bool:

@@ -192,23 +192,27 @@ def test_exhausted_then_pack_then_grant(fx_db, cfg):
     assert g.quota(uid, "opus")["total"] == 5
 
 
-def test_kill_switch_levels_and_pack_survival(fx_db, cfg):
+def test_budget_levels_are_counted_but_never_pause_a_mode(fx_db, cfg):
     uid, pid = make_user_and_project()
     g = fx_guard.Guard(cfg)                      # B = 400, credits = 500
     assert g.level(0) == 0 and g.level(200) == 1 and g.level(320) == 2 and g.level(360) == 3 and g.level(400) == 4 and g.level(480) == 5
-    assert g.tier_paused_by_budget("opus", pack=False, level=3) and not g.tier_paused_by_budget("opus", pack=True, level=3)
-    assert g.tier_paused_by_budget("sonnet", pack=False, level=4) and not g.tier_paused_by_budget("haiku", pack=False, level=4)
-    assert g.tier_paused_by_budget("sonnet", pack=True, level=5) and not g.tier_paused_by_budget("groq", pack=True, level=5)
+    for level in range(6):
+        for tier in ("haiku", "sonnet", "opus"):
+            assert not g.tier_paused_by_budget(tier, pack=False, level=level) and not g.tier_paused_by_budget(tier, pack=True, level=level)
 
 
-def test_budget_level_pauses_free_pool_but_not_paid_pack(fx_db, cfg):
+def test_even_past_the_budget_every_mode_still_works_and_admins_are_told(fx_db, cfg, monkeypatch):
+    sent = []
+    monkeypatch.setattr("fixengine.notify._to_admins", lambda subject, body="", kind="": sent.append(subject))
     uid, pid = make_user_and_project()
     other_uid, other_pid = make_user_and_project("o@example.com")
-    _attempt(other_uid, other_pid, "haiku", cost=365.0)        # 91% of B -> level 3 -> Extra paused
+    _attempt(other_uid, other_pid, "haiku", cost=490.0)        # past the reserve floor (level 5)
     g = fx_guard.Guard(cfg)
-    assert g.check(uid, "opus").code in ("busy", "exhausted")
-    admin_tools.sell_pack(uid, "extra")
-    assert g.check(uid, "opus").ok
+    g.check_alerts()
+    for tier in ("haiku", "sonnet", "opus"):
+        assert g.check(uid, tier).ok, tier
+    assert not ({"haiku", "sonnet", "opus"} & store.paused_tiers())
+    assert any("budget alert" in s.lower() for s in sent)
 
 
 def test_warning_points(fx_db, cfg):
@@ -223,41 +227,70 @@ def test_warning_points(fx_db, cfg):
     assert not g.needs_warning(uid, "sonnet")[0]
 
 
-def test_per_user_rupee_ceiling(fx_db, cfg):
+def test_customer_over_the_monthly_level_keeps_working_and_admins_get_one_email(fx_db, cfg, monkeypatch):
+    sent = []
+    monkeypatch.setattr("fixengine.notify._to_admins", lambda subject, body="", kind="": sent.append(subject))
     uid, pid = make_user_and_project()
     _attempt(uid, pid, "sonnet", cost=251.0)
-    assert fx_guard.Guard(cfg).check(uid, "haiku").code == "ceiling"
+    g = fx_guard.Guard(cfg)
+    assert g.check(uid, "haiku").ok and g.check(uid, "haiku").ok
+    assert len([s for s in sent if "monthly AI spending level" in s]) == 1
 
 
-def test_hourly_rate_limit(fx_db, cfg):
+def test_many_tries_in_an_hour_never_block_but_email_the_admins_once(fx_db, cfg, monkeypatch):
+    sent = []
+    monkeypatch.setattr("fixengine.notify._to_admins", lambda subject, body="", kind="": sent.append(subject))
     uid, pid = make_user_and_project()
-    for _ in range(30):
+    for _ in range(31):
         _attempt(uid, pid, "haiku")
-    for _ in range(5):
-        _attempt(uid, pid, "haiku", result="system_fault")      # faults are not tries
-    gate = fx_guard.Guard(cfg).check(uid, "haiku")
-    assert gate.code == "rate" and "continues by itself in about" in gate.message and gate.wait_seconds > 0
+    admin_tools.sell_pack(uid, "high")                            # tries left in High, so only the hourly rule could block
+    g = fx_guard.Guard(cfg)
+    assert g.rate_check(uid) is None and g.check(uid, "sonnet").ok and g.check(uid, "sonnet").ok
+    assert len([s for s in sent if "very busy" in s]) == 1
 
 
-def test_spike_from_one_project_pauses_only_that_project(fx_db, cfg):
-    """v3.1: one project flooding no longer pauses every paid model for every customer."""
+def test_a_spike_from_one_project_pauses_nothing_and_emails_once(fx_db, cfg, monkeypatch):
+    sent = []
+    monkeypatch.setattr("fixengine.notify._to_admins", lambda subject, body="", kind="": sent.append((subject, body)))
     uid, pid = make_user_and_project()
     _attempt(uid, pid, "haiku", cost=160.0)
     g = fx_guard.Guard(cfg)
-    g.check_alerts()
+    g.check_alerts(); g.check_alerts()
     assert not ({"haiku", "sonnet", "opus"} & store.paused_tiers()) and store.get_flag("spike_paused") != "1"
-    assert "continues by itself" in g.project_paused(pid)
-    other_uid, other_pid = make_user_and_project(email="other@example.com")
-    assert g.project_paused(other_pid) == "" and g.check(other_uid, "haiku").ok
+    assert g.project_paused(pid) == "" and g.project_paused(pid) == "" and g.check(uid, "haiku").ok
+    spikes = [b for s, b in sent if "spending spike" in s]
+    assert len(spikes) == 1 and pid in spikes[0] and "nothing was paused" in [s for s, _ in sent if "spending spike" in s][0]
+    assert len([s for s, _ in sent if "spending fast" in s]) == 1
 
 
-def test_spike_spread_over_many_projects_still_pauses_paid_models(fx_db, cfg):
+def test_a_spike_spread_over_many_projects_also_pauses_nothing(fx_db, cfg, monkeypatch):
+    monkeypatch.setattr("fixengine.notify._to_admins", lambda *a, **k: None)
     for i in range(8):
         uid, pid = make_user_and_project(email=f"u{i}@example.com")
         _attempt(uid, pid, "haiku", cost=9.0)
     fx_guard.Guard(cfg).check_alerts()
-    assert {"haiku", "sonnet", "opus"} <= store.paused_tiers()
-    assert store.get_flag("spike_paused") == "1"
+    assert not ({"haiku", "sonnet", "opus"} & store.paused_tiers()) and store.get_flag("spike_paused") != "1"
+
+
+def test_an_old_automatic_pause_is_released_once(fx_db, cfg, monkeypatch):
+    sent = []
+    monkeypatch.setattr("fixengine.notify._to_admins", lambda subject, body="", kind="": sent.append(subject))
+    for tier in ("haiku", "sonnet", "opus"):
+        store.set_flag(f"pause_{tier}", "1")
+    store.set_flag("spike_paused", "1")
+    g = fx_guard.Guard(cfg)
+    g.check_alerts(); g.check_alerts()
+    assert not store.paused_tiers() and len([s for s in sent if "Automatic pause removed" in s]) == 1
+
+
+def test_an_admin_pause_is_the_only_pause_and_it_is_respected(fx_db, cfg):
+    uid, pid = make_user_and_project()
+    admin_tools.pause_tier("sonnet", True, "admin@example.com")
+    g = fx_guard.Guard(cfg)
+    g.check_alerts()
+    assert g.check(uid, "sonnet").code == "paused" and g.check(uid, "haiku").ok
+    admin_tools.pause_tier("sonnet", False, "admin@example.com")
+    assert g.check(uid, "sonnet").ok
 
 
 def test_admin_alert_levels_fire_once(fx_db, cfg, monkeypatch):

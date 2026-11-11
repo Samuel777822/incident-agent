@@ -124,10 +124,12 @@ def admin_grant(user_email: str, tier: str, tries: int, analysis: dict) -> None:
                + "\n".join(f"- {k}: {v}" for k, v in analysis.items()), "fix_grant")
 
 
-def admin_spike(last_hour: float, normal: float) -> None:
-    _to_admins("Auto-fix spend spike: paid models paused",
-               f"Spend in the last hour is Rs {last_hour:.2f} against about Rs {normal:.2f} per hour normally. "
-               f"Paid models were paused. Resume them on {_base()}/admin after checking the ledger.", "fix_spike")
+def admin_spike(last_hour: float, normal: float, top: list | None = None) -> None:
+    lines = "\n".join(f"- project {pid}: Rs {amount:.2f}" for pid, amount in (top or []))
+    _to_admins("Auto-fix spending spike (nothing was paused)",
+               f"Spend in the last hour is Rs {last_hour:.2f} against about Rs {normal:.2f} per hour normally. The agent keeps working: "
+               "it never pauses anything by itself.\n" + (f"Biggest spenders in the last hour:\n{lines}\n" if lines else "")
+               + f"To pause a mode for everyone: {_base()}/admin/fix, Mode switches.", "fix_spike")
 
 
 def admin_low_credit(balance: float, threshold: float) -> None:

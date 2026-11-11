@@ -208,14 +208,14 @@ def test_client_reply_goes_to_the_same_case_and_requeues_it(web_env):
 
 
 # ============================================================================================ the project pause
-def test_project_pause_text_is_plain_and_says_when(fx_db, cfg):
+def test_a_project_is_never_paused_by_the_agent(fx_db, cfg, monkeypatch):
     from fixengine import guard as fx_guard
+    monkeypatch.setattr("fixengine.notify._to_admins", lambda *a, **k: None)
     uid, pid = H.make_user_and_project()
     bug = store.create_bug(project_id=pid, user_id=uid, incident_id="i", fingerprint_json={"hash": "h"}, bug_class="medium", category="")
     aid = store.add_attempt(bug=bug, tier="sonnet", model="m", used_strong_diag=False, info_hash="x")
     store.finish_attempt(aid, result="fail", cost_inr=151.0)
-    text = fx_guard.Guard(cfg).project_paused(pid)
-    assert "continues by itself at" in text and "IST" in text and "used up or capped" not in text
+    assert fx_guard.Guard(cfg).project_paused(pid) == ""
 
 
 # ============================================================================================ the on-call engineer: prompt and parsing

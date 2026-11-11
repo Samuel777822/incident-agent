@@ -226,7 +226,10 @@ ADMIN_CSS = """<style>
 ADMIN_KIND_TEXT = {
     "auto_grant": "Extra tries granted automatically", "hold": "Request held for admin review", "hold_approved": "Request approved",
     "hold_denied": "Request denied", "pause": "Mode paused", "resume": "Mode resumed", "pack_sold": "Try pack credited",
-    "budget_level": "Budget threshold reached", "spike_breaker": "Spike breaker paused paid modes",
+    "budget_level": "Budget threshold reached", "spike_breaker": "Spike breaker paused paid modes (old version)",
+    "spike_alert": "Spending spike: admins emailed", "project_spend_alert": "Project spending fast: admins emailed",
+    "user_ceiling_alert": "Customer passed the monthly level: admins emailed", "spike_pause_released": "Old automatic pause removed",
+    "provider_problem": "AI provider problem: admins emailed",
 }
 
 
@@ -238,46 +241,42 @@ def _rs(v) -> str:
 
 
 def _protection_rows(d: dict) -> str:
+    """Every row only EMAILS the admins. The agent never pauses a mode, a project or a customer by itself."""
     pr, cfg = d["protection"], d["cfg"]
     lv = d["level"]
     caps = cfg["caps"]
     rows = [
-        (1, f"{int(pr['fractions'][0] * 100)}% of the limit", _rs(pr["levels"][0]),
-         "Both admins get an email. Nothing changes for customers.", "None",
+        (1, f"{int(pr['fractions'][0] * 100)}% of the limit", _rs(pr["levels"][0]), "Both admins get an email.",
          "An early warning while there is still plenty of room.", "No. Keep an eye on the forecast."),
         (2, f"{int(pr['fractions'][1] * 100)}% of the limit", _rs(pr["levels"][1]),
-         "Automatic approval of 'ask for more tries' requests stops: every request now waits for you. Bought packs keep working.",
-         "None paused", "Free extras are the first thing to cut when money is getting tight.",
-         "Yes, when requests appear under 'Requests waiting for you'."),
-        (3, f"{int(pr['fractions'][2] * 100)}% of the limit", _rs(pr["levels"][2]),
-         "Extra is paused for plan tries. Customers who bought an Extra pack can still use it.", "Extra",
-         "Extra is the most expensive mode per attempt, so it is paused first.", "Optional: top up credits and raise the limit."),
-        (4, f"{int(pr['fractions'][3] * 100)}% of the limit", _rs(pr["levels"][3]),
-         "High is paused too (pack tries still work). Normal continues, so cases are still worked on.", "High, Extra",
-         "Keeps the month inside the limit while the cheap modes keep serving customers.", "Yes, if you want High/Extra back this month."),
-        (5, f"Reserve floor ({int(pr['reserve_fraction'] * 100)}% of credits)", _rs(pr["reserve_floor"]),
-         "Every AI mode stops, including bought packs. Push checks (no AI) continue. Customers see a 'busy' message.",
-         "Normal, High, Extra", "Protects the last part of the prepaid credits so the provider account never runs dry mid-fix.",
+         "Both admins get an email. Automatic approval of 'ask for more tries' stops: those requests wait for you.",
+         "Free extras are the first thing to hold back when money is getting tight.", "Yes, when requests appear under 'Requests waiting for you'."),
+        (3, f"{int(pr['fractions'][2] * 100)}% of the limit", _rs(pr["levels"][2]), "Both admins get an email.",
+         "Extra is the most expensive mode: this is the moment to decide whether to pause it.", "Your call: pause Extra below, or top up."),
+        (4, f"{int(pr['fractions'][3] * 100)}% of the limit", _rs(pr["levels"][3]), "Both admins get an email.",
+         "The monthly limit is reached.", "Your call: pause High and Extra below, or raise the limit."),
+        (5, f"Reserve floor ({int(pr['reserve_fraction'] * 100)}% of credits)", _rs(pr["reserve_floor"]), "Both admins get an email.",
+         "The prepaid credits are nearly gone; the provider will refuse calls when they run out.",
          "Yes: top up provider credits, then update FIXENGINE_CREDITS_INR / FIXENGINE_BUDGET_INR."),
     ]
     out = []
-    for level, name, trigger, does, modes, why, admin in rows:
+    for level, name, trigger, does, why, admin in rows:
         cls = " class='now'" if lv == level else ""
-        out.append(f"<tr{cls}><td><b>{E(name)}</b><br><small class='muted'>at {E(trigger)}</small></td><td>{E(does)}</td>"
-                   f"<td>{E(modes)}</td><td class='why'>{E(why)}</td><td>{E(admin)}</td></tr>")
-    spike_state = ("<b>tripped</b>: paid modes are paused until you resume them" if pr["spike_paused"] else "armed")
-    out.append(f"<tr{' class=now' if pr['spike_paused'] else ''}><td><b>Spike breaker</b><br><small class='muted'>last hour &gt; "
+        out.append(f"<tr{cls}><td><b>{E(name)}</b><br><small class='muted'>at {E(trigger)}</small></td><td>{E(does)} Nothing is paused.</td>"
+                   f"<td>None</td><td class='why'>{E(why)}</td><td>{E(admin)}</td></tr>")
+    out.append(f"<tr><td><b>Spending spike</b><br><small class='muted'>last hour &gt; "
                f"{E(pr['spike_multiple'])}× the normal hourly rate and ≥ {E(_rs(pr['spike_min']))}</small></td>"
-               f"<td>Pauses Normal, High and Extra and emails you. Now {spike_state}. Last hour {E(_rs(pr['last_hour']))} vs normal "
-               f"{E(_rs(pr['normal_per_hour']))}/hour.</td><td>Normal, High, Extra</td>"
+               f"<td>Both admins get an email (at most once an hour) with the biggest spenders. Nothing is paused. Last hour "
+               f"{E(_rs(pr['last_hour']))} vs normal {E(_rs(pr['normal_per_hour']))}/hour.</td><td>None</td>"
                "<td class='why'>Catches runaway loops or abuse within an hour, long before the monthly levels would.</td>"
-               "<td>Yes: find the cause, then press Resume for each mode below.</td></tr>")
-    out.append(f"<tr><td><b>Per-customer and per-bug limits</b><br><small class='muted'>always on</small></td>"
-               f"<td>A customer's AI spend stops at {E(_rs(caps['user_month_ceiling_inr']))} a month; one bug stops at "
-               f"{E(_rs(caps['per_bug_cost_inr']))} or {E(caps['per_bug_max_tries'])} tries; at most {E(caps['tries_per_hour_per_user'])} tries an hour; "
-               f"a {E(caps['cooldown_minutes'])}-minute pause after {E(caps['cooldown_after_failures'])} failed bugs in a row.</td>"
-               "<td>Paid modes for that customer or bug</td><td class='why'>One customer or one hard bug can never eat the whole budget.</td>"
-               "<td>No. The bug goes to human review with a report.</td></tr>")
+               "<td>Your call: pause a mode below if it looks wrong.</td></tr>")
+    out.append(f"<tr><td><b>Per-customer and per-project alerts</b><br><small class='muted'>always on</small></td>"
+               f"<td>An email when a customer passes {E(_rs(caps['user_month_ceiling_inr']))} in a month, a project passes "
+               f"{E(_rs(cfg['budget'].get('project_hour_cap_inr') or 0))} in an hour, or a customer uses {E(caps['tries_per_hour_per_user'])} "
+               f"tries in an hour. Nothing is paused. One case stops at {E(_rs(caps['per_bug_cost_inr']))} and asks its owner "
+               "'Keep going?' with a button.</td>"
+               "<td>None</td><td class='why'>You see unusual spending the same hour and decide yourself.</td>"
+               "<td>Your call.</td></tr>")
     return "".join(out)
 
 
@@ -457,7 +456,7 @@ def admin_page(d: dict, csrf: str, msg: str = "") -> str:
             f"requests by itself when money is comfortable; everything else lands here.</p>{holds}"
             f"<h2>Spending protection</h2>{protections}"
             f"<h2>Mode switches</h2><p class='muted'>Pausing a mode stops new attempts in that mode for every customer. Attempts already "
-            f"running finish. Use it during a provider outage, a price change or after the spike breaker trips.</p><div class='grid'>{pauses}</div>"
+            f"running finish. Only you can pause a mode: the agent never does it by itself. Use it during a provider outage, a price change or after a spending alert.</p><div class='grid'>{pauses}</div>"
             f"<h2>Spending by AI mode (this month)</h2>{tokens_help}{tiers}"
             f"<h2>Spending by customer (this month)</h2><p class='muted'>Attempts and spend caused by each customer's bugs. "
             f"Quota columns show plan tries plus any bonus or pack tries.</p>{users}"
