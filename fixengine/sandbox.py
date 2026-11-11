@@ -649,7 +649,25 @@ class DockerRunner(_BaseRunner):
                     phases.append(jr)
             return self._finish(phases, profile)
         finally:
-            shutil.rmtree(work, ignore_errors=True)
+            remove_tree(work, image, self.exec_fn)
+
+
+def remove_tree(path: Path, image: str, exec_fn=None) -> None:
+    """Delete a scratch folder completely. The containers run as uid 10001, so what they create (node_modules, build output,
+    caches) cannot be deleted by the service's own user: shutil.rmtree skipped it silently and every run left a few hundred MB
+    behind until the disk was full (11 Nov 2026: 24 GB, 0 free). What is left is deleted from inside a container, as 10001."""
+    path = Path(path)
+    shutil.rmtree(path, ignore_errors=True)
+    if not path.exists():
+        return
+    run = exec_fn or (lambda argv, timeout: (subprocess.run(argv, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL,
+                                                             timeout=timeout).returncode, "", False))
+    try:
+        run(["docker", "run", "--rm", "--network", "none", "--user", "10001:10001", "-v", f"{path}:/w", image,
+             "sh", "-c", "chmod -R u+rwX /w 2>/dev/null; find /w -mindepth 1 -delete 2>/dev/null; true"], 300)
+    except (OSError, subprocess.SubprocessError):
+        pass
+    shutil.rmtree(path, ignore_errors=True)
 
 
 def _journey_phase_for(self, target: Path, sb: dict, run_id: str, env: dict):

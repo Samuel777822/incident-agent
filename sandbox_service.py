@@ -56,10 +56,14 @@ def free_space(force: bool = False) -> float:
     if not force and free_gb() >= MIN_FREE_GB:
         return free_gb()
     cutoff = time.time() - 1800
+    try:
+        image = fx_config.load()["sandbox"]["image_python"]
+    except Exception:
+        image = "python:3.12-slim"
     for folder in glob.glob(os.path.join(tempfile.gettempdir(), "fx-*")):
         try:
             if os.path.getmtime(folder) < cutoff:
-                shutil.rmtree(folder, ignore_errors=True)
+                sandbox.remove_tree(Path(folder), image)        # also what the containers (uid 10001) left behind
         except OSError:
             pass
     for argv in (["docker", "container", "prune", "-f"], ["docker", "volume", "prune", "-f"],

@@ -137,3 +137,27 @@ def test_the_portal_can_ask_the_server_to_clean_up_and_the_run_is_retried(host, 
     monkeypatch.setattr(runner, "_run_once", flaky)
     (tmp_path / "app.py").write_text("x = 1\n")
     assert runner.run(tmp_path, sandbox.detect_profile(tmp_path)).passed and len(calls) == 2
+
+
+def test_what_the_containers_leave_behind_is_deleted_through_docker(tmp_path, monkeypatch):
+    # 11 Nov 2026: files made by the container user (uid 10001) could not be deleted, so every run leaked until the disk was full.
+    stuck = tmp_path / "fx-run"
+    (stuck / "repo" / "node_modules").mkdir(parents=True)
+    real_rmtree = sandbox.shutil.rmtree
+    calls = []
+    monkeypatch.setattr(sandbox.shutil, "rmtree", lambda p, ignore_errors=False: None if not calls else real_rmtree(p, ignore_errors=True))
+
+    def fake_exec(argv, timeout):
+        calls.append(argv)
+        return 0, "", False
+    sandbox.remove_tree(stuck, "fixengine-sandbox-node:1", fake_exec)
+    assert calls and calls[0][:3] == ["docker", "run", "--rm"] and "10001:10001" in calls[0] and f"{stuck}:/w" in calls[0]
+    assert not stuck.exists()
+
+
+def test_a_clean_folder_needs_no_docker(tmp_path):
+    folder = tmp_path / "fx-ok"
+    (folder / "repo").mkdir(parents=True)
+    called = []
+    sandbox.remove_tree(folder, "img", lambda argv, timeout: called.append(argv) or (0, "", False))
+    assert not folder.exists() and called == []
