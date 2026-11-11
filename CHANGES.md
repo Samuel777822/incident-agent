@@ -6,6 +6,16 @@ read code, could not see the live site, and pushed fixes that nothing had proven
 on-call engineer: understand the request, look at the real site, find the cause, fix it, prove it, push it, check the live site
 again, and tell the client honestly.
 
+## v5.3.1: the engineer's own tests always run (from the live Bible-Well test, 11 November 2026)
+
+* **New test files are named on the command line.** Bible-Well's `npm test` ran one fixed file, so the engineer's new
+  `tests/mobile-login-button.test.mjs` never ran and the "fails without the fix" probe wrongly said it passed without the fix. The
+  sandbox now adds the new test files to the test command (`node --test`, vitest, jest or pytest, picked from the file) in the
+  engineer's checks and in the final check.
+* **The probe runs ONLY the new tests** on the old code (no start-up check), so an already-red suite can't fake a result.
+* **Browser screenshots are never mistaken for the owner's.** The judge's "before" picture and the engineer's screenshots are the
+  owner's own, not the browser check's "after" shots from an earlier round.
+
 ## v5.3: Eyes for the engineer: screenshots, voice, "Still broken" and a real-browser check (11 November 2026)
 
 * **Show the agent:** every request, answer and reply has "Add a screenshot" (shrunk in the browser to about 500 KB, location data

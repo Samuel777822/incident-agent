@@ -637,7 +637,9 @@ class Engineer:
         self.checks_left -= 1
         self._note("run_checks", "running install, build, tests and start-up in the sandbox")
         from . import sandbox
-        res = sandbox.run_profile(self.runner, self.ws.dir, sandbox.refresh_profile(self.ws.dir, self.profile))
+        prof = sandbox.refresh_profile(self.ws.dir, self.profile)
+        prof = sandbox.with_new_tests(prof, self.ws.dir, [p for p in self.ws.changed if sandbox.is_test_file(p)]) or prof
+        res = sandbox.run_profile(self.runner, self.ws.dir, prof)
         if res.system_fault:
             self.sandbox_broken = True
             return f"The sandbox could not run ({res.error}). Reason from the code; do not keep calling run_checks."

@@ -394,6 +394,80 @@ def refresh_profile(root: Path, fallback):
     return fresh
 
 
+# ---- the engineer's own new tests always run ---------------------------------------------------------------------------
+# Bible-Well, 11 Nov 2026: package.json said "test": "node --test tests/openrouter.test.mjs", so the engineer's new
+# tests/mobile-login-button.test.mjs never ran (not in the checks, not in the "fails without the fix" probe), and the probe wrongly
+# said the new test passes without the fix. These helpers name the new test files on the command line.
+TEST_FILE = re.compile(r"(^|/)(tests?|__tests__|spec)/[^/]+\.(py|[cm]?[jt]sx?)$|(^|/)test_[^/]+\.py$|_test\.py$"
+                       r"|\.(test|spec)\.[cm]?[jt]sx?$")
+
+
+def is_test_file(path: str) -> bool:
+    p = str(path).replace("\\", "/")
+    return bool(TEST_FILE.search(p)) and "node_modules/" not in p and not p.endswith((".d.ts",))
+
+
+def _node_test_command(root: Path, base: str, rel: str) -> str | None:
+    """How to run ONE Node test file, from what it imports (node:test, vitest, jest). None when it cannot be told."""
+    text = _read(root, f"{base}/{rel}" if base else rel)
+    pkg = _read(root, f"{base}/package.json" if base else "package.json")
+    try:
+        data = json.loads(pkg) if pkg else {}
+    except ValueError:
+        data = {}
+    deps = {**(data.get("dependencies") or {}), **(data.get("devDependencies") or {})}
+    q = shlex.quote(rel)
+    if re.search(r"""['"]node:test['"]""", text):
+        return f"node --test {q}"
+    if "vitest" in text or "vitest" in deps:
+        return f"npx --no-install vitest run {q}"
+    if "@jest/globals" in text or "jest" in deps:
+        return f"npx --no-install jest {q}"
+    if NODE_BUILTIN_TEST.search(rel) and not deps:
+        return f"node --test {q}"
+    return None
+
+
+def _new_tests_command(root: Path, prof: Profile, paths: list[str]) -> str | None:
+    base = prof.workdir or ""
+    prefix = f"{base}/" if base else ""
+    mine = [p[len(prefix):] for p in paths if p.startswith(prefix)]
+    if prof.language == "python":
+        py = [p for p in mine if p.endswith(".py")]
+        return ("python -m pytest -q -p no:cacheprovider " + " ".join(shlex.quote(p) for p in py)) if py else None
+    if prof.language == "node":
+        cmds = [c for c in (_node_test_command(root, base, p) for p in mine if re.search(r"\.[cm]?[jt]sx?$", p)) if c]
+        return " && ".join(dict.fromkeys(cmds)) if cmds else None
+    return None
+
+
+def with_new_tests(profile, root: Path, test_paths, *, only: bool = False):
+    """The profile with the engineer's new test files named on the test command, so they run even when the project's own test
+    script lists fixed files. only=True runs ONLY those files (and no start-up check): the "does the test fail without the fix"
+    probe. Returns None in only-mode when no new test could be mapped to a command (the caller then runs the whole suite)."""
+    from dataclasses import replace
+    paths = sorted({str(p).replace("\\", "/") for p in (test_paths or []) if is_test_file(p)})
+    if not paths:
+        return None if only else profile
+    parts = list(profile.parts) if isinstance(profile, StackSet) else [profile]
+    out, mapped = [], False
+    for prof in parts:
+        extra = _new_tests_command(Path(root), prof, paths)
+        if extra:
+            mapped = True
+        if only:
+            out.append(replace(prof, test=extra, has_tests=bool(extra), smoke=None, notes=list(prof.notes)))
+        elif extra:
+            already = bool(prof.test) and all(p in prof.test for p in paths)
+            test = prof.test if already else (f"{prof.test} && {extra}" if prof.test else extra)
+            out.append(replace(prof, test=test, has_tests=True, notes=list(prof.notes)))
+        else:
+            out.append(prof)
+    if only and not mapped:
+        return None
+    return StackSet(parts=out) if isinstance(profile, StackSet) else out[0]
+
+
 def run_profile(runner, root: Path, profile) -> "SandboxResult":
     """Run one Profile, or every stack of a StackSet, each in its own fresh sandbox, and merge the results."""
     if not isinstance(profile, StackSet):

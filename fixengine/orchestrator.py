@@ -27,6 +27,7 @@ log = logging.getLogger("fixengine")
 PAID = fx_config.PAID_TIERS
 AGENT_MARK = "[agent-daemon]"   # in every fix title, so a later push of the agent's own fix is recognised (no fix loops)
 OUTAGE_MINUTES = 10
+AFTER_SHOT_NOTE = "after the fix, real browser on GitHub: "
 TEST_SETUP_FILES = {"package.json", "requirements.txt", "requirements-dev.txt", "pyproject.toml", "setup.cfg", "pytest.ini", "jest.config.js",
                     "jest.config.cjs", "jest.config.mjs", "vitest.config.js", "vitest.config.ts", "vitest.config.mjs", "babel.config.js", "tsconfig.json"}
 MAX_GITHUB_ROUNDS = int(os.getenv("FIX_GITHUB_ROUNDS", "3") or 3)        # red GitHub runs before a human is asked
@@ -544,7 +545,10 @@ class Engine:
                     target.relative_to(patched.resolve())
                     target.parent.mkdir(parents=True, exist_ok=True)
                     target.write_text(text, encoding="utf-8")
-                sres = sandbox.run_profile(self.runner, patched, sandbox.refresh_profile(patched, profile))
+                prof = sandbox.refresh_profile(patched, profile)
+                written = {str(p) for p in (res.data.get("tests_written") or [])} | {p for p in res.new_files if sandbox.is_test_file(p)}
+                prof = sandbox.with_new_tests(prof, patched, sorted(p for p in written if p in res.new_files)) or prof
+                sres = sandbox.run_profile(self.runner, patched, prof)
             finally:
                 shutil.rmtree(work, ignore_errors=True)
             if not sres.system_fault and not sres.passed:
@@ -1044,7 +1048,7 @@ class Engine:
                 if name.endswith("-scrolled.png") or kept >= 2:
                     continue
                 portal_db.add_case_image(claimed["incident_id"], claimed["project_id"], "image/png", data,
-                                         "after the fix, real browser on GitHub: " + name[:-4])
+                                         AFTER_SHOT_NOTE + name[:-4])
                 kept += 1
         except Exception:
             log.debug("could not keep the browser screenshots")
@@ -1100,7 +1104,8 @@ class Engine:
         try:
             import media_input
             return [{"url": media_input.data_url(im["mime"], im["data"]), "note": im.get("note", "")}
-                    for im in portal_db.case_images(incident_id, limit=3)]
+                    for im in portal_db.case_images(incident_id, limit=8)
+                    if not str(im.get("note") or "").startswith(AFTER_SHOT_NOTE)][:3]
         except Exception:
             log.debug("could not load the owner's screenshots for %s", incident_id)
             return []
@@ -1149,7 +1154,9 @@ class Engine:
                 target.relative_to(probe.resolve())
                 target.parent.mkdir(parents=True, exist_ok=True)
                 target.write_text(text, encoding="utf-8")
-            res = sandbox.run_profile(self.runner, probe, sandbox.refresh_profile(probe, profile))
+            fresh = sandbox.refresh_profile(probe, profile)
+            only = sandbox.with_new_tests(fresh, probe, [p for p in tests if sandbox.is_test_file(p)], only=True)
+            res = sandbox.run_profile(self.runner, probe, only or fresh)      # only the new tests: the old suite may already be red
         except Exception:
             return None
         finally:
