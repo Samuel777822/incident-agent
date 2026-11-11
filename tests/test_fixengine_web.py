@@ -124,3 +124,40 @@ def test_admin_can_credit_a_paid_pack(web_env):
     _, _, body = _request("/admin/fix", method="POST", cookie=cookie,
                           form={"csrf": "csrf-token-1", "action": "sell_pack", "email": "nobody@example.com", "kind": "extra"})
     assert "No customer" in body
+
+
+# ---- 11 Nov 2026: the page said Rs 363 spent and Rs 136 left while OpenRouter had charged $4.96 and the account was empty -------
+def test_openrouter_live_reads_this_keys_spend_and_the_account_balance(monkeypatch):
+    import httpx
+    from fixengine import provider_balance
+    monkeypatch.setenv("OPENROUTER_API_KEY", "sk-or-test-" + "x" * 20)
+
+    def handler(request):
+        assert request.headers["Authorization"].startswith("Bearer sk-or-test-")
+        if request.url.path.endswith("/key"):
+            return httpx.Response(200, json={"data": {"usage": 4.31, "usage_monthly": 4.31, "limit_remaining": None}})
+        return httpx.Response(200, json={"data": {"total_credits": 5.0, "total_usage": 4.96}})
+    live = provider_balance.openrouter_live(client=httpx.Client(transport=httpx.MockTransport(handler)), fresh=True)
+    assert live["key_month_usd"] == 4.31 and live["balance_usd"] == 0.04 and live["credits_usd"] == 5.0
+    down = provider_balance.openrouter_live(client=httpx.Client(transport=httpx.MockTransport(lambda r: httpx.Response(500))), fresh=True)
+    assert down is None
+    monkeypatch.delenv("OPENROUTER_API_KEY")
+    assert provider_balance.openrouter_live(fresh=True) is None
+
+
+def test_the_admin_page_shows_openrouters_own_numbers(web_env, monkeypatch):
+    from fixengine import admin_tools
+    monkeypatch.setattr(admin_tools, "_live_provider", lambda: {"key_usage_usd": 4.31, "key_month_usd": 4.31, "key_limit_remaining_usd": None,
+                                                               "credits_usd": 5.0, "account_used_usd": 4.96, "balance_usd": 0.04})
+    _admin, cookie = _login("admin1@example.com")
+    _, _, body = _request("/admin/fix", cookie=cookie)
+    assert "live from OpenRouter" in body and "Credit left on OpenRouter" in body and "$0.04" in body
+    assert "Top up at openrouter.ai/credits" in body and "Estimated credits remaining" not in body
+
+
+def test_without_openrouter_the_page_says_it_is_an_estimate(web_env, monkeypatch):
+    from fixengine import admin_tools
+    monkeypatch.setattr(admin_tools, "_live_provider", lambda: None)
+    _admin, cookie = _login("admin1@example.com")
+    _, _, body = _request("/admin/fix", cookie=cookie)
+    assert "Estimated credits remaining" in body and "Not a live balance" in body and "live from OpenRouter" not in body

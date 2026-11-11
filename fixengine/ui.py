@@ -345,19 +345,42 @@ def admin_page(d: dict, csrf: str, msg: str = "") -> str:
 
     # ---- A. financial overview
     ticks = "".join(f"<span class='tick' style='left:{min(100, int(f * 100))}%'><span>{int(f * 100)}%</span></span>" for f in pr["fractions"])
-    overview = (f"<div class='money'>"
-                f"<article><div class='eyebrow'>Total AI spending this month</div><div class='big'>{E(_rs(b['spend_so_far']))}</div>"
-                f"<p class='muted'>Tracked by us: every model call's input and output tokens × the configured price. It is our own record; "
-                f"the provider's invoice is the final word.</p></article>"
+    live = d.get("live") or {}
+    rate = float(cfg.get("usd_inr", 90.0) or 90.0)
+
+    def usd(v):
+        return f"${v:,.2f} ({_rs(v * rate)})"
+    if live.get("key_month_usd") is not None or live.get("key_usage_usd") is not None:
+        month_usd = live.get("key_month_usd")
+        spend_card = (f"<article><div class='eyebrow'>AI spending this month <span class='pill green'>live from OpenRouter</span></div>"
+                      f"<div class='big'>{E(_rs((month_usd if month_usd is not None else live['key_usage_usd']) * rate))}</div>"
+                      f"<p class='muted'>What OpenRouter charged Agent Daemon's key "
+                      f"{'this month' if month_usd is not None else 'in total'}"
+                      f"{'' if live.get('key_usage_usd') is None else ' (all time: ' + E(usd(live['key_usage_usd'])) + ')'}. "
+                      f"Our own record: {E(_rs(b['spend_so_far']))}. Other keys on the same OpenRouter account are not counted.</p></article>")
+    else:
+        spend_card = (f"<article><div class='eyebrow'>Total AI spending this month</div><div class='big'>{E(_rs(b['spend_so_far']))}</div>"
+                      f"<p class='muted'>Our own record (OpenRouter could not be asked just now): every model call's cost. "
+                      f"The provider's invoice is the final word.</p></article>")
+    if live.get("balance_usd") is not None:
+        bal = float(live["balance_usd"])
+        credits_card = (f"<article><div class='eyebrow'>Credit left on OpenRouter <span class='pill {'red' if bal < 1 else 'green'}'>live</span></div>"
+                        f"<div class='big'>{E(_rs(bal * rate))}</div>"
+                        f"<p class='muted'>{E(usd(bal))} of {E(usd(float(live['credits_usd'] or 0)))} bought is left on the whole account. "
+                        + ("<b>Top up at openrouter.ai/credits: AI runs stop at $0 (HTTP 402).</b>" if bal < 1 else
+                           "When it reaches $0 every AI run stops (HTTP 402) until you top up.") + "</p></article>")
+    else:
+        credits_card = (f"<article><div class='eyebrow'>Estimated credits remaining</div><div class='big'>{E(_rs(d['credits_left_estimate']))}</div>"
+                        f"<p class='muted'>Credits you told us you bought (FIXENGINE_CREDITS_INR) minus this month's tracked spend. "
+                        f"<b>Not a live balance</b> (OpenRouter could not be asked): check openrouter.ai/credits for the real number.</p></article>")
+    overview = (f"<div class='money'>" + spend_card +
                 f"<article><div class='eyebrow'>Monthly spending limit (B)</div><div class='big'>{E(_rs(budget))}</div>"
                 f"<p class='muted'>Our internal ceiling, set below the prepaid credits ({E(_rs(pr['credits']))}) so there is always a reserve. "
                 f"{E(pct)}% used.</p></article>"
                 f"<article><div class='eyebrow'>Expected month-end spending</div><div class='big'>{E(_rs(b['projected_month_end']))}</div>"
                 f"<p class='muted'>Forecast = spend so far ÷ {E(b['days_elapsed'])} days elapsed × days in the month ({E(proj_pct)}% of the limit). "
                 f"A prediction from the pace so far, not a guaranteed amount.</p></article>"
-                f"<article><div class='eyebrow'>Estimated credits remaining</div><div class='big'>{E(_rs(d['credits_left_estimate']))}</div>"
-                f"<p class='muted'>Credits you told us you bought (FIXENGINE_CREDITS_INR) minus this month's tracked spend. "
-                f"<b>Not a live balance</b>: check the provider console (OpenRouter / Anthropic) for the real number.</p></article></div>"
+                + credits_card + "</div>"
                 f"<div class='meter' role='img' aria-label='{E(pct)}% of the monthly limit used'><i style='width:{min(100, pct)}%'></i>{ticks}</div>"
                 f"<div class='stats'><span class='pill {tone}'>{E(level_text)}</span></div>")
 

@@ -191,4 +191,14 @@ def dashboard(guard: Guard | None = None) -> dict:
             "paused": sorted(store.paused_tiers()), "holds": _enrich_holds(guard, store.list_holds("held")),
             "actions": store.list_admin_actions(15), "cfg": guard.cfg,
             "provider": (os.getenv("FIXENGINE_PROVIDER", "auto") or "auto"),
-            "credits_left_estimate": round(float(guard.cfg["budget"]["credits_inr"]) - burn["spend_so_far"], 2)}
+            "credits_left_estimate": round(float(guard.cfg["budget"]["credits_inr"]) - burn["spend_so_far"], 2),
+            "live": _live_provider()}
+
+
+def _live_provider() -> dict | None:
+    """OpenRouter's own numbers (balance, this key's spend). None when they cannot be read: the page then shows our estimate."""
+    try:
+        from . import provider_balance
+        return provider_balance.openrouter_live()
+    except Exception:
+        return None
