@@ -1230,9 +1230,8 @@ class Engine:
         except Exception as exc:
             from monitoring_installer import PublicRepoError
             if isinstance(exc, PublicRepoError):
-                store.update_bug(bug["id"], status="open")
-                portal_db.park_incident_for_gate(incident_id, claimed["project_id"])
-                return "waiting_private"
+                # A public repository: nothing is pushed. The project is now in pull-request mode, so this fix becomes a pull request.
+                return self._open_pr(claimed, {**project, "mode": "pr"}, bug, win)
             return self._fault_wait(claimed, bug, f"could not push the test branch ({exc.__class__.__name__})", 300)
         state.update({"round": round_no, "branch": pushed["branch"], "head_sha": pushed["head_sha"], "base_sha": pushed["base_sha"],
                       "pushed_at": time.time(), "attempt_id": win["attempt_id"], "tier": win["tier"], "model": win["model"],

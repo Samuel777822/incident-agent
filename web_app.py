@@ -2879,7 +2879,7 @@ You do not need to install anything yourself.</p></div>
             token_ciphertext=ciphertext, ingest_key_hash=ingest_hash,
             app_url=request.form.get("app_url", "").strip(), ai_consent_at=portal_db._now(),
             ingest_key_ciphertext=_encrypt_token(ingest_key), watch_mode=watch_mode, enforce_slots=not _is_admin(request),
-            gate_state=portal_db.GATE_ACTIVE if private else portal_db.GATE_WAITING)
+            gate_state=portal_db.GATE_ACTIVE if private else portal_db.GATE_PUBLIC)
     except ValueError:
         return _slot_full_page(request, portal_db.project_slot_info(user_id))
     portal_db.audit(project_id, "project_connected", {"repo": f"{owner}/{repo}", "mode": mode, "watch_mode": watch_mode,
@@ -2888,11 +2888,15 @@ You do not need to install anything yourself.</p></div>
     if mode in ("pr", "auto"):
         portal_db.audit(project_id, "remediation_consent", {"mode": mode, "auto_merge_requires_sandbox_proof_and_passing_github_checks": mode == "auto"})
     if not private:
-        # Public-repo gate: nothing is committed, no webhook, no scan, until the owner makes the repository private.
-        portal_db.audit(project_id, "install_held_public_repo", {"repo": f"{owner}/{repo}"})
+        # Public repository: pull requests only, push checks on, no live monitor (its key would be public).
+        import repo_guard
+        repo_guard.switch_to_public_pr(portal_db.get_project(project_id, user_id), action="connect")
         project = portal_db.get_project(project_id, user_id)
-        return _response(_gate_page_html(project, request, first_time=True, has_pages=bool(repo_info.get("has_pages"))),
-                         request, "201 Created")
+        summary = _activation_summary(_activate_project(project, token, ingest_key), project)
+        return _response(f"<section class='card'><h1>Project saved</h1><div class='alert'>{_escape(repo_guard.PUBLIC_REASON)}</div>"
+                         f"<p class='muted'>{_escape(name)} is connected. Your next push is tested automatically.</p></section>{summary}"
+                         f"<p class='actions'><a class='button primary' href='/projects/{_escape(project_id)}'>View project</a>"
+                         "<a class='button' href='/dashboard'>Dashboard</a></p>", request, "201 Created")
     project = portal_db.get_project(project_id, user_id)
     summary = _activation_summary(_activate_project(project, token, ingest_key), project)
     return _response(f"<section class='card'><h1>Project saved</h1><p class='muted'>{_escape(name)} is connected and your repository is private. "
@@ -2915,7 +2919,8 @@ def _activate_project(project: dict, token: str, ingest_key: str) -> dict:
             return out
     if watch in ("push", "both"):
         out["push"] = _start_push_watch(project["id"], project["user_id"], project, token)
-    portal_db.set_gate_state(project["id"], portal_db.GATE_ACTIVE)
+    if (portal_db.get_project_any(project["id"]) or project).get("gate_state") != portal_db.GATE_PUBLIC:
+        portal_db.set_gate_state(project["id"], portal_db.GATE_ACTIVE)
     portal_db.unpark_gate_incidents(project["id"])
     return out
 
@@ -3010,11 +3015,15 @@ def _page_recheck_visibility(request, project_id):
                          + _gate_page_html(project, request), request, "502 Bad Gateway")
     portal_db.audit(project_id, "visibility_rechecked", {"private": is_private(info)})
     if not is_private(info):
+        if project.get("gate_state") == portal_db.GATE_PUBLIC:
+            return _redirect(f"/projects/{project_id}?public=still")
         portal_db.set_gate_state(project_id, portal_db.GATE_WAITING)
         return _response(_gate_page_html(project, request, still_public=True, has_pages=bool(info.get("has_pages"))), request, "409 Conflict")
     if not ingest_key:
         ingest_key = _new_ingest_key()
         portal_db.rotate_project_ingest_key(project_id, user_id, hashlib.sha256(ingest_key.encode()).hexdigest(), _encrypt_token(ingest_key))
+    import repo_guard
+    repo_guard.restore_after_private(project_id)
     portal_db.set_gate_state(project_id, portal_db.GATE_ACTIVE)
     project = portal_db.get_project(project_id, user_id)
     result = _activate_project(project, token, ingest_key)
@@ -3178,7 +3187,7 @@ def _page_project(request, project_id):
             f"<form method='post'><input type='hidden' name='csrf' value='{csrf}'><input type='hidden' name='paused' value='{'no' if paused else 'yes'}'><button class='button {'primary' if paused else 'danger'}' type='submit'>{button}</button></form></div>"
             f"<div class='stats'><span class='pill {'amber' if paused else css}'>{'Paused' if paused else _escape(state)}</span>"
             f"<span class='pill'>{_escape(WATCH_LABELS.get(watch, watch))}</span><span class='pill'>{_escape(MODE_LABELS.get(project['mode'], project['mode']))}</span>"
-            f"{checkin}</div>"
+            f"{checkin}</div>{_public_pr_banner(project, request)}"
             f"<nav class='subnav' aria-label='On this page'><a href='#tell'>Tell the agent</a><a href='#cases'>Bugs and fixes</a>"
             f"<a href='#push-guard'>Push guard</a>{monitor_link}<a href='#settings'>Settings</a></nav>"
             f"{flash}{_hosting_card(project, request)}"
@@ -3613,6 +3622,21 @@ def _page_incident(request, project_id, incident_id):
                if incident.get("pr_url") else "")
     body = f"<section class='section'><p><a href='/projects/{_escape(project_id)}'>← {_escape(project['name'])}</a></p><div class='eyebrow'>Incident</div><h1>{_escape(incident['signature'])}</h1><div class='stats'><span class='pill'>{_escape(incident_board.stage_for(incident, project['mode'])['headline'])}</span><span class='pill'>Occurrences · {_escape(incident['occurrences'])}</span><span class='pill'>CI · {_escape(incident['ci_status'])}</span><span class='pill'>Last seen · {_escape(_fmt_time(incident.get('last_seen')))}</span></div>{pr_link}<article class='card'><h2>What happened</h2><p>{_escape(incident['root_cause']) or 'Diagnosis is pending.'}</p><p class='muted' style='white-space:pre-wrap'>{_escape(incident['report'])}</p></article>{_case_panel_html(incident, project_id, request)}{_timeline_html(incident_id)}{_fx_trail_html(incident_id, request.session["user_id"])}<h2>Proposed changes</h2>{diff}</section>"
     return _response(body, request)
+
+
+def _public_pr_banner(project: dict, request) -> str:
+    if project.get("gate_state") != portal_db.GATE_PUBLIC:
+        return ""
+    import repo_guard
+    still = request.query.get("public") == ["still"]
+    owner, repo = _escape(project["repo_owner"]), _escape(project["repo_name"])
+    return (f"<article class='card warn-card'><div class='eyebrow'>Public repository</div><h3>Fixes come as pull requests</h3>"
+            f"<p>{_escape(repo_guard.PUBLIC_REASON)}</p>"
+            + ("<p class='muted'><b>GitHub still says the repository is public.</b> It can take a minute after you change it.</p>" if still else "")
+            + f"<p class='muted'>To make it private: open <a href='https://github.com/{owner}/{repo}/settings' target='_blank' rel='noopener'>"
+            f"github.com/{owner}/{repo}/settings</a>, scroll to the red Danger Zone, press Change visibility, then Make private.</p>"
+            f"<form method='post' action='/projects/{_escape(project['id'])}/recheck-visibility'><input type='hidden' name='csrf' "
+            f"value='{_escape(_csrf(request))}'><button class='button primary' type='submit'>I made it private</button></form></article>")
 
 
 def _proof_diff_html(incident_id: str) -> str:

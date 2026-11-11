@@ -107,7 +107,7 @@ def open_pr(project: dict, *, bug_id: str, incident_id: str, new_files: dict[str
     owner, repo, base = _validate(project)
     token = _token(project.get("github_token_ciphertext", ""))
     import repo_guard
-    repo_guard.ensure_private(project, token, action="fix pull request")   # public repo: PublicRepoError, nothing is written
+    repo_guard.allow_pull_request(project, token, action="fix pull request")   # public repo: PublicRepoError, nothing is written
     api = f"https://api.github.com/repos/{quote(owner, safe='')}/{quote(repo, safe='')}"
     branch = f"agent-daemon/fix-{bug_id[:14]}"
     call = portal_remediation._api
@@ -355,7 +355,7 @@ def open_pr_for_branch(project: dict, *, branch: str, title: str, body: str) -> 
     owner, repo, base = _validate(project)
     token = _tok(project)
     import repo_guard
-    repo_guard.ensure_private(project, token, action="fix pull request")
+    repo_guard.allow_pull_request(project, token, action="fix pull request")
     api = _api_root(project)
     call = portal_remediation._api
     with httpx.Client(headers=_headers(token), timeout=httpx.Timeout(25, connect=8), follow_redirects=False) as client:

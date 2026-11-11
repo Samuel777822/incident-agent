@@ -33,19 +33,101 @@ def repo_info(project: dict, token: str | None = None) -> dict:
 
 
 def ensure_private(project: dict, token: str | None = None, *, action: str = "commit") -> dict:
-    """Return GitHub's repo record when the repository is private. Otherwise flag the project, notify the owner and raise
-    PublicRepoError. A GitHub/API failure raises GitHubInstallError (callers retry later; nothing is written)."""
+    """For DIRECT writes (a push to the owner's branch, a test branch, an undo, monitor files with a key): return GitHub's repo
+    record when the repository is private. A public repository is switched to pull-request mode (switch_to_public_pr) and
+    PublicRepoError is raised, so the caller opens a pull request instead. A GitHub/API failure raises GitHubInstallError."""
     info = repo_info(project, token)
     project_id = str(project.get("id") or project.get("project_id") or "")
     if is_private(info):
-        if project_id and project.get("gate_state") == portal_db.GATE_WAITING:
+        if project_id and project.get("gate_state") == portal_db.GATE_PUBLIC:
+            restore_after_private(project_id)                  # private again: Auto mode (if it was on) comes back
+            portal_db.set_gate_state(project_id, portal_db.GATE_ACTIVE)
+        elif project_id and project.get("gate_state") == portal_db.GATE_WAITING:
             portal_db.set_gate_state(project_id, portal_db.GATE_ACTIVE)
         elif project_id:
             portal_db.set_gate_state(project_id, project.get("gate_state") or portal_db.GATE_ACTIVE)
         return info
     if project_id:
-        flag_public(project, action=action)
-    raise PublicRepoError("The repository is public, so Agent Daemon did not write anything to it.")
+        switch_to_public_pr(project, action=action)
+    raise PublicRepoError("The repository is public, so Agent Daemon did not push to it; fixes come as pull requests instead.")
+
+
+def allow_pull_request(project: dict, token: str | None = None, *, action: str = "fix pull request") -> dict:
+    """Pull requests are fine on a public repository (the owner merges them). A public repository is switched to pull-request
+    mode on the way, so the owner is told; nothing is raised."""
+    info = repo_info(project, token)
+    project_id = str(project.get("id") or project.get("project_id") or "")
+    if project_id and not is_private(info):
+        switch_to_public_pr(project, action=action)
+    return info
+
+
+PUBLIC_REASON = ("Your repository is public, so Agent Daemon works in Pull request mode: every fix comes as a pull request that you "
+                 "merge, and nothing is pushed straight to your branch. Anyone can see and copy a public repository, so automatic pushes "
+                 "and the live error monitor (its connection key would be visible to everyone) are switched off. Push checks keep "
+                 "working. Make the repository private to switch Auto mode and the live monitor back on.")
+
+
+def switch_to_public_pr(project: dict, *, action: str = "commit") -> None:
+    """Public repository: pull requests only. Auto becomes Pull request (remembered, restored when it is private again), the live
+    monitor is switched off, cases that waited for "make it private" continue as pull requests, and the owner is told why once a day."""
+    project_id = str(project.get("id") or project.get("project_id") or "")
+    fresh = portal_db.get_project_any(project_id) or project
+    from fixengine import store as fx_store
+    mode, watch = fresh.get("mode") or "pr", fresh.get("watch_mode") or "both"
+    if mode == "auto" or watch in ("both", "runtime"):
+        if not fx_store.get_flag(f"public_prev:{project_id}"):
+            fx_store.set_flag(f"public_prev:{project_id}", f"{mode}|{watch}")
+        portal_db.set_project_mode_and_watch(project_id, mode="pr" if mode == "auto" else None,
+                                             watch_mode="push" if watch in ("both", "runtime") else None)
+    try:
+        portal_db.unpark_gate_incidents(project_id)
+    except Exception:
+        LOG.debug("no parked cases for %s", project_id)
+    last = str(fresh.get("gate_notified_at") or "")
+    due = True
+    if last:
+        try:
+            stamp = datetime.fromisoformat(last)
+            stamp = stamp if stamp.tzinfo else stamp.replace(tzinfo=timezone.utc)
+            due = datetime.now(timezone.utc) - stamp > timedelta(hours=NOTIFY_EVERY_HOURS)
+        except ValueError:
+            due = True
+    was = fresh.get("gate_state")
+    portal_db.set_gate_state(project_id, portal_db.GATE_PUBLIC, notified=due)
+    portal_db.audit(project_id, "repo_public_pr_mode", {"action": action, "was": was})
+    if due:
+        _notify_public_pr(fresh)
+
+
+def restore_after_private(project_id: str) -> None:
+    """The repository is private again: put back the mode and watch setting the owner had before."""
+    from fixengine import store as fx_store
+    prev = fx_store.get_flag(f"public_prev:{project_id}", "")
+    if prev:
+        mode, _, watch = prev.partition("|")
+        portal_db.set_project_mode_and_watch(project_id, mode=mode or None, watch_mode=watch or None)
+        fx_store.set_flag(f"public_prev:{project_id}", "")
+
+
+def _notify_public_pr(project: dict) -> None:
+    try:
+        import notifications
+        email = portal_db.get_user_email(project["user_id"])
+        if not email:
+            return
+        base = os.getenv("PORTAL_BASE_URL", "").strip().rstrip("/")
+        repo = f"{project.get('repo_owner')}/{project.get('repo_name')}"
+        notifications.notify_customer(
+            email, f"{repo} is public: fixes now come as pull requests",
+            f"{PUBLIC_REASON}\n\nNothing else changes: the agent still tests your pushes and fixes problems, you merge its pull "
+            "requests on GitHub.\n\nTo switch Auto mode back on (2 minutes):\n"
+            f"1. Open https://github.com/{repo}/settings (sign in if asked).\n"
+            "2. Scroll all the way down to the red 'Danger Zone'.\n"
+            "3. Click 'Change visibility', then 'Make private'.\n"
+            f"4. Come back to {base}/projects/{project.get('id')} and press \"I made it private\".", "repo_public")
+    except Exception:
+        LOG.exception("Could not email the owner about a public repository")
 
 
 def flag_public(project: dict, *, action: str = "commit") -> None:
@@ -103,7 +185,8 @@ def sweep_visibility(limit: int = 20, min_age_seconds: int = 1800) -> int:
             ensure_private(project, action="periodic check")
         except PublicRepoError:
             flagged += 1
-            _revoke_exposed_key(project)
+            if project.get("gate_state") not in (portal_db.GATE_PUBLIC, portal_db.GATE_WAITING):
+                _revoke_exposed_key(project)                 # it just became public: the key in the code is now visible
         except Exception as exc:          # GitHub down, token revoked: try again next round, never crash the worker
             LOG.info("Visibility check skipped for %s: %s", project.get("id"), exc.__class__.__name__)
             portal_db.set_gate_state(project["id"], project.get("gate_state") or "")
@@ -127,4 +210,5 @@ def _revoke_exposed_key(project: dict) -> None:
         LOG.exception("Could not rotate the exposed key of %s", project.get("id"))
 
 
-__all__ = ["ensure_private", "flag_public", "repo_info", "sweep_visibility", "PublicRepoError", "GitHubInstallError"]
+__all__ = ["ensure_private", "allow_pull_request", "switch_to_public_pr", "restore_after_private", "flag_public", "repo_info",
+           "sweep_visibility", "PublicRepoError", "GitHubInstallError", "PUBLIC_REASON"]

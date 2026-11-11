@@ -2420,6 +2420,19 @@ def resolve_push_incidents(project_id: str, note: str) -> int:
 # ============================================================================================================
 GATE_WAITING = "waiting_private"   # repository is public: nothing is committed until it is private
 GATE_ACTIVE = "active"             # repository verified private: monitor installed / fixes allowed
+GATE_PUBLIC = "public_pr"          # repository is public: pull requests only, push checks on, no live monitor (its key would be public)
+
+
+def set_project_mode_and_watch(project_id: str, mode: str | None = None, watch_mode: str | None = None) -> None:
+    conn = get_connection()
+    try:
+        if mode:
+            _execute(conn, "UPDATE projects SET mode=? WHERE id=?", (mode, project_id))
+        if watch_mode:
+            _execute(conn, "UPDATE projects SET watch_mode=? WHERE id=?", (watch_mode, project_id))
+        conn.commit()
+    finally:
+        conn.close()
 MONITOR_OFFLINE_SECONDS = int(os.getenv("MONITOR_OFFLINE_SECONDS", "120") or 120)       # 4 missed 30-second check-ins
 MONITOR_FIRST_CHECKIN_GRACE_SECONDS = int(os.getenv("MONITOR_FIRST_CHECKIN_GRACE_SECONDS", "1800") or 1800)
 
@@ -2588,7 +2601,7 @@ def projects_for_visibility_check(min_age_seconds: int = 1800) -> list[dict]:
     conn = get_connection()
     try:
         rows = _execute(conn, """SELECT p.* FROM projects p JOIN subscriptions s ON s.user_id=p.user_id
-            WHERE p.paused=0 AND s.active_until>? AND p.gate_state<>'waiting_private' AND p.gate_checked_at<?""",
+            WHERE p.paused=0 AND s.active_until>? AND p.gate_checked_at<?""",
                         (now_s, cutoff)).fetchall()
         return [dict(r) for r in rows]
     finally:

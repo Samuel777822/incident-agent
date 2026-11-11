@@ -452,38 +452,46 @@ def github(monkeypatch):
     return state
 
 
-def test_public_repo_blocks_install_and_shows_simple_steps(web_env, fernet_env, github):
+def test_a_public_repo_connects_in_pull_request_mode_and_says_why(web_env, fernet_env, github):
     user_id, csrf, cookie = active_user()
-    status, _, body = _request("/projects/new", method="POST", cookie=cookie, form=_connect_form(csrf))
+    status, _, body = _request("/projects/new", method="POST", cookie=cookie, form=_connect_form(csrf))       # asked for Auto
     assert status == "201 Created"
-    assert "we noticed your repository" in body and "is <b>public</b>" in body and "Make your repository private" in body
-    for step in ("Danger Zone", "Change visibility", "Make private", "On a phone", "Desktop site", "On a computer"):
-        assert step in body, step
-    assert "I&#x27;ve made it private, install now" in body or "I've made it private, install now" in body
-    assert github["installs"] == [] and github["webhooks"] == []                      # nothing committed, no webhook
+    assert "Your repository is public, so Agent Daemon works in Pull request mode" in body.replace("&#x27;", "'")
+    assert github["installs"] == []                                   # no monitor: its key would be visible to everyone
     project = portal_db.list_projects(user_id)[0]
-    assert project["gate_state"] == "waiting_private"
-    assert portal_db.list_push_checks(project["id"]) == []                             # no scan before the gate is passed
-    _, _, dash = _request("/dashboard", cookie=cookie)
-    assert "Action needed" in dash and "Waiting for private repo" in dash
-    _, _, page = _request(f"/projects/{project['id']}", cookie=cookie)                # the user cannot move past this point
-    assert "Make your repository private" in page and "Push guard" not in page
+    assert github["webhooks"] == [project["id"]]                      # push checks keep working
+    assert project["gate_state"] == "public_pr" and project["mode"] == "pr" and project["watch_mode"] == "push"
+    _, _, page = _request(f"/projects/{project['id']}", cookie=cookie)
+    assert "Fixes come as pull requests" in page and "I made it private" in page and "Push guard" in page
+    assert any(n["kind"] == "repo_public" for n in portal_db.recent_notifications(10))
 
 
-def test_github_pages_users_are_warned_before_making_the_repo_private(web_env, fernet_env, github):
+def test_github_pages_sites_can_stay_public(web_env, fernet_env, github):
     github["has_pages"] = True
     _user, csrf, cookie = active_user()
-    _, _, body = _request("/projects/new", method="POST", cookie=cookie, form=_connect_form(csrf))
-    assert "GitHub Pages" in body and "Netlify" in body
+    status, _, body = _request("/projects/new", method="POST", cookie=cookie, form=_connect_form(csrf))
+    assert status == "201 Created" and "Project saved" in body and "Pull request mode" in body
 
 
-def test_install_now_rechecks_and_repeats_the_steps_while_still_public(web_env, fernet_env, github):
+def test_i_made_it_private_while_still_public_says_so(web_env, fernet_env, github):
     user_id, csrf, cookie = active_user()
     _request("/projects/new", method="POST", cookie=cookie, form=_connect_form(csrf))
     project = portal_db.list_projects(user_id)[0]
-    status, _, body = _request(f"/projects/{project['id']}/recheck-visibility", method="POST", cookie=cookie, form={"csrf": csrf})
-    assert status == "409 Conflict" and "still public" in body and "Danger Zone" in body
+    status, headers, _ = _request(f"/projects/{project['id']}/recheck-visibility", method="POST", cookie=cookie, form={"csrf": csrf})
+    assert status.startswith("30") and "public=still" in dict(headers)["Location"]
+    _, _, page = _request(f"/projects/{project['id']}?public=still", cookie=cookie)
+    assert "GitHub still says the repository is public" in page
     assert github["installs"] == []
+
+
+def test_private_again_restores_auto_mode(web_env, fernet_env, github):
+    user_id, csrf, cookie = active_user()
+    _request("/projects/new", method="POST", cookie=cookie, form=_connect_form(csrf))
+    project = portal_db.list_projects(user_id)[0]
+    github["private"] = True
+    _request(f"/projects/{project['id']}/recheck-visibility", method="POST", cookie=cookie, form={"csrf": csrf})
+    project = portal_db.get_project(project["id"], user_id)
+    assert project["gate_state"] == "active" and project["mode"] == "auto" and project["watch_mode"] == "both"
 
 
 def test_install_now_proceeds_once_private_and_runs_the_first_scan(web_env, fernet_env, github):
@@ -498,8 +506,8 @@ def test_install_now_proceeds_once_private_and_runs_the_first_scan(web_env, fern
     project = portal_db.get_project(project["id"], user_id)
     assert project["gate_state"] == "active" and project["monitor_installed_at"]
     checks = portal_db.list_push_checks(project["id"])
-    assert len(checks) == 1 and checks[0]["source"] == "connect"                       # Phase 5: one scan right away, no push needed
-    assert github["webhooks"] == [project["id"]]
+    assert len(checks) == 1 and checks[0]["source"] == "connect"                       # one scan of the head commit (same commit is never queued twice)
+    assert set(github["webhooks"]) == {project["id"]}                                  # push checks were on while public, and stay on
 
 
 def test_private_repo_installs_immediately_on_connect(web_env, fernet_env, github):
@@ -527,7 +535,7 @@ def test_installer_itself_refuses_a_public_repo_before_writing_anything(monkeypa
     assert mi.is_private({"private": True}) and not mi.is_private({}) and not mi.is_private({"private": "true"})
 
 
-def test_a_repo_that_turns_public_pauses_commits_notifies_and_revokes_the_key(web_env, fernet_env, monkeypatch):
+def test_a_repo_that_turns_public_switches_to_pull_requests_notifies_and_revokes_the_key(web_env, fernet_env, monkeypatch):
     import repo_guard
     user_id, *_ = active_user("owner@example.com")
     project_id = new_project(user_id, "e" * 40, gate_state="active")
@@ -537,7 +545,7 @@ def test_a_repo_that_turns_public_pauses_commits_notifies_and_revokes_the_key(we
     assert repo_guard.sweep_visibility() == 0                                    # checked at connect: not due yet
     assert repo_guard.sweep_visibility(min_age_seconds=-5) == 1
     project = portal_db.get_project(project_id, user_id)
-    assert project["gate_state"] == "waiting_private"
+    assert project["gate_state"] == "public_pr" and project["mode"] == "pr"          # pull requests only from now on
     assert portal_db.get_project_by_ingest_hash(hashlib.sha256(("e" * 40).encode()).hexdigest()) is None   # old key revoked
     assert any(n["kind"] == "repo_public" for n in portal_db.recent_notifications(10))
     with pytest.raises(mi.PublicRepoError):                                       # every later commit is refused too
