@@ -244,6 +244,7 @@ def pricing_page_html(signed_in: bool = False) -> str:
   <h3>Add-ons</h3>
   <div class="addon-row">
     <div><b>Extra project</b><span class="muted">One-time &#8377;{plans.PROJECT_SLOT_PRICE}. Connect one more repository. The slot stays on your account.</span></div>
+    <div><b>Normal pack</b><span class="muted">&#8377;{plans.PACK_NORMAL_PRICE} adds {plans.PACK_NORMAL_TRIES} more Normal tries this month.</span></div>
     <div><b>High pack</b><span class="muted">A &#8377;{plans.PACK_PRICE} pack adds {plans.PACK_HIGH_TRIES} more High tries this month.</span></div>
     <div><b>Extra pack</b><span class="muted">A &#8377;{plans.PACK_PRICE} pack adds {plans.PACK_EXTRA_TRIES} more Extra tries this month.</span></div>
   </div>
@@ -513,7 +514,7 @@ def terms_of_service_page_html() -> str:
   <ul>
     <li><b>Free Trial:</b> Limited to one 1-day free trial per customer, subject to approval by the Agent Daemon team of engineers.</li>
     <li><b>Paid Plans:</b> Paid access is available for &#8377;{plans.PLAN_PRICES["monthly"]:,} (30 days) and &#8377;{plans.PLAN_PRICES["yearly"]:,} (365 days). Payments made via Paytm UPI QR are activated upon administrative verification of the provided UTR reference.</li>
-    <li><b>Monthly Fix Attempts:</b> Each paid plan includes {plans.quota_sentence()}. Quotas reset every month and do not roll over, including on the yearly plan. Extra attempts can be bought in a &#8377;{plans.PACK_PRICE} pack ({plans.PACK_HIGH_TRIES} High or {plans.PACK_EXTRA_TRIES} Extra attempts for the current month).</li>
+    <li><b>Monthly Fix Attempts:</b> Each paid plan includes {plans.quota_sentence()}. Quotas reset every month and do not roll over, including on the yearly plan. Extra attempts can be bought for the current month: &#8377;{plans.PACK_NORMAL_PRICE} for {plans.PACK_NORMAL_TRIES} Normal attempts, or a &#8377;{plans.PACK_PRICE} pack ({plans.PACK_HIGH_TRIES} High or {plans.PACK_EXTRA_TRIES} Extra attempts).</li>
     <li><b>Projects:</b> Every plan includes {plans.INCLUDED_PROJECTS} connected project. Each additional project is a one-time payment of &#8377;{plans.PROJECT_SLOT_PRICE} and the slot stays on your account.</li>
     <li><b>Attempts, Not Guarantees:</b> We sell attempts to fix a bug, not a guaranteed fix. Every fix is proposed as a pull request for your review.</li>
     <li><b>Renewal &amp; Expiry:</b> If a plan expires, project monitoring is safely paused without data loss until renewal.</li>

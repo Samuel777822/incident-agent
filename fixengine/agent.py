@@ -37,6 +37,7 @@ log = logging.getLogger("fixengine.agent")
 OPENROUTER_URL = "https://openrouter.ai/api/v1/chat/completions"
 FULL_CODE_CHARS = 450_000            # about 110K tokens: below this the whole code base goes into the first message (cached)
 MAX_TOOL_OUTPUT = 14_000
+REWRITE_LINE_LIMIT = 60               # existing files longer than this are changed with edit_file only
 TERMINAL = {"finish_fixed", "needs_owner", "ask_owner", "give_up"}
 
 SYSTEM_PROMPT = """You are Agent Daemon, the on-call engineer for the owner's website or app. The owner is often a beginner ("vibe coder"): they trust you to find what is really wrong, fix it properly, and tell them in plain words what you did, or exactly what THEY must do when the problem is not in the code.
@@ -49,8 +50,22 @@ You work on a real checkout of their repository through tools. Work like a senio
    - NOT a code problem: a key or environment variable that is missing or wrong on the host, a database / Supabase / Firebase setting, an OAuth redirect URL in the Google or GitHub console, an expired or out-of-credit API account, a free AI model that is rate-limited, the hosting itself -> call needs_owner right away with beginner-proof steps. Do not "fix" these by changing code around them.
 3. Check history: recent_commits shows what changed lately, including Agent Daemon's own earlier fixes. If a recent commit (ours or theirs) caused the problem, the right fix is usually to undo or correct that commit, not to patch on top of it.
 4. Reproduce when you can: run_checks (install, build, tests, start-up, browser journeys in the sandbox) and open_live_page (the real site, with steps such as clicking a button). Use web_search for library docs, error messages and service settings you are not sure about. Do not guess.
-5. Fix the cause, completely. Any size is allowed when it is needed; keep the existing style and libraries. Then run_checks again.
-6. Finish with exactly one of: finish_fixed, needs_owner, ask_owner (one specific question only the owner can answer), give_up (be honest about what you found).
+5. Write a test FIRST when the project can run tests: a NEW test file that reproduces the problem (it fails on the current code).
+   Name and place it the way this project's test runner finds it (tests/test_*.py for pytest, *.test.js / *.test.ts / __tests__ for
+   jest or vitest, src/test/java for JUnit). No test setup and the change is purely visual or configuration? Then say why in
+   why_no_test, and give browser steps in verification instead.
+6. Fix the cause, completely. Change only what the request needs; keep the existing style and libraries; any size is allowed when it
+   is needed. Use edit_file on existing files (whole-file rewrites of existing files are refused: they silently drop code).
+7. Prove it: run_checks. Your new test must run and pass, and EVERYTHING that passed before your change must still pass. If anything
+   fails, read the output, fix it, and run_checks again. Never finish on red.
+8. Review your own change before finishing (run_checks shows you your full diff when it passes): every changed line is needed for
+   the request; nothing the owner built was removed or rewritten unless they asked; every place that uses what you changed
+   (search_code for callers, imports, routes, CSS classes, translations) still works. Undo anything that is not needed.
+9. Finish with exactly one of: finish_fixed, needs_owner, ask_owner (one specific question only the owner can answer), give_up (be honest about what you found).
+
+Memory: your first message shows WHAT YOU DID BEFORE ON THIS PROJECT and what earlier runs learned. Use it: do not repeat a fix that
+was undone, do not reintroduce a bug you fixed, and respect what the owner told you before. In project_notes, return the earlier
+notes UPDATED with what you learned (they replace the old notes, so keep everything that is still true).
 
 Working within a budget (each run has one; you are told at 70%):
 - Fix as you go. As soon as you know a fix, make the edit; a run that ends with findings but no edits wastes the owner's money.
@@ -121,8 +136,14 @@ TOOLS = [
               "verification": {**_STEPS, "description": "Browser steps on the LIVE site that fail before the fix and pass after it ([] if none)"},
               "owner_steps": {"type": "array", "items": {"type": "string"}, "description": "Anything the owner must ALSO do (e.g. set a variable); [] if nothing"},
               "risk": {"type": "string", "enum": ["low", "medium", "high"]},
-              "project_notes": {"type": "string", "description": "What you learned about this project, for the next case (stack, entry points, auth, env vars). Max 10 lines."}},
-             ["understanding", "root_cause", "changes_summary", "client_message", "verification", "owner_steps", "risk", "project_notes"])),
+              "tests_written": {"type": "array", "items": {"type": "string"},
+                                "description": "Paths of the NEW test files you added that reproduce the problem ([] if none)"},
+              "why_no_test": {"type": "string", "description": "Only when tests_written is empty: why a test is not possible here"},
+              "impact_checked": {"type": "string", "description": "The other places that use what you changed, and why they still work"},
+              "project_notes": {"type": "string", "description": "The earlier project notes UPDATED with what you learned (stack, entry points, "
+                                "auth, env vars, how to run its tests, owner preferences). They replace the old notes. Max 25 lines."}},
+             ["understanding", "root_cause", "changes_summary", "client_message", "verification", "owner_steps", "risk",
+              "tests_written", "why_no_test", "impact_checked", "project_notes"])),
     ("needs_owner", "The problem is NOT in the code (or the code is right and something outside it is wrong). Ends the run with step-by-step "
      "instructions for a beginner.",
      _schema({"what_is_wrong": {"type": "string", "description": "One plain sentence"},
@@ -333,7 +354,9 @@ class Engineer:
         self.checks_left, self.pages_left, self.searches_left = self.max_checks, self.max_pages, self.max_searches
         self.checked_version = -1
         self.last_checks_passed: bool | None = None
+        self.last_tests_ran: bool | None = None
         self.sandbox_broken = False
+        self.test_nagged = self.test_run_nagged = False
 
     # -- bookkeeping --
     def _add_usage(self, usage: dict) -> None:
@@ -454,6 +477,23 @@ class Engineer:
                                + "\nRework that part (or use needs_owner if the real fix is outside the code).")
             if self.checked_version != self.ws.version and not self.sandbox_broken and self.checks_left > 0:
                 return False, "Error: run run_checks on your final change before finishing."
+            if self.checked_version == self.ws.version and self.last_checks_passed is False:
+                return False, ("Error: your last run_checks FAILED. Never finish on red: read what failed, fix it (your change, or what "
+                               "it broke), and run_checks again. If you cannot make it pass, use give_up with what you found.")
+            tests = [self.ws.clean(p) for p in (args.get("tests_written") or []) if str(p).strip()]
+            missing = [p for p in tests if p not in self.ws.changed]
+            if missing:
+                return False, f"Error: tests_written lists files you did not add: {', '.join(missing[:5])}. List only NEW test files you wrote."
+            if not tests and len(str(args.get("why_no_test") or "").strip()) < 15 and not self.test_nagged:
+                self.test_nagged = True
+                return False, ("Error: write a test that reproduces the problem (a NEW test file the project's test runner finds; it must fail "
+                               "on the old code and pass with your fix), run_checks, then finish with its path in tests_written. If a test "
+                               "is truly not possible here, explain why in why_no_test.")
+            if tests and self.last_tests_ran is False and not self.sandbox_broken and not self.test_run_nagged:
+                self.test_run_nagged = True
+                return False, ("Error: your test did not run: no test command ran in the sandbox. Make the project's test runner pick it "
+                               "up (for example a \"test\" script in package.json, or pytest in requirements), run_checks again, "
+                               "or explain in why_no_test and leave tests_written empty.")
             self.result.outcome = "fixed"
             self.result.data = args
             self._note("finish_fixed", "fix ready: " + str(args.get("changes_summary", ""))[:160])
@@ -532,6 +572,10 @@ class Engineer:
         if name == "write_file":
             path = ws.clean(a.get("path"))
             self._check_writable(path)
+            existing = ws.original.get(path)
+            if existing is not None and existing.count("\n") > REWRITE_LINE_LIMIT:
+                return (f"Error: {path} already exists ({existing.count(chr(10))} lines). Rewriting a whole existing file drops code the "
+                        "owner wrote. Use edit_file for each change instead (several edit_file calls are fine).")
             ws.write(path, str(a.get("content") or ""))
             self._note(name, f"writing {path}")
             return f"Wrote {path} ({len(str(a.get('content') or ''))} chars)."
@@ -584,12 +628,29 @@ class Engineer:
             return f"The sandbox could not run ({res.error}). Reason from the code; do not keep calling run_checks."
         self.checked_version = self.ws.version
         self.last_checks_passed = bool(res.passed)
+        self.last_tests_ran = bool(getattr(res, "tests_ran", False))
         lines = [f"Result: {'PASSED' if res.passed else 'FAILED'}"]
         for p in res.phases:
             lines.append(f"- {p.name}: {'ok' if p.ok else 'FAILED (exit ' + str(p.rc) + ')'} in {p.seconds}s")
+        if not self.last_tests_ran:
+            lines.append("Note: no test command ran in this project.")
         if not res.passed:
             lines.append("Output of what failed:\n" + prompts.redact(res.output)[-6000:])
+        elif self.ws.changed:
+            lines.append(self._self_review())
         return "\n".join(lines)
+
+    def _self_review(self) -> str:
+        """Shown with every green run: the whole change, and the questions a careful engineer asks before shipping it."""
+        diff = self.ws.diff()
+        shown = diff if len(diff) <= 9000 else diff[:9000] + f"\n... ({len(diff) - 9000} more characters of diff)"
+        removed = sum(1 for line in diff.splitlines() if line.startswith("-") and not line.startswith("---"))
+        added = sum(1 for line in diff.splitlines() if line.startswith("+") and not line.startswith("+++"))
+        return ("\nBEFORE YOU FINISH, review your whole change (" + f"{len(self.ws.changed)} files, +{added} / -{removed} lines):\n"
+                + shown + "\n\nCheck: 1) every changed line is needed for the request; 2) nothing the owner built is removed or rewritten "
+                "unless they asked (look at every '-' line); 3) every caller / import / route / style that uses what you changed still "
+                "works (search_code if unsure); 4) your new test is in the diff and ran. If something is wrong, fix it and run_checks "
+                "again. If all is right, call finish_fixed.")
 
     def _web_search(self, query: str) -> str:
         if not query.strip():
@@ -627,7 +688,7 @@ def code_dump(files: dict[str, str], limit: int = FULL_CODE_CHARS) -> str:
 
 def build_brief(*, request_text: str, incident_text: str, evidence_text: str, live_text: str, case_reports: list[str],
                 replies: list[str], baseline: str, notes: str, history: str, commits: str, project_map: str, code: str,
-                previous: str = "") -> list[dict]:
+                previous: str = "", memory: str = "") -> list[dict]:
     """The first user message: the owner's request (trusted), then the evidence and the code (untrusted, cached)."""
     head = []
     if request_text:
@@ -649,8 +710,10 @@ def build_brief(*, request_text: str, incident_text: str, evidence_text: str, li
         data.append("THE PROJECT IN OUR SANDBOX BEFORE ANY CHANGE (install / build / tests / start-up):\n" + prompts.redact(baseline)[-3000:])
     if commits:
         data.append("RECENT COMMITS (newest first; [agent-daemon] = Agent Daemon's own earlier fixes):\n" + prompts.redact(commits)[:3500])
+    if memory:
+        data.append("WHAT YOU DID BEFORE ON THIS PROJECT (newest last; your own memory):\n" + memory[:4000])
     if notes:
-        data.append("WHAT EARLIER RUNS LEARNED ABOUT THIS PROJECT:\n" + notes[:3000])
+        data.append("WHAT EARLIER RUNS LEARNED ABOUT THIS PROJECT:\n" + notes[:4000])
     if history:
         data.append("EARLIER CASES IN THIS PROJECT:\n" + history[:2000])
     big = "PROJECT MAP:\n" + prompts.redact(project_map)[:9000]

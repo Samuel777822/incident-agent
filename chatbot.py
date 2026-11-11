@@ -65,7 +65,7 @@ PRICING & PLANS:
 - Every plan includes, every month: 30 Normal tries, 6 High tries and 3 Extra tries (exact: @@QUOTAS@@).
   Quotas reset monthly and do not roll over. Technical faults on our side never count as a try.
 - Projects: @@PROJECTS@@.
-- Add-ons: a @@PACK@@ pack adds @@PACK_HIGH@@ High or @@PACK_EXTRA@@ Extra tries for the current month; an extra project is @@SLOT@@ once.
+- Add-ons: @@PACK_NORMAL_PRICE@@ adds @@PACK_NORMAL@@ Normal tries; a @@PACK@@ pack adds @@PACK_HIGH@@ High or @@PACK_EXTRA@@ Extra tries (all for the current month); an extra project is @@SLOT@@ once.
 - We sell attempts to fix a bug, not guaranteed fixes.
 - Payment: UPI QR (Paytm, Google Pay, PhonePe) with the 12-digit UTR, confirmed by an admin within 1 to 2 hours.
 
@@ -84,6 +84,8 @@ DAEMON_KNOWLEDGE = (DAEMON_KNOWLEDGE
     .replace("@@YEARLY_PM@@", f"₹{plans.YEARLY_PER_MONTH:,}")
     .replace("@@SAVING@@", f"₹{plans.YEARLY_SAVING:,}")
     .replace("@@QUOTAS@@", plans.quota_sentence())
+    .replace("@@PACK_NORMAL_PRICE@@", f"₹{plans.PACK_NORMAL_PRICE}")
+    .replace("@@PACK_NORMAL@@", str(plans.PACK_NORMAL_TRIES))
     .replace("@@PACK@@", f"₹{plans.PACK_PRICE}")
     .replace("@@PACK_HIGH@@", str(plans.PACK_HIGH_TRIES))
     .replace("@@PACK_EXTRA@@", str(plans.PACK_EXTRA_TRIES))

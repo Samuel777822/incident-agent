@@ -21,6 +21,10 @@ PLAN_DAYS = {"monthly": 30, "yearly": 365}
 PLAN_LABELS = {"monthly": "Monthly", "yearly": "Yearly"}
 PACK_PRICE = 100                                    # plan 5.7: Rs 100 = 5 High tries or 3 Extra tries
 PACK_HIGH_TRIES, PACK_EXTRA_TRIES = 5, 3
+PACK_NORMAL_PRICE = _price("PACK_NORMAL_PRICE_INR", 30)  # Rs 30 = 20 more Normal tries this month
+PACK_NORMAL_TRIES = 20
+PACK_TIERS = {"pack_normal": ("normal", "haiku", PACK_NORMAL_TRIES), "pack_high": ("high", "sonnet", PACK_HIGH_TRIES),
+              "pack_extra": ("extra", "opus", PACK_EXTRA_TRIES)}      # product -> (kind, engine tier, tries)
 
 # Projects: every plan includes one connected project. Each extra project costs a one-time PROJECT_SLOT_PRICE, and the
 # slot stays on the account (delete a project and the slot is free for the next one). Fix-attempt quotas are per ACCOUNT,
@@ -33,16 +37,17 @@ PRODUCTS = {
     "monthly": {"label": "Monthly plan", "rupees": PLAN_PRICES["monthly"], "days": 30},
     "yearly": {"label": "Yearly plan", "rupees": PLAN_PRICES["yearly"], "days": 365},
     "project_slot": {"label": "Extra project", "rupees": PROJECT_SLOT_PRICE, "days": 0},
+    "pack_normal": {"label": f"{PACK_NORMAL_TRIES} Normal tries", "rupees": PACK_NORMAL_PRICE, "days": 0},
     "pack_high": {"label": f"{PACK_HIGH_TRIES} High tries", "rupees": PACK_PRICE, "days": 0},
     "pack_extra": {"label": f"{PACK_EXTRA_TRIES} Extra tries", "rupees": PACK_PRICE, "days": 0},
 }
-ADDON_PRODUCTS = ("project_slot", "pack_high", "pack_extra")
+ADDON_PRODUCTS = ("project_slot", "pack_normal", "pack_high", "pack_extra")
 
 
 def product_grant_text(product: str) -> str:
     """What the admin's 'I received' button grants, in words."""
     return {"monthly": "grant 30 days", "yearly": "grant 365 days", "project_slot": "add 1 project slot",
-            "pack_high": f"add {PACK_HIGH_TRIES} High tries", "pack_extra": f"add {PACK_EXTRA_TRIES} Extra tries"}.get(product, "grant")
+            "pack_normal": f"add {PACK_NORMAL_TRIES} Normal tries", "pack_high": f"add {PACK_HIGH_TRIES} High tries", "pack_extra": f"add {PACK_EXTRA_TRIES} Extra tries"}.get(product, "grant")
 
 # Prices before the plan-v2 change. Accepted ONLY when an admin approves a payment that the customer
 # submitted at the old price, so nobody who already paid is stranded. New payments never use these.
@@ -97,7 +102,8 @@ def projects_sentence() -> str:
 
 def quota_fine_print() -> str:
     return ("Quotas reset every month and do not roll over. You are buying attempts to fix a bug, not a guaranteed fix. "
-            f"Need more High or Extra attempts? A ₹{PACK_PRICE} pack adds {PACK_HIGH_TRIES} High or {PACK_EXTRA_TRIES} Extra attempts.")
+            f"Need more? ₹{PACK_NORMAL_PRICE} adds {PACK_NORMAL_TRIES} Normal attempts, and a ₹{PACK_PRICE} pack adds {PACK_HIGH_TRIES} High "
+            f"or {PACK_EXTRA_TRIES} Extra attempts.")
 
 
 # ---- One wording for every page (architecture page, usage, FAQ, help, chatbot, emails). Change it here, not per page. ----

@@ -218,7 +218,8 @@ def test_a_provider_fault_is_recorded_with_its_cause_and_is_not_a_try(tmp_path, 
     assert store.tier_used(world.user_id, "groq") == 0                      # a fault never consumes a quota
     row = next(r for r in store.spend_by_tier() if r["tier"] == "groq")
     assert (row["tries"], row["faults"], row["passes"]) == (0, 1, 0)        # not shown as a failed bug fix
-    assert store.get_flag("pause_groq") == "1"                              # a persistent config problem pauses the tier instead of retrying forever
+    assert store.get_flag("pause_groq") != "1"                              # nothing pauses itself: only an admin pauses a mode
+    assert store.get_flag(f"provider_problem_mail:groq:config:{store.now()[:10]}") == "1"     # the admins were told (once a day)
     assert sum(1 for x in attempts if x["tier"] == "groq" and x["result"] != "system_fault") == 0
 
 

@@ -65,7 +65,7 @@ USAGE_CSS = """<style>
 .use .u-flow div:first-child{border-radius:16px 0 0 16px}.use .u-flow div:last-child{border-radius:0 16px 16px 0}
 .use .u-flow b{display:block;color:#fff;margin-bottom:4px}.use .u-flow b:before{counter-increment:f;content:counter(f);display:inline-grid;place-items:center;width:20px;height:20px;
   border-radius:50%;background:var(--u-v);color:#fff;font-size:11px;margin-right:8px}
-.use .u-packs{display:grid;grid-template-columns:repeat(2,1fr);gap:16px;margin:14px 0}
+.use .u-packs{display:grid;grid-template-columns:repeat(3,1fr);gap:16px;margin:14px 0}
 .use .u-pack{display:flex;gap:16px;align-items:center;padding:20px;border-radius:20px;border:1px solid var(--u-line);background:linear-gradient(120deg,#1e0f2c,#120a1b)}
 .use .u-pack .big{flex:none;width:70px;height:70px;border-radius:18px;display:grid;place-items:center;align-content:center;background:var(--tc);color:#120a1b;font-weight:800;font-size:26px;line-height:1}
 .use .u-pack .big small{font-size:10px;font-weight:600;letter-spacing:.08em;text-transform:uppercase}
@@ -191,8 +191,11 @@ def usage_page(view: dict, csrf: str, msg: str = "") -> str:
             f"<h2 class='u-h2'><span>🎛</span>How should the agent behave?</h2>"
             f"<form method='post' action='/usage/mode'><input type='hidden' name='csrf' value='{E(csrf)}'>"
             f"<div class='u-modes'>{tiles}</div><button class='button primary' type='submit'>Save</button></form>"
-            f"<h2 class='u-h2'><span>➕</span>Need more tries?</h2><p class='muted'>Buy a pack for ₹100 (added to this month), or ask and we will review it.</p>"
-            f"<div class='u-packs'><article class='u-pack' style='--tc:#b06cff'><div class='big'>5<small>High</small></div><div>"
+            f"<h2 class='u-h2'><span>➕</span>Need more tries?</h2><p class='muted'>Buy a pack (added to this month), or ask and we will review it.</p>"
+            f"<div class='u-packs'><article class='u-pack' style='--tc:#62e6a4'><div class='big'>{plans.PACK_NORMAL_TRIES}<small>Normal</small></div><div>"
+            f"<h3>{plans.PACK_NORMAL_TRIES} Normal tries · ₹{plans.PACK_NORMAL_PRICE}</h3><p>The everyday engineer that fixes most bugs.</p><div class='row'>"
+            f"<a class='button primary' href='/billing/pay?plan=pack_normal'>Buy {plans.PACK_NORMAL_TRIES} Normal tries · ₹{plans.PACK_NORMAL_PRICE}</a></div></div></article>"
+            f"<article class='u-pack' style='--tc:#b06cff'><div class='big'>5<small>High</small></div><div>"
             f"<h3>5 High tries · ₹100</h3><p>For bugs that need deeper analysis.</p><div class='row'>"
             f"<a class='button primary' href='/billing/pay?plan=pack_high'>Buy 5 High tries · ₹100</a>{more('high', 'Ask for more High tries')}</div></div></article>"
             f"<article class='u-pack' style='--tc:#ff4f6a'><div class='big'>3<small>Extra</small></div><div>"
@@ -447,7 +450,7 @@ def admin_page(d: dict, csrf: str, msg: str = "") -> str:
                  f"<input type='hidden' name='csrf' value='{E(csrf)}'>"
                  f"<input type='hidden' name='action' value='sell_pack'><div class='field'><label>Customer email</label>"
                  f"<input name='email' type='email' required maxlength='200'></div><div class='field'><label>Pack</label>"
-                 f"<select name='kind'><option value='high'>5 High tries</option><option value='extra'>3 Extra tries</option></select></div>"
+                 f"<select name='kind'><option value='normal'>20 Normal tries</option><option value='high'>5 High tries</option><option value='extra'>3 Extra tries</option></select></div>"
                  f"<button class='button primary' type='submit'>Credit pack</button></form>")
     return (f"{ADMIN_CSS}<section class='section fx-admin'><p><a href='/admin'>← Admin</a> · <a href='/admin/architecture'>How the router decides →</a></p>"
             f"<div class='eyebrow'>Auto-fix money</div><h1>AI spending and controls</h1>{flash}"

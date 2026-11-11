@@ -20,7 +20,7 @@ from . import adapters as fx_adapters
 from . import agent as fx_agent
 from . import admin_tools, fingerprint, investigator, journeys, notify, oncall, project_map, prompts, repo_context, review, router, sandbox, store, triage, validator
 from . import config as fx_config
-from . import git_ops
+from . import git_ops, merge3
 from .guard import Guard
 
 log = logging.getLogger("fixengine")
@@ -442,10 +442,9 @@ class Engine:
                         f"What it found: {last['diagnosis'][:1200]}")
         if bug.get("strong_diagnosis"):
             previous += "\nEarlier diagnosis: " + str(bug["strong_diagnosis"])[:1500]
-        carried = sorted((store.gh_state(bug["id"]).get("wip_files") or {}).keys())
-        if carried:
-            previous += ("\nThe earlier run's edits are ALREADY APPLIED in your working copy (do not redo them): " + ", ".join(carried[:20])
-                         + ". Read those files to see the current state, finish the work, run_checks and finish.")
+        gstate = store.gh_state(bug["id"])
+        if gstate.get("conflict_note"):
+            previous += "\n" + str(gstate["conflict_note"])[:1200]
         try:
             history = "\n".join(f"- {h.get('when', '')[:10]} {h.get('signature', '')[:80]} -> {h.get('root_cause', '')[:200]}"
                                 for h in portal_db.project_history(project_id))
@@ -461,7 +460,7 @@ class Engine:
             case_reports=ctx.get("reports") or [], replies=ctx.get("replies") or [], baseline=bug.get("baseline_output") or "",
             notes=store.get_flag(f"notes:{project_id}", ""), history=history, commits=recent, project_map=ctx.get("map", ""),
             code=fx_agent.code_dump(files, int(((self.cfg.get("agent") or {}).get("full_code_chars") or {}).get(tier, fx_agent.FULL_CODE_CHARS))),
-            previous=previous)
+            previous=previous + self._seed_note(bug, files), memory=project_memory_text(project_id))
 
         def on_step(what: str) -> None:
             _stage(incident_id, "working", what[:280], tier)
@@ -475,10 +474,9 @@ class Engine:
             return row.get("status") == "paused"
 
         ws = fx_agent.Workspace(root, files)
-        wip = store.gh_state(bug["id"]).get("wip_files") or {}
-        for rel, text in wip.items():
+        for rel, text in self._seed_files(bug, files).items():
             try:
-                ws.write(fx_agent.Workspace.clean(rel), str(text))      # an earlier run's edits: kept, not redone
+                ws.write(fx_agent.Workspace.clean(rel), str(text))      # an earlier run's edits, merged onto today's code
             except (ValueError, OSError):
                 pass
         try:
@@ -513,12 +511,14 @@ class Engine:
                       patch_json=json.dumps(sorted(res.new_files))[:20000])
         if res.outcome in ("fixed", "needs_owner", "question"):
             st = store.gh_state(bug["id"])
-            if st.pop("wip_files", None) is not None:
+            if st.pop("wip_files", None) is not None or st.pop("wip_base", None) is not None or st.pop("conflict_note", None):
                 store.save_gh_state(bug["id"], st)
+            remember(project_id, request_text or message, res)
         if res.outcome == "budget":
             st = store.gh_state(bug["id"])
             if res.new_files:
                 st["wip_files"] = dict(res.new_files)
+                st["wip_base"] = {p: files.get(p) for p in res.new_files}     # what those edits were made on
             store.save_gh_state(bug["id"], st)
             findings = str(res.data.get("findings") or "")
             store.finish_attempt(attempt_id, result="unusable", error_summary=("stopped at the run limit; continuing. " + str(res.data.get("reason", "")))[:300],
@@ -561,8 +561,16 @@ class Engine:
                 client += "\n\nYou also need to do this:\n" + "\n".join(f"{i}. {s}" for i, s in enumerate(owner_steps, 1))
             win = {"new_files": dict(res.new_files), "diff": res.diff, "diagnosis": diagnosis, "level": level, "tier": tier, "model": model,
                    "attempt_id": attempt_id, "client_message": client.strip(),
-                   "verification": investigator.clean_steps(res.data.get("verification") or [])}
+                   "verification": investigator.clean_steps(res.data.get("verification") or []),
+                   "base_files": {p: files.get(p) for p in res.new_files}}
             review = validator.agent_risk_notes(res.new_files) + validator.agent_change_warnings(files, res.new_files)
+            tests = [str(p) for p in (res.data.get("tests_written") or []) if str(p) in res.new_files]
+            if tests and not sres.system_fault:
+                caught = self._test_catches_bug(root, profile, {p: res.new_files[p] for p in tests})
+                if caught is False:
+                    review.append("the new test also passes WITHOUT the fix, so it may not really test the problem")
+                elif caught is True:
+                    win["test_proof"] = "A new test (" + ", ".join(tests[:3]) + ") fails without the fix and passes with it."
             risk = str(res.data.get("risk", "")).lower() or "unknown"
             if risk != "low":
                 review.append(f"the engineer rated the risk of this change as {risk}")
@@ -900,6 +908,104 @@ class Engine:
                           f"{detail[:600]}\n\nThe agent moves on to the next mode for each case. Fix the key, the credit or the model "
                           "setting (OpenRouter). If you want to stop this mode meanwhile: Admin, AI spending, Mode switches.", "fix_pause")
 
+    # ---- never overwrite the owner's newer work ------------------------------------------------------------------------------
+    def _onto_latest(self, project, win: dict, reader=None) -> tuple[dict, list[str]]:
+        """Merge the fix onto the branch AS IT IS NOW. The engineer worked on a snapshot; if the owner pushed changes to the same
+        files meanwhile, both are kept. Returns (win with the merged files and the commit they were merged on, conflicting paths)."""
+        base_files = win.get("base_files")
+        if reader is None or base_files is None or not win.get("new_files"):
+            return win, []
+        now = reader(project, sorted(win["new_files"]))
+        merged, conflicts = merge3.merge_files(base_files, win["new_files"], now.get("files") or {})
+        if conflicts:
+            return win, conflicts
+        out = dict(win)
+        if merged:
+            out["new_files"] = merged
+        out["expected_base"] = str(now.get("sha") or "")
+        out["merged_with_owner"] = sorted(p for p in merged if merged[p] != win["new_files"].get(p))
+        return out, []
+
+    @staticmethod
+    def _expect(fn, win: dict) -> dict:
+        return {"expected_base": win["expected_base"]} if win.get("expected_base") and _accepts(fn, "expected_base") else {}
+
+    def _owner_changed_same_lines(self, claimed, project, bug, conflicts: list[str]) -> str:
+        """The owner changed the very lines the fix changes. Write NOTHING; redo the fix on their latest code (twice at most)."""
+        incident_id, project_id = claimed["incident_id"], claimed["project_id"]
+        files = ", ".join(conflicts[:8])
+        state = store.gh_state(bug["id"])
+        state["conflicts"] = int(state.get("conflicts", 0)) + 1
+        state["conflict_note"] = (f"IMPORTANT: while you worked, the owner changed the same lines in {files}. Nothing was written. The code "
+                                  "in this message is their latest version: build your fix ON TOP of their change and keep it.")
+        state.pop("wip_files", None)
+        state.pop("wip_base", None)
+        store.save_gh_state(bug["id"], state)
+        log.info("bug %s: owner changed the same lines in %s (conflict %s)", bug["id"], files, state["conflicts"])
+        if state["conflicts"] > 2:
+            text = (f"You kept changing the same lines the agent was fixing ({files}), so nothing was written to your code. "
+                    "When you are done editing, press Run again and the agent fixes it on your latest code.")
+            store.update_bug(bug["id"], status="needs_human", stop_reason=text[:300])
+            portal_db.mark_remediation_needs_human(incident_id, project_id, text)
+            return "needs_human"
+        store.update_bug(bug["id"], status="open")
+        portal_db.requeue_incident(incident_id, project_id, f"You changed the same lines in {files} while the agent worked. Nothing was "
+                                                            "overwritten: it is redoing the fix on your latest code.")
+        return "waiting"
+
+    def _seed_files(self, bug, files: dict) -> dict:
+        """An earlier run's unfinished edits, merged onto TODAY's code. A file the owner changed in the same lines is not seeded."""
+        st = store.gh_state(bug["id"])
+        wip, base = st.get("wip_files") or {}, st.get("wip_base")
+        if not wip:
+            return {}
+        if base is None:                                   # saved by an older version: only where the file did not change since
+            return {p: t for p, t in wip.items() if p not in files}
+        out = {}
+        for path, text in wip.items():
+            merged = merge3.merge(base.get(path), str(text), files.get(path))
+            if merged is not None:
+                out[path] = merged
+        return out
+
+    def _seed_note(self, bug, files: dict) -> str:
+        st = store.gh_state(bug["id"])
+        wip = st.get("wip_files") or {}
+        if not wip:
+            return ""
+        seeded = self._seed_files(bug, files)
+        note = ""
+        if seeded:
+            note += ("\nThe earlier run's edits are ALREADY APPLIED in your working copy, merged onto the owner's latest code (do not "
+                     "redo them): " + ", ".join(sorted(seeded)[:20]) + ". Read those files to see the current state, finish, run_checks.")
+        skipped = sorted(set(wip) - set(seeded))
+        if skipped:
+            note += ("\nThe owner changed " + ", ".join(skipped[:10]) + " in the same places since the earlier run, so those earlier "
+                     "edits were dropped: redo what is still needed on top of the owner's version.")
+        return note
+
+    def _test_catches_bug(self, root: Path, profile, tests: dict) -> bool | None:
+        """Run the ORIGINAL code plus only the new test files. A real regression test fails there. None when it cannot be told."""
+        if self.runner is None or profile is None or not (getattr(profile, "test", None) or getattr(profile, "has_tests", False)):
+            return None
+        work = Path(tempfile.mkdtemp(prefix="fx-testproof-"))
+        try:
+            probe = work / "repo"
+            shutil.copytree(root, probe, ignore=shutil.ignore_patterns(".git"))
+            for rel, text in tests.items():
+                target = (probe / rel).resolve()
+                target.relative_to(probe.resolve())
+                target.parent.mkdir(parents=True, exist_ok=True)
+                target.write_text(text, encoding="utf-8")
+            res = sandbox.run_profile(self.runner, probe, profile)
+        except Exception:
+            return None
+        finally:
+            shutil.rmtree(work, ignore_errors=True)
+        if res.system_fault or not res.tests_ran:
+            return None
+        return not res.passed
+
     def _note_provider_fault(self, tier, exc, adapter=None) -> None:
         provider = getattr(exc, "provider", "") or getattr(adapter, "provider", "") or ("groq" if tier == "groq" else "anthropic")
         if exc.kind in ("auth", "not_configured", "config"):
@@ -942,7 +1048,19 @@ class Engine:
         title = f"fix: {short or 'incident ' + incident_id[:8]} {AGENT_MARK}"
         _stage(incident_id, "pushing", f"sending the fix to a test branch on GitHub (round {round_no} of {MAX_GITHUB_ROUNDS})", win["tier"])
         try:
-            pushed = self.gh.push_fix_branch(project, bug_id=bug["id"], new_files=win["new_files"], title=title)
+            pushed = None
+            for _turn in range(2):
+                win, conflicts = self._onto_latest(project, win, getattr(self.gh, "read_files", None))
+                if conflicts:
+                    return self._owner_changed_same_lines(claimed, project, bug, conflicts)
+                try:
+                    pushed = self.gh.push_fix_branch(project, bug_id=bug["id"], new_files=win["new_files"], title=title,
+                                                     **self._expect(self.gh.push_fix_branch, win))
+                    break
+                except git_ops.BranchMoved:
+                    continue                      # the owner pushed this very second: read the branch again and merge again
+            if pushed is None:
+                return self._fault_wait(claimed, bug, "your branch kept changing while the fix was being merged", 120)
         except Exception as exc:
             from monitoring_installer import PublicRepoError
             if isinstance(exc, PublicRepoError):
@@ -954,6 +1072,8 @@ class Engine:
                       "pushed_at": time.time(), "attempt_id": win["attempt_id"], "tier": win["tier"], "model": win["model"],
                       "level": win["level"], "diagnosis": str(win["diagnosis"])[:1500], "diff": str(win["diff"])[:40000],
                       "title": title, "files": sorted(win["new_files"])[:20]})
+        if win.get("merged_with_owner"):
+            state["merged_with_owner"] = win["merged_with_owner"][:20]
         if win.get("verified_text"):
             state["verified_text"] = str(win["verified_text"])[:600]
         if win.get("evidence"):
@@ -1106,10 +1226,13 @@ class Engine:
         if revert and state.get("base_sha") and state.get("files"):
             try:
                 outcome = revert(project, base_sha=state["base_sha"], paths=list(state["files"]),
-                                 title=f"revert: undo the agent's fix for incident {incident_id[:8]} (live site got worse) {AGENT_MARK}")
+                                 title=f"revert: undo the agent's fix for incident {incident_id[:8]} (live site got worse) {AGENT_MARK}",
+                                 **({"fix_sha": state.get("head_sha", "")} if _accepts(revert, "fix_sha") else {}))
             except Exception as exc:
                 outcome = f"failed ({type(exc).__name__})"
-        if outcome == "ok":
+        remember_event(str(bug.get("project_id") or project.get("id") or ""),
+                       f"the fix for case {incident_id[:8]} made the live site worse and was undone ({outcome}); do not repeat it")
+        if outcome in ("ok", "partial"):
             text = ("The fix made your live site worse, so the agent UNDID it with a new commit (your other changes are kept). "
                     f"What the live site showed with the fix:\n{seen}\n\nThis needs a human look.")
             notify.user_fix_reverted(project["user_id"], project["name"], text)
@@ -1265,8 +1388,12 @@ class Engine:
         title = f"fix: {short or 'incident ' + claimed['incident_id'][:8]} {AGENT_MARK}"
         _stage(claimed["incident_id"], "pushing", f"new branch agent-daemon/fix-… and a pull request into {project.get('branch', '')}", win["tier"])
         try:
+            reader = git_ops.read_files if self.pr_opener is git_ops.open_pr else getattr(self.pr_opener, "read_files", None)
+            win, conflicts = self._onto_latest(project, win, reader)
+            if conflicts:
+                return self._owner_changed_same_lines(claimed, project, bug, conflicts)
             pr = self.pr_opener(project, bug_id=bug["id"], incident_id=claimed["incident_id"], new_files=win["new_files"],
-                                diff=win["diff"], title=title, body=body)
+                                diff=win["diff"], title=title, body=body, **self._expect(self.pr_opener, win))
             if not pr.get("url") or not pr.get("number"):
                 raise RuntimeError("GitHub did not return a pull request link")
         except Exception as exc:
@@ -1374,3 +1501,64 @@ def _fp_of(bug, last) -> dict:
     if last and last.get("error_summary"):
         return fingerprint.fingerprint(last["error_summary"][:400], last["error_summary"])
     return base
+
+
+# ---- the engineer's memory of a project ------------------------------------------------------------------------------------------
+MEMORY_ITEMS = 25
+
+
+def _accepts(fn, name: str) -> bool:
+    import inspect
+    try:
+        params = inspect.signature(fn).parameters
+    except (TypeError, ValueError):
+        return False
+    return name in params or any(p.kind == p.VAR_KEYWORD for p in params.values())
+
+
+def _memory(project_id: str) -> list[dict]:
+    try:
+        items = json.loads(store.get_flag(f"memory:{project_id}", "") or "[]")
+        return items if isinstance(items, list) else []
+    except ValueError:
+        return []
+
+
+def _save_memory(project_id: str, items: list[dict]) -> None:
+    store.set_flag(f"memory:{project_id}", json.dumps(items[-MEMORY_ITEMS:])[:20000])
+
+
+def remember(project_id: str, request: str, res) -> None:
+    """One line per finished run: what was asked, what the engineer found and did. Shown to every later run on this project."""
+    if not project_id:
+        return
+    d = res.data or {}
+    what = {"fixed": "fixed", "needs_owner": "told the owner what to do", "question": "asked the owner"}.get(res.outcome, res.outcome)
+    item = {"when": store.now()[:10], "asked": " ".join(str(request or "").split())[:200], "outcome": what,
+            "cause": " ".join(str(d.get("root_cause") or d.get("what_is_wrong") or d.get("question") or "").split())[:300],
+            "changed": sorted(res.new_files)[:10] if res.outcome == "fixed" else [],
+            "tests": [str(t) for t in (d.get("tests_written") or [])][:5]}
+    items = _memory(project_id) + [item]
+    _save_memory(project_id, items)
+
+
+def remember_event(project_id: str, text: str) -> None:
+    if project_id:
+        _save_memory(project_id, _memory(project_id) + [{"when": store.now()[:10], "event": " ".join(str(text).split())[:300]}])
+
+
+def project_memory_text(project_id: str) -> str:
+    lines = []
+    for m in _memory(project_id):
+        if m.get("event"):
+            lines.append(f"- {m.get('when', '')}: {m['event']}")
+            continue
+        line = f"- {m.get('when', '')}: asked \"{m.get('asked', '')}\" -> {m.get('outcome', '')}"
+        if m.get("cause"):
+            line += f"; cause: {m['cause']}"
+        if m.get("changed"):
+            line += "; changed " + ", ".join(m["changed"])
+        if m.get("tests"):
+            line += "; tests " + ", ".join(m["tests"])
+        lines.append(line)
+    return "\n".join(lines)

@@ -1983,7 +1983,7 @@ def _admin_action(request):
         product = payment.get("product") or payment.get("plan")
         if product == "project_slot":
             text = f"We confirmed your ₹{payment['amount']} payment. You can now connect one more project: {_base_url()}/projects/new"
-        elif product in ("pack_high", "pack_extra"):
+        elif product in plans.PACK_TIERS:
             text = (f"We confirmed your ₹{payment['amount']} payment and added {plans.PRODUCTS[product]['label']} for this month.\n"
                     f"{_base_url()}/usage")
         else:
@@ -2545,7 +2545,7 @@ def _page_admin_fix(request):
                        if admin_tools.approve_hold(form.get("hold_id", ""), actor) else "That request was already handled.")
             elif action == "sell_pack":
                 target = portal_db.get_user_by_email(form.get("email", "").strip().lower())
-                if target and form.get("kind") in ("high", "extra"):
+                if target and form.get("kind") in ("normal", "high", "extra"):
                     done = admin_tools.sell_pack(target["id"], form["kind"], actor)
                     msg = f"Pack credited: {done['tries']} {fx_cfg.USER_MODE_NAMES.get(done['tier'])} tries added to {target['email']} for this month."
                 else:
@@ -3682,17 +3682,20 @@ def _page_case_action(request, project_id, incident_id, action):
                 base_sha, paths = info.get("base_sha", ""), info.get("paths") or []
             if not base_sha or not paths:
                 return _redirect(back + "?case=undo_unknown#case-" + incident_id)
-            outcome = git_ops.revert_files(full, base_sha=base_sha, paths=paths,
+            fix_sha = str(state.get("head_sha") or (info.get("head_sha", "") if "info" in locals() else "") or "")
+            outcome = git_ops.revert_files(full, base_sha=base_sha, paths=paths, fix_sha=fix_sha,
                                            title=f"revert: undo Agent Daemon fix for case {incident_id[:8]} (requested by the owner) [agent-daemon]")
         except Exception as exc:
             LOG.warning("undo for case %s failed (%s)", incident_id, exc.__class__.__name__)
             outcome = "failed"
-        if outcome == "ok":
-            portal_db.set_incident_stage(incident_id, "reverted", "You undid this fix. The changed files are back as they were (new commit "
-                                         "on your branch). Your host puts it live in 1 to 3 minutes.")
+        if outcome in ("ok", "partial"):
+            portal_db.set_incident_stage(incident_id, "reverted", "You undid this fix: the agent's lines were taken back with a new commit "
+                                         "on your branch, and everything you changed since is kept."
+                                         + (" One file was left as it is because you rewrote the same lines yourself." if outcome == "partial" else "")
+                                         + " Your host puts it live in 1 to 3 minutes.")
             portal_db.audit(project_id, "fix_undone_by_owner", {"incident_id": incident_id})
             return _redirect(back + "?case=undone#case-" + incident_id)
-        return _redirect(back + f"?case=undo_{'protected' if outcome == 'protected' else 'failed'}#case-" + incident_id)
+        return _redirect(back + f"?case=undo_{outcome if outcome in ('protected', 'conflict') else 'failed'}#case-" + incident_id)
     return _redirect(back)
 
 
@@ -3727,6 +3730,8 @@ def _next_tier(bug) -> str:
 
 
 CASE_FLASH = {
+    "undo_conflict": ("amber", "Nothing was undone: you have changed those same lines yourself since the fix, so undoing it would throw "
+                               "your work away. Edit them by hand, or reply on the case and the agent adjusts it."),
     "replied": ("green", "Sent. The agent read your answer and is continuing on this case."),
     "escalated": ("green", "OK. A stronger AI model is taking another look, starting from what was found so far."),
     "escalate_none": ("amber", "The strongest model already looked at this case. Reply on the case to tell it what it got wrong."),
@@ -3950,6 +3955,7 @@ def _page_billing(request):
                     f"<a class='button' href='/billing/pay?plan={key}'>Pay ₹{item['rupees']} by UPI</a></article>")
         addons = ("<h2>Add-ons</h2><div class='grid'>"
                   + addon("project_slot", "One more project", f"One-time. You use {slots['used']} of {slots['limit']} project slot(s). The slot stays on your account.")
+                  + addon("pack_normal", f"{plans.PACK_NORMAL_TRIES} Normal tries", "Added to this month, on top of your plan. The everyday engineer.")
                   + addon("pack_high", f"{plans.PACK_HIGH_TRIES} High tries", "Added to this month, on top of your plan.")
                   + addon("pack_extra", f"{plans.PACK_EXTRA_TRIES} Extra tries", "Added to this month, on top of your plan.")
                   + "</div>")
@@ -4633,12 +4639,20 @@ def _hosting_card(project: dict, request) -> str:
         rows = "".join(f"<li class='hr-{_escape(f['level'])}'><b>{_escape(f['title'])}.</b> {_escape(f['fix'])}</li>" for f in hr.get("findings", []))
         verdict = ("Ready to host: nothing blocks a first deploy." if hr.get("ready") else
                    "Not ready yet: the items in red would make the first deploy fail.")
+        app_parts = hr.get("parts") or []
+        part_rows = "".join(
+            f"<div class='hr-part'><b>{_escape(pp.get('kind', ''))}</b><span class='muted'>{_escape(pp.get('dir', '.'))} → {_escape(pp.get('host', ''))}</span>"
+            + (f"<code>{_escape(pp['start'])}</code>" if pp.get("start") else "")
+            + (f"<small class='muted'>uses {_escape(', '.join(pp['services']))}</small>" if pp.get("services") else "") + "</div>"
+            for pp in app_parts)
         parts.append(f"<h4>Ready to host? <span class='muted'>({_escape(hr.get('kind', 'app'))}, best on {_escape(hr.get('host', ''))})</span></h4>"
-                     f"<p>{_escape(verdict)}</p>" + (f"<ul class='hr-list'>{rows}</ul>" if rows else ""))
+                     + (f"<div class='hr-parts'>{part_rows}</div>" if len(app_parts) > 1 or any(pp.get("start") for pp in app_parts) else "")
+                     + f"<p>{_escape(verdict)}</p>" + (f"<ul class='hr-list'>{rows}</ul>" if rows else ""))
         if any(f.get("code") and f.get("level") in ("error", "warn") for f in hr.get("findings", [])):
             parts.append(f"<form method='post' action='/projects/{pid}/host-ready' style='display:inline'><input type='hidden' name='csrf' value='{csrf}'>"
                          "<button class='button primary' type='submit'>Make it host-ready</button></form> "
-                         "<span class='muted'>The engineer fixes the items above in your code and sends you a pull request.</span>")
+                         "<span class='muted'>The engineer reads your whole app, fixes the items above in your code, and writes the "
+                         "steps for this app.</span>")
         if not online and hr.get("steps"):
             steps = "".join(f"<li>{_escape(s)}</li>" for s in hr["steps"])
             parts.append(f"<details class='more'><summary>How to put it online on {_escape(hr.get('host', ''))} (about 5 minutes)</summary>"
@@ -4648,7 +4662,10 @@ def _hosting_card(project: dict, request) -> str:
     if not parts:
         return ""
     style = ("<style>.hr-list{margin:6px 0 12px 18px;padding:0}.hr-list li{margin:5px 0}.hr-error b{color:#ff9aa8}.hr-warn b{color:#ffdc91}"
-             ".hr-info b{color:#b8c9df}.steps-plain{margin:8px 0 0 20px}.steps-plain li{margin:5px 0}</style>")
+             ".hr-info b{color:#b8c9df}.steps-plain{margin:8px 0 0 20px}.steps-plain li{margin:5px 0}"
+             ".hr-parts{display:grid;grid-template-columns:repeat(auto-fit,minmax(min(260px,100%),1fr));gap:12px;margin:12px 0 16px}"
+             ".hr-part{display:flex;flex-direction:column;gap:4px;padding:14px 16px;border-radius:12px;background:#ffffff07;border:1px solid #ffffff14}"
+             ".hr-part code{margin-top:4px;align-self:flex-start;overflow-wrap:anywhere}</style>")
     return style + "<article class='card hosting-card'>" + "".join(parts) + "</article>"
 
 

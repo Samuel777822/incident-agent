@@ -6,6 +6,33 @@ read code, could not see the live site, and pushed fixes that nothing had proven
 on-call engineer: understand the request, look at the real site, find the cause, fix it, prove it, push it, check the live site
 again, and tell the client honestly.
 
+## v5.2: A careful engineer that never overwrites your work (11 November 2026)
+
+* **Your newer changes are never thrown away.** The engineer works on a copy of your code; before anything is written to GitHub
+  (a push, a pull request, an earlier run's edits carried over, or "Undo this fix"), its change is merged line by line onto your
+  branch AS IT IS NOW. If you edited other lines meanwhile, both are kept. If you edited the very same lines, nothing is written:
+  the agent redoes the fix on your latest code (after three such clashes it stops and asks you to press Run again). If you push at
+  the exact second of the write, GitHub refuses it and the agent merges again. Undo only takes back the agent's own lines.
+* **The engineer tests its own work.** It writes a NEW test that reproduces the problem (or says why a test is impossible), runs
+  everything, may not finish while anything is red, and sees its whole diff with a checklist after every green run (is every line
+  needed, was anything you built removed, do the callers still work). Our own sandbox then checks that the new test FAILS without
+  the fix, so a test that proves nothing is flagged for review.
+* **No whole-file rewrites.** Existing files longer than 60 lines may only be changed with exact edits: rewriting a file from
+  memory is how code silently disappeared.
+* **Memory.** Every run on a project is remembered (what was asked, the cause, the files changed, the tests written, fixes that were
+  undone) and shown to every later run, together with the project notes the engineer keeps up to date.
+* **Nothing pauses itself.** Budget levels, spending spikes, a fast-spending project, a busy customer and AI key or credit problems
+  only email the admins (once an hour or once a day). Only an admin pauses a mode. An older automatic pause is released once.
+* **Answer box.** When the agent asks you something, the question and a box to answer it are on the case card and the dashboard.
+  The live refresh no longer wipes what you are typing.
+* **20 Normal tries for Rs 30**, on Usage, Billing and Pricing, credited when the admin confirms the payment.
+* **Ready to host, planned for your app.** The check now finds each part of the repository (front-end, API, Python app, static site,
+  Java service, also in sub-folders), its real start command (the actual Flask/FastAPI app object, Django's wsgi, Streamlit), the
+  services it uses, and its own pitfalls: page refresh 404s on single-page apps, a front-end without an API address, CORS, SQLite and
+  uploads that free hosts wipe, a missing gunicorn/uvicorn, an empty ALLOWED_HOSTS. The plan deploys the API first, then the
+  front-end, then lists what to update after (Supabase / Firebase / Google sign-in URLs, Stripe webhook, MongoDB access). "Make it
+  host-ready" asks the engineer to read the whole app, correct the first look, fix the code and write the steps for this app.
+
 ## v5.0: One look for every page (11 November 2026)
 
 * **Shared design layer (`theme.py`):** a wider page, larger text, calmer headings (Cinzel only for titles), and one style each for

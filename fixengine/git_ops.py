@@ -101,7 +101,8 @@ def recent_commits_text(project: dict, max_commits: int = 3, per_file: int = 120
         return ""
 
 
-def open_pr(project: dict, *, bug_id: str, incident_id: str, new_files: dict[str, str], diff: str, title: str, body: str) -> dict:
+def open_pr(project: dict, *, bug_id: str, incident_id: str, new_files: dict[str, str], diff: str, title: str, body: str,
+            expected_base: str = "") -> dict:
     """Open one PR changing several files. Idempotent: a retry reuses the same branch and PR."""
     owner, repo, base = _validate(project)
     token = _token(project.get("github_token_ciphertext", ""))
@@ -121,6 +122,8 @@ def open_pr(project: dict, *, bug_id: str, incident_id: str, new_files: dict[str
             base_sha = str(ref.get("object", {}).get("sha", ""))
             if not base_sha:
                 raise RemediationError("Could not read the repository branch")
+            if expected_base and base_sha != expected_base:
+                raise BranchMoved("the branch moved while the fix was being merged")
             commit = call(client, "GET", f"{api}/git/commits/{quote(base_sha, safe='')}")
             base_tree = str(commit.get("tree", {}).get("sha", ""))
             entries = []
@@ -182,7 +185,43 @@ def _tok(project: dict) -> str:
     return _token(project.get("github_token_ciphertext", ""))
 
 
-def push_fix_branch(project: dict, *, bug_id: str, new_files: dict[str, str], title: str) -> dict:
+class BranchMoved(RemediationError):
+    """The owner pushed after we read the branch: nothing was written; read it again and merge again."""
+
+
+def _blob_text(client, call, api: str, sha: str) -> str | None:
+    import base64
+    blob = call(client, "GET", f"{api}/git/blobs/{quote(sha, safe='')}")
+    try:
+        return base64.b64decode(str(blob.get("content", ""))).decode("utf-8")
+    except (ValueError, UnicodeDecodeError):
+        return None
+
+
+def _files_at(client, call, api: str, commit_sha: str, paths: list[str]) -> dict:
+    """{path: text or None (missing / binary)} at one commit."""
+    commit = call(client, "GET", f"{api}/git/commits/{quote(commit_sha, safe='')}")
+    tree = call(client, "GET", f"{api}/git/trees/{quote(str(commit.get('tree', {}).get('sha', '')), safe='')}?recursive=1")
+    blobs = {e.get("path"): e.get("sha") for e in tree.get("tree", []) if e.get("type") == "blob"}
+    return {p: (_blob_text(client, call, api, blobs[p]) if blobs.get(p) else None) for p in paths}
+
+
+def read_files(project: dict, paths: list[str]) -> dict:
+    """The tracked branch as it is RIGHT NOW: {"sha": head commit, "files": {path: text or None}}. Used to merge a fix onto the
+    owner's latest work instead of overwriting it."""
+    _owner, _repo, base = _validate(project)
+    token = _tok(project)
+    api = _api_root(project)
+    call = portal_remediation._api
+    with httpx.Client(headers=_headers(token), timeout=httpx.Timeout(30, connect=8), follow_redirects=False) as client:
+        ref = call(client, "GET", f"{api}/git/ref/heads/{quote(base, safe='/')}")
+        sha = str(ref.get("object", {}).get("sha", ""))
+        if not sha:
+            raise RemediationError("Could not read the repository branch")
+        return {"sha": sha, "files": _files_at(client, call, api, sha, list(paths)[:60])}
+
+
+def push_fix_branch(project: dict, *, bug_id: str, new_files: dict[str, str], title: str, expected_base: str = "") -> dict:
     """Commit the proven-in-sandbox fix on top of the tracked branch's head and (force-)update our own test branch.
     A branch is not a pull request. GitHub Actions runs the customer's tests on it."""
     owner, repo, base = _validate(project)
@@ -197,6 +236,8 @@ def push_fix_branch(project: dict, *, bug_id: str, new_files: dict[str, str], ti
         base_sha = str(ref.get("object", {}).get("sha", ""))
         if not base_sha:
             raise RemediationError("Could not read the repository branch")
+        if expected_base and base_sha != expected_base:
+            raise BranchMoved("the branch moved while the fix was being merged")
         commit = call(client, "GET", f"{api}/git/commits/{quote(base_sha, safe='')}")
         base_tree = str(commit.get("tree", {}).get("sha", ""))
         entries = []
@@ -298,9 +339,12 @@ def open_pr_for_branch(project: dict, *, branch: str, title: str, body: str) -> 
     return {"url": pr.get("html_url", ""), "number": pr.get("number"), "branch": branch}
 
 
-def revert_files(project: dict, *, base_sha: str, paths: list[str], title: str) -> str:
-    """Undo a pushed fix (v3.1): put the listed files back exactly as they were at base_sha, as a NEW commit on top of the branch.
-    Nothing is rewritten or forced, so later commits by the owner are kept. 'ok' | 'moved' | 'protected' | 'nothing'."""
+def revert_files(project: dict, *, base_sha: str, paths: list[str], title: str, fix_sha: str = "") -> str:
+    """Undo a pushed fix as a NEW commit on top of the branch (nothing is forced).
+
+    With fix_sha (the commit that carried the fix), only the agent's own lines are taken back: a three-way merge keeps every change
+    the owner made to those files after the fix. A file where the owner rewrote the very same lines is left alone ('partial').
+    Without fix_sha (very old cases) the files go back to base_sha. 'ok' | 'partial' | 'moved' | 'protected' | 'nothing' | 'conflict'."""
     owner, repo, base = _validate(project)
     token = _tok(project)
     import repo_guard
@@ -315,16 +359,39 @@ def revert_files(project: dict, *, base_sha: str, paths: list[str], title: str) 
         head_sha = str(ref.get("object", {}).get("sha", ""))
         head = call(client, "GET", f"{api}/git/commits/{quote(head_sha, safe='')}")
         entries = []
-        for path in paths[:20]:
-            sha = old_blobs.get(path)
-            entries.append({"path": path, "mode": "100644", "type": "blob", "sha": sha})   # sha None = the file did not exist: delete it
+        skipped = []
+        if fix_sha:
+            from . import merge3
+            want = paths[:20]
+            before = {p: (_blob_text(client, call, api, old_blobs[p]) if old_blobs.get(p) else None) for p in want}
+            fixed = _files_at(client, call, api, fix_sha, want)
+            now = _files_at(client, call, api, head_sha, want)
+            for path in want:
+                undone = merge3.merge(fixed.get(path), now.get(path), before.get(path))   # take the fix's change back out of today's file
+                if undone is None:
+                    if now.get(path) is None:
+                        continue                                       # already gone
+                    if before.get(path) is None and now.get(path) == fixed.get(path):
+                        entries.append({"path": path, "mode": "100644", "type": "blob", "sha": None})   # the fix created it: remove
+                    else:
+                        skipped.append(path)                           # the owner rewrote the same lines: leave their file alone
+                    continue
+                if undone == now.get(path):
+                    continue
+                else:
+                    blob = call(client, "POST", f"{api}/git/blobs", {"content": undone, "encoding": "utf-8"})
+                    entries.append({"path": path, "mode": "100644", "type": "blob", "sha": blob.get("sha")})
+        else:
+            for path in paths[:20]:
+                sha = old_blobs.get(path)
+                entries.append({"path": path, "mode": "100644", "type": "blob", "sha": sha})   # sha None = the file did not exist: delete it
         if not entries:
-            return "nothing"
+            return "conflict" if skipped else "nothing"
         tree = call(client, "POST", f"{api}/git/trees", {"base_tree": head.get("tree", {}).get("sha"), "tree": entries})
         made = call(client, "POST", f"{api}/git/commits", {"message": title, "tree": tree.get("sha"), "parents": [head_sha]})
         try:
             call(client, "PATCH", f"{api}/git/refs/heads/{quote(base, safe='/')}", {"sha": made.get("sha"), "force": False})
-            return "ok"
+            return "partial" if skipped else "ok"
         except RemediationError as exc:
             return "protected" if http_code(exc) in (403, 409, 422) else "moved"
 

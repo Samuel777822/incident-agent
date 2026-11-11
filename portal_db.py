@@ -1488,11 +1488,11 @@ def approve_manual_payment(payment_id: str, reviewed_by: str):
             conn.commit()
             result.update(status="approved", product="project_slot", days=0, active_until="")
             return result
-        if row["plan"] in ("pack_high", "pack_extra"):
+        if row["plan"] in plans.PACK_TIERS:
             conn.commit()
             # The tries ledger lives in the fix engine's tables (same database).
             from fixengine import admin_tools
-            credited = admin_tools.sell_pack(row["user_id"], "high" if row["plan"] == "pack_high" else "extra", reviewed_by)
+            credited = admin_tools.sell_pack(row["user_id"], plans.PACK_TIERS[row["plan"]][0], reviewed_by)
             result.update(status="approved", product=row["plan"], days=0, active_until="", credited=credited)
             return result
         days = 30 if row["plan"] == "monthly" else 365

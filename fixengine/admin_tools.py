@@ -89,8 +89,9 @@ def pause_tier(tier: str, paused: bool, admin_email: str) -> None:
 
 
 def sell_pack(user_id: str, kind: str, admin_email: str = "") -> dict:
-    """Credit a Rs 100 pack after payment is confirmed: 5 High or 3 Extra tries (plan 5.7)."""
-    tier, tries = {"high": ("sonnet", 5), "extra": ("opus", 3)}[kind]
+    """Credit a pack after payment is confirmed: Rs 30 = 20 Normal tries, Rs 100 = 5 High or 3 Extra tries."""
+    import plans
+    tier, tries = {k: (t, n) for k, t, n in plans.PACK_TIERS.values()}[kind]
     store.add_grant(user_id, tier, tries, "pack", f"pack confirmed by {admin_email or 'system'}")
     store.log_admin_action("pack_sold", user_id, {"tier": tier, "tries": tries})
     return {"tier": tier, "tries": tries}
