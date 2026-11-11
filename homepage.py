@@ -1123,7 +1123,7 @@ def render_homepage_html() -> str:
       </div>
       <h3 style="font-size:18px;margin:0 0 10px;color:var(--text);font-family:var(--serif)">Fix pushed back</h3>
       <p style="color:var(--muted);font-size:14px;line-height:1.6;margin:0">
-        The fix is tested on a branch first. Pull request mode gives you a pull request. Auto mode runs your GitHub tests and pushes the proven fix to your branch, so the fixed version is on GitHub before you deploy.
+        The fix is tested on a branch first: your GitHub tests, plus a real browser at phone and desktop size for anything on the screen. Pull request mode gives you a pull request. Auto mode pushes the proven fix to your branch, merged onto your latest code so nothing of yours is overwritten.
       </p>
     </div>
   </div>
@@ -1167,7 +1167,7 @@ def render_homepage_html() -> str:
       <span class="feature-num">04</span>
       <div class="feature-icon-box">{ICON_PR}</div>
       <h3>Fixes pushed to GitHub</h3>
-      <p>Small, proven patches tested on a fix branch; in Auto mode pushed to your branch once your GitHub tests pass.</p>
+      <p>Proven fixes tested on a fix branch (tests, plus a real browser for visual changes); in Auto mode pushed to your branch, never over your newer edits.</p>
     </div>
 
     <!-- 05 -->
@@ -1248,7 +1248,7 @@ def render_homepage_html() -> str:
           <span style="color:#ff8a7a;font-weight:600">Sandbox only</span>
         </div>
         <div style="display:flex;justify-content:space-between;align-items:center;padding:10px 12px;background:#13091c;border-radius:8px">
-          <span>Auto-Merge CI Safety Gate</span>
+          <span>Proof Before Push (tests + real browser)</span>
           <span style="color:#6fe0b0;font-weight:600">Mandatory Green Check</span>
         </div>
       </div>

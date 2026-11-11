@@ -6,6 +6,23 @@ read code, could not see the live site, and pushed fixes that nothing had proven
 on-call engineer: understand the request, look at the real site, find the cause, fix it, prove it, push it, check the live site
 again, and tell the client honestly.
 
+## v5.3: Eyes for the engineer: screenshots, voice, "Still broken" and a real-browser check (11 November 2026)
+
+* **Show the agent:** every request, answer and reply has "Add a screenshot" (shrunk in the browser to about 500 KB, location data
+  removed, only real JPEG/PNG/WebP accepted) and a microphone button (the browser's own speech recognition; the owner checks the text
+  before sending). The engineer receives the pictures as images. The last 6 per case are kept and shown on the case page.
+* **Still broken?** On a fixed case the owner sends a screenshot and what is still wrong: the same case reopens, the engineer is told its
+  previous fix did not work and must not repeat it, the project memory records it, and the second time a stronger model takes over.
+* **Browser check on GitHub:** when a fix changes what people see (CSS, JSX, TSX, HTML, Vue, Svelte), a workflow travels with the fix
+  branch. In the same push as the tests, GitHub builds the app, opens the pages (the engineer's verification pages, the owner's page,
+  the home page) in Chrome at 375x812 and 1280x800, and uploads screenshots and the problems seen (console errors, failed requests,
+  sideways scrolling). A vision model compares them with the owner's own screenshot; fixed and nothing new broken -> live, otherwise
+  the fix goes back to the engineer with what the browser saw. Two screenshots are kept on the case. Backend fixes skip it. A token
+  without the workflow permission: the fix goes out as before and the case says why. Cost: no tries; the owner's free Actions minutes.
+* **Every page rewritten for how it works now:** Help centre (how a fix goes live, modes, screenshots and voice, why a fix became a pull
+  request, new FAQ answers), public FAQ, features, changelog, homepage, How it works, privacy policy (screenshots, voice, browser
+  check), the website chatbot's knowledge and the admin architecture map.
+
 ## v5.2: A careful engineer that never overwrites your work (11 November 2026)
 
 * **Your newer changes are never thrown away.** The engineer works on a copy of your code; before anything is written to GitHub

@@ -423,15 +423,16 @@ def test_help_center_page_and_navigation(web_env):
     assert "Y3neE_B2d-M" in body  # YouTube video ID embed
     assert 'referrerpolicy="strict-origin-when-cross-origin"' in body
     assert "https://www.youtube.com/embed/Y3neE_B2d-M" in body
-    assert "Remediation Modes" in body
-    assert "Automatic Mode" in body
-    assert "Pull Request Only" in body
-    assert "Report Only" in body
+    assert "What the agent may do with a fix" in body
+    assert "Auto (pushes proven fixes)" in body
+    assert "Pull request" in body
+    assert "Report only" in body
+    assert "Show the agent: screenshots, voice and" in body
     assert "Troubleshooting Playbooks" in body
     assert "Offline" in body
     assert "GitHub Installation PR Fails" in body
     assert "Auto-Fix Skipped or Marked" in body
-    assert "Fix PR Opened on GitHub but Not Auto-Merging" in body
+    assert "The fix came as a pull request instead of going live" in body
     assert "FastAPI" in body and "Flask" in body and "Django" in body
     assert "help-search" in body
 

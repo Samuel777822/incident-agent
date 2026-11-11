@@ -261,17 +261,17 @@ SYSTEM_LAYERS = [
                    ("Live app (optional)", "incident_agent_monitor.py posts errors and heartbeats to /ingest.")]),
     ("Render: web", [("web_app.py (gunicorn)", "Routes, auth (Google + admin passwords), CSRF, /webhooks/github/<id>, /ingest, payments UI."),
                      ("push_watch.py", "Webhook signature check, push parsing, commit statuses, poller, run_check()."),
-                     ("Worker (portal_worker.py)", "Loop: one push check → one incident → expired choices → poll pushes → auto-merge.")]),
-    ("Fix engine", [("agent.py (the engineer)", "Haiku → Sonnet → Opus with tools on a copy of the repo (OpenRouter). Ends: fix / needs owner / question / give up."),
-                    ("orchestrator.Engine", "Case context, budgets, our own sandbox check, sure → push / not sure → PR. Old text-patch loop only without OpenRouter."),
+                     ("Worker (portal_worker.py)", "Loop: one push check → one incident → expired choices → poll pushes → GitHub proof (tests + browser check) → push.")]),
+    ("Fix engine", [("agent.py (the engineer)", "Haiku → Sonnet → Opus with tools on a copy of the repo (OpenRouter), the owner's screenshots and its project memory. Writes a test first, never finishes on red, reviews its own diff. Ends: fix / needs owner / question / give up."),
+                    ("orchestrator.Engine", "Case context, budgets, our own sandbox check, 3-way merge onto the owner's latest code, GitHub tests + browser check (judged by a vision model), sure → push / not sure → PR."),
                     ("router.py", "Old engine only (no OpenRouter key): expected-cost DP + hard rules."),
-                    ("guard.py", "Quotas, packs, per-user ceiling, budget B, kill-switch levels, spike breaker, rate limits."),
+                    ("guard.py", "Quotas and packs. Budget levels, spikes, busy customers and fast projects only EMAIL the admins: nothing pauses by itself."),
                     ("validator.py", "Harm rules on the engineer's change (placeholders, stubs, hidden errors, removed options, protected files) and verification level.")]),
     ("Sandbox host (VPS)", [("sandbox_service.py", "Signed /run endpoint (HMAC, 5-minute window). One job at a time."),
                             ("DockerRunner", "Per stack: install (network) → build → test → smoke (no network). Non-root, read-only, caps dropped."),
                             ("Images", "fixengine-sandbox-python / -node (JS, TS, static) / -java.")]),
     ("Data and providers", [("PostgreSQL", "users, projects, push_checks, incidents, fx_attempts (the cost ledger), router decisions, payments."),
-                            ("Model providers", "Claude Haiku / Sonnet / Opus (Normal / High / Extra) through OpenRouter; Groq only for the website help chat."),
+                            ("Model providers", "Claude Haiku / Sonnet / Opus (Normal / High / Extra) through OpenRouter, including the independent reviewer and the screenshot judge."),
                             ("Brevo", "Email over HTTPS: warnings, push failures, payment and admin alerts.")]),
 ]
 ADAPTER_LAYERS = [
@@ -283,7 +283,7 @@ ADAPTER_LAYERS = [
                    ("OpenRouterAdapter", "One key for every tier (FIXENGINE_PROVIDER=auto | openrouter | direct)."),
                    ("DryRunAdapter / FakeAdapter", "Benchmarks and tests: never touch the network.")]),
     ("Hygiene", [("redact()", "Strips keys, bearer tokens and our own secrets from every log, error and report."),
-                 ("AdapterError(kind)", "auth | rate_limit | outage | timeout | config | … ; retryable kinds back off, persistent ones auto-pause the tier."),
+                 ("AdapterError(kind)", "auth | rate_limit | outage | timeout | config | … ; retryable kinds back off, persistent ones email the admins (never a pause)."),
                  ("Ledger row", "Every call writes one fx_attempts row: tier, model, tokens, ₹ cost, result.")]),
 ]
 

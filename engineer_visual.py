@@ -35,8 +35,9 @@ STEPS = [
       ("dim", "(Extra: only after you press \"Yes, go ahead\")")]),
     ("🚀", "5. Sure or not sure", "Push, or ask you",
      "In Auto mode a fix the agent is sure about (all checks green, low risk, nothing left for you) goes to your branch after your "
-     "GitHub tests pass, and then your live site is checked. Not sure? You get a pull request, the reason in plain words, and how to merge it.",
-     [("cmd", "sure?  checks green · low risk · nothing for you"), ("ok", "GitHub tests ✓   →   pushed to main"),
+     "GitHub tests pass and, for anything on the screen, a real Chrome on GitHub shows it working at phone and desktop size. Then your "
+     "live site is checked. Not sure? You get a pull request, the reason in plain words, and how to merge it.",
+     [("cmd", "sure?  checks green · low risk · nothing for you"), ("ok", "GitHub tests ✓  real browser ✓  →  pushed to main"),
       ("cmd", "live check /isaiah/1"), ("ok", "200 OK · no errors   →   Verified on your live site")]),
 ]
 
@@ -156,7 +157,7 @@ your branch after your GitHub tests pass; then the agent opens your live site, a
 <article class='eng-out no'><h4>🧐 Not sure: a pull request for you</h4><p>You get the reason in plain words ("removes 'NIV' from a list, check
 that this was intended") and step-by-step instructions to merge it. One click when it is right.</p></article></div>
 <div class='eng-chips'><span><b>Pause</b> any case</span><span><b>Resume</b> where it stopped</span><span><b>Run again</b> without retyping</span>
-<span><b>Not right?</b> let a stronger AI look</span><span><b>Keep going</b> at the spending limit</span><span><b>Undo this fix</b> anytime</span></div>
+<span><b>Still broken?</b> show it a screenshot</span><span><b>Speak</b> instead of typing</span><span><b>Keep going</b> at the spending limit</span><span><b>Undo this fix</b> anytime</span></div>
 <div class='eng-foot'><article><h4>What a try is</h4><p>{E(try_definition)}</p></article>
 <article><h4>When a person is needed</h4><p>{E(human_needed)}</p></article></div>
 </div></section><script>{SCRIPT}</script>"""

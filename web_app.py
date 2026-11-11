@@ -1402,7 +1402,7 @@ def _page_help(request: Request) -> Response:
     <li>We download that exact commit and find every part of the repo (Python, JavaScript/TypeScript, Java, HTML/CSS).</li>
     <li>Each part is installed, built (and type-checked), tested and started in a fresh sandbox container. Push checks are free.</li>
     <li>The commit gets a <b>Agent Daemon / push check</b> status on GitHub: ✓ or ✗.</li>
-    <li>On ✗ an incident opens and the agent writes a fix, proves it with the same check, and sends it to a test branch <code>agent-daemon/fix-…</code>. Your GitHub tests run on that branch. If they fail, the error goes back to the AI (up to 3 rounds). Pull request mode then opens a pull request for you. Auto mode pushes the fix straight to your branch once the sandbox and your GitHub tests pass, and opens a pull request for you to review after 3 failed rounds.</li>
+    <li>On ✗ a case opens and the engineer fixes it: it reads your code and history, writes a test that shows the problem, fixes it, and runs everything in the sandbox (it may not finish while anything is red). The fix goes to a test branch <code>agent-daemon/fix-…</code>: GitHub runs your tests there, and when the fix changes what people see, a real Chrome opens your pages at phone and desktop size and the screenshots are checked. Only then does it go live (Auto mode) or come to you as a pull request. If something fails, what failed goes back to the engineer (up to 3 rounds).</li>
   </ol>
   <p class="muted">No webhook (for example the token is not an admin of the repository)? The worker looks for new commits every few minutes instead. Use <b>Check latest commit now</b> on the project page any time.</p>
 </section>
@@ -1420,30 +1420,50 @@ def _page_help(request: Request) -> Response:
   The full picture, with a small calculator, is on <a href="/how-it-works#router">How it works</a>.</p>
 </section>
 
-<!-- 2. Remediation Modes Section -->
+<!-- 2. Modes -->
 <section class="help-section" id="modes" data-category="modes">
-  <h2 class="help-section-title">Remediation Modes: How Much Autonomy Do You Want?</h2>
-  <p class="muted">You control the degree of autonomy for each connected repository. Switch modes at any time on your project settings page:</p>
-  
+  <h2 class="help-section-title">What the agent may do with a fix</h2>
+  <p class="muted">Choose per project on its page (Settings). You can change it any time.</p>
   <div class="modes-grid">
     <article class="mode-card">
-      <div style="margin-bottom:8px"><span class="badge-tag mode" style="background:#163229;color:#6fe0b0;border-color:#235c4b">Fully Autonomous</span></div>
-      <h4>Automatic Mode (<code>auto</code>)</h4>
-      <p>The complete self-healing loop shown in the demo video. When an incident occurs, Agent Daemon diagnoses the cause, writes a surgical patch and tests it in the sandbox. It then runs your GitHub tests on a fix branch. If they fail, the exact error goes back to the AI model and it tries again (up to 3 rounds). When the sandbox and your GitHub tests pass, the fix is pushed straight to your branch, with no pull request. After 3 failed rounds it opens a pull request marked <b>Needs human review</b>. If your branch is protected, it opens the pull request and merges it when GitHub allows. Your GitHub tests run on the fix branch only if your workflow runs on <code>push</code> (the one we add does). Requires a private repository.</p>
+      <div style="margin-bottom:8px"><span class="badge-tag setup">Hands-off</span></div>
+      <h4>Auto (pushes proven fixes)</h4>
+      <p>A fix goes straight to your branch when it is proven: your checks pass in our sandbox, your GitHub tests pass, and for anything on
+      the screen a real browser shows it working at phone and desktop size. When the agent is not sure (a risky change, something only you
+      can check), you get a pull request with the reason in plain words instead. After a push it opens your live site again and undoes the
+      fix by itself if the site got worse.</p>
     </article>
-
     <article class="mode-card">
-      <div style="margin-bottom:8px"><span class="badge-tag mode" style="background:#231a3b;color:#b98aff;border-color:#432e6e">Recommended Default</span></div>
-      <h4>Pull Request Only (<code>pr_only</code>)</h4>
-      <p>Human-in-the-loop remediation. Agent Daemon analyzes the failure, generates a syntax-validated patch, and opens a GitHub Pull Request with the unified diff and incident explanation. Merging is left to your developers. Ideal for production teams requiring manual review.</p>
+      <div style="margin-bottom:8px"><span class="badge-tag git">You merge</span></div>
+      <h4>Pull request</h4>
+      <p>Every fix comes as a pull request with the explanation, the test it wrote and the screenshots. You merge it on GitHub, then press
+      <b>I merged it, check my site</b> and the agent checks your live site for you.</p>
     </article>
-
     <article class="mode-card">
-      <div style="margin-bottom:8px"><span class="badge-tag mode">Triage &amp; Observability</span></div>
-      <h4>Report Only (<code>report_only</code>)</h4>
-      <p>Non-intrusive error monitoring. Clusters repeated exceptions into incidents, explains the likely root cause and culprit commits, and suggests manual fix recommendations on your dashboard. Does not create branches or open pull requests.</p>
+      <div style="margin-bottom:8px"><span class="badge-tag mode">Advice only</span></div>
+      <h4>Report only</h4>
+      <p>The agent finds the cause and explains it on your dashboard, with the steps to fix it, but never changes your code.</p>
     </article>
   </div>
+  <p class="muted">In every mode: your newer edits are never overwritten (the fix is merged line by line onto your latest code; if you
+  changed the same lines, nothing is written and the fix is redone on your code), and nothing pauses by itself: only the Agent Daemon team
+  can pause the AI, and they are emailed about anything unusual.</p>
+</section>
+
+<!-- 2b. Show the agent -->
+<section class="help-section" id="show" data-category="modes">
+  <h2 class="help-section-title">Show the agent: screenshots, voice and "Still broken"</h2>
+  <ol class="muted">
+    <li><b>Add a screenshot</b> to a request, an answer or a reply. The engineer sees the picture itself, so it knows exactly what you
+    see. Your phone's location data is removed before it is sent.</li>
+    <li><b>Speak</b> instead of typing: press the microphone, talk, check the text, then send. It uses your browser's own speech
+    recognition (in Chrome, Edge, Android and recent iPhone Safari).</li>
+    <li><b>Still broken?</b> On a fixed case, press <b>Still broken? Show the agent</b>, add a screenshot and say what is still wrong. The
+    same case reopens; the engineer looks at your screenshot and at what it already tried, and must do something different. The second
+    time you say it, a stronger AI takes over.</li>
+    <li><b>Questions:</b> when the agent needs one answer from you, the question and a box to answer it are right on the case and on
+    your dashboard.</li>
+  </ol>
 </section>
 
 <!-- 3. GitHub & Setup Guides -->
@@ -1635,17 +1655,21 @@ application = get_wsgi_application()</div>
 
     <details class="accordion-item">
       <summary class="accordion-summary">
-        <span><span class="badge-tag git">Issue 4</span> Fix PR Opened on GitHub but Not Auto-Merging</span>
+        <span><span class="badge-tag git">Issue 4</span> The fix came as a pull request instead of going live</span>
       </summary>
       <div class="accordion-body">
-        <p><b>Symptom:</b> The fix branch and PR were created on GitHub, but status remains <code>pending</code> or <code>failed</code> on the portal.</p>
-        <p><b>Troubleshooting Checklist:</b></p>
+        <p>In Auto mode a fix goes live by itself only when it is proven. The case says why it was not, in plain words. The usual reasons:</p>
         <ul>
-          <li><b>CI checks must pass:</b> A fix is pushed only when your GitHub Actions check finishes with <code>success</code> on the fix branch (or, when your repository has no GitHub check, only when the sandbox proved the fix). If the check fails, the error goes back to the AI for another try; after 3 failed rounds Agent Daemon stops and opens a pull request marked <b>Needs human review</b>.</li>
-          <li><b>Branch protection rules:</b> If your repository enforces required code reviews (e.g. "Require at least 1 approval before merging"), GitHub blocks direct pushes. Agent Daemon then opens a pull request and merges it when GitHub allows; otherwise you merge it with one click on GitHub.</li>
-          <li><b>Public repository restriction:</b> As a strict security measure, public repositories never get automatic pushes or merges.</li>
-          <li><b>Merge conflicts:</b> If other commits were pushed to your base branch while the tests were running, the agent re-tests once on the newest code; if that happens twice, it opens a pull request for you.</li>
+          <li><b>Not proven:</b> no test, browser check or failing push check could show the fix working, and the independent reviewer
+          model did not approve it.</li>
+          <li><b>A judgement call:</b> the fix removes an option, adds a placeholder, changes a package or hosting setting, or you also
+          have to do something yourself. You decide.</li>
+          <li><b>The browser check saw a problem</b> after 3 rounds: open the screenshots on the case.</li>
+          <li><b>Branch protection:</b> your repository requires reviews before merging, so GitHub refuses a direct push.</li>
+          <li><b>Public repository:</b> public repositories never get automatic pushes.</li>
         </ul>
+        <p>To merge: open the pull request, look at <b>Files changed</b>, press <b>Merge pull request</b>, then <b>I merged it, check my
+        site</b> on the case.</p>
       </div>
     </details>
 
@@ -1723,7 +1747,21 @@ HttpClient.newHttpClient().sendAsync(req, HttpResponse.BodyHandlers.discarding()
     <details class="accordion-item">
       <summary class="accordion-summary">Can Agent Daemon accidentally break my database or infrastructure?</summary>
       <div class="accordion-body">
-        <p><b>No.</b> Fixes are confined to application source code (Python, JavaScript, TypeScript, Java, HTML and CSS). The agent never changes databases, credentials, environment variables, Docker or deploy files. When one of those is the cause, it gives you step-by-step instructions instead, and every fix that went live has an <b>Undo this fix</b> button.</p>
+        <p><b>No.</b> The agent changes your code, never your databases, keys or host settings. When one of those is the cause, it gives you step-by-step instructions instead. It may add or update a hosting file (vercel.json, render.yaml, a Dockerfile) when your fix needs it, and that always comes to you as a pull request first. Every fix that went live has an <b>Undo this fix</b> button, which takes back only the agent's own lines and keeps everything you changed since.</p>
+      </div>
+    </details>
+
+    <details class="accordion-item">
+      <summary class="accordion-summary">Does the browser check cost me anything?</summary>
+      <div class="accordion-body">
+        <p>No AI tries. It runs on GitHub's own machines, only on Agent Daemon's fix branches and only when a fix changes what people see. On a private repository it uses a few of your free GitHub Actions minutes (GitHub gives 2,000 a month on the free plan; one check takes about 2 to 4). Pages behind your sign-in show the sign-in screen, unless you give the agent a test account.</p>
+      </div>
+    </details>
+
+    <details class="accordion-item">
+      <summary class="accordion-summary">Who sees the screenshots I upload?</summary>
+      <div class="accordion-body">
+        <p>You, the engineer (the AI model working on your case) and, if a case needs a person, the Agent Daemon team. Pictures are shrunk in your browser and their location data is removed. We keep the last few per case. Do not upload screenshots that show passwords or keys.</p>
       </div>
     </details>
 

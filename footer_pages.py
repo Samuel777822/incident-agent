@@ -164,7 +164,7 @@ def features_page_html() -> str:
   <article class="card">
     <div class="feat-ico" aria-hidden="true">&#8644;</div>
     <h3>Fix pushed back to GitHub</h3>
-    <p class="muted">The fix lands on a new <code>agent-daemon/fix-&hellip;</code> branch with a pull request. In Auto mode it is merged into your branch as soon as the same sandbox check proves it works, so the fixed version is on GitHub without you lifting a finger.</p>
+    <p class="muted">The fix goes to a test branch <code>agent-daemon/fix-&hellip;</code> first. Your GitHub tests run there and, for anything on the screen, a real Chrome checks it at phone and desktop size. In Auto mode a proven fix then goes to your branch by itself; when the agent is not sure, you get a pull request and the reason. Your own newer edits are never overwritten.</p>
   </article>
   <article class="card">
     <div class="feat-ico" aria-hidden="true">&#9889;</div>
@@ -176,6 +176,12 @@ def features_page_html() -> str:
     <h3>An AI engineer, cheapest first</h3>
     <p class="muted">The low-cost Normal engineer reads your whole code, reproduces the problem and fixes it. Only when it cannot finish does a stronger engineer take over, starting from what it found. <a href="/how-it-works#router">See how it works</a>.</p>
   </article>
+  <article class="card hover-float">
+    <div class="feat-ico">👁</div>
+    <h3>It checks with real eyes</h3>
+    <p class="muted">A fix that changes the screen is opened in a real Chrome at phone and desktop size before it goes live. Show the agent your own screenshot, or just speak: and if a fix did not work, press Still broken.</p>
+  </article>
+
   <article class="card">
     <div class="feat-ico" aria-hidden="true">&#128274;</div>
     <h3>Safe by design</h3>
@@ -274,12 +280,29 @@ def changelog_page_html() -> str:
 
   <article class="card" style="margin-bottom:20px">
     <div style="display:flex;justify-content:space-between;align-items:center;flex-wrap:wrap;gap:10px;margin-bottom:12px">
-      <h3 style="margin:0;color:var(--silver)">v2.0 &mdash; Push guard: catch it before you deploy</h3>
+      <h3 style="margin:0;color:var(--silver)">v5 &mdash; An engineer that shows its work</h3>
       <span class="pill green">Latest release &middot; Nov 2026</span>
     </div>
     <ul style="color:#d1c4df;font-size:14px;line-height:1.7;padding-left:18px">
+      <li><b>Real browser check:</b> a fix that changes what people see is opened in Chrome on GitHub at phone and desktop size, and the screenshots are checked against the problem before it goes live.</li>
+      <li><b>Show the agent:</b> add a screenshot or speak with any request, answer or reply. <b>Still broken?</b> reopens a fixed case with your screenshot; the second time, a stronger AI takes over.</li>
+      <li><b>Tests first:</b> the engineer writes a test that shows the problem, runs everything, never finishes on red, and reviews its own change. A new test that fails without the fix and passes with it counts as proof.</li>
+      <li><b>Your work is safe:</b> fixes are merged line by line onto your latest code; your newer edits are never overwritten. Undo takes back only the agent's lines.</li>
+      <li><b>Memory:</b> the engineer remembers what it did on your project, including fixes that did not work, and does not repeat them.</li>
+      <li><b>Nothing pauses by itself:</b> unusual spending emails the Agent Daemon team, who decide.</li>
+      <li><b>More tries:</b> 20 Normal tries for &#8377;30; questions from the agent have an answer box right on the case; a new look for every page.</li>
+      <li><b>Ready to host, for your app:</b> each part of your repository gets its own hosting plan with the real start command and its own pitfalls.</li>
+    </ul>
+  </article>
+
+  <article class="card" style="margin-bottom:20px">
+    <div style="display:flex;justify-content:space-between;align-items:center;flex-wrap:wrap;gap:10px;margin-bottom:12px">
+      <h3 style="margin:0;color:var(--silver)">v2.0 &mdash; Push guard: catch it before you deploy</h3>
+      <span class="pill">Nov 2026</span>
+    </div>
+    <ul style="color:#d1c4df;font-size:14px;line-height:1.7;padding-left:18px">
       <li><b>Push checks:</b> every push to your branch is installed, built, tested and started in the sandbox. The result shows up on the commit in GitHub.</li>
-      <li><b>Fix pushed back:</b> a broken push opens an incident; the agent writes a fix, proves it with the same check, and pushes it as a pull request (merged automatically in Auto mode).</li>
+      <li><b>Fix pushed back:</b> a broken push opens an incident; the agent writes a fix, proves it with the same check, and sends it back to GitHub.</li>
       <li><b>Mixed-language repos:</b> Python, JavaScript/TypeScript, Java and HTML/CSS parts of one repo are each checked on their own.</li>
       <li><b>Live dashboard:</b> see which mode is working on a bug, what it is doing right now (testing in the sandbox, pushing, merging) and how many tries you have left.</li>
       <li><b>Projects:</b> one included, more for &#8377;30 each. Plans list 30 Normal, 6 High and 3 Extra tries a month.</li>
@@ -318,7 +341,7 @@ def changelog_page_html() -> str:
       <span class="pill">Oct 2026</span>
     </div>
     <ul style="color:#d1c4df;font-size:14px;line-height:1.7;padding-left:18px">
-      <li><b>Groq LLM Chatbot:</b> Embedded dark-mode conversational assistant answering visitor queries about features, pricing, and architecture.</li>
+      <li><b>Website chatbot:</b> a help assistant answering visitor questions about features, pricing and how it works.</li>
       <li><b>Admin Chat Console:</b> Live multi-tab messaging drawer for the Agent Daemon team of engineers to take over chat sessions in real time.</li>
       <li><b>Visitor Telemetry:</b> Anonymous visitor journey tracking with automated alert deduplication.</li>
     </ul>
@@ -373,7 +396,24 @@ def faq_page_html() -> str:
   <details class="accordion-item">
     <summary class="accordion-summary">How does Auto mode push the fixed version to GitHub?</summary>
     <div class="accordion-body">
-      <p>The fix is committed to a new <code>agent-daemon/fix-&hellip;</code> branch and opened as a pull request into your branch. When the sandbox proves the fix (the check that failed now passes), the fix commit gets a green status and Auto mode squash-merges it, so your branch on GitHub holds the fixed version. In Pull request mode it waits for you to merge. Nothing is ever pushed straight to your branch without a pull request.</p>
+      <p>The fix goes to a test branch <code>agent-daemon/fix-&hellip;</code> first. There your GitHub tests run, and when the fix changes what people see, a real Chrome opens your pages at phone and desktop size and the screenshots are checked against the problem. Only when everything is green does Auto mode move your branch to that commit (a normal, non-forced push), then it opens your live site to check. When the agent is not sure, you get a pull request with the reason instead. In Pull request mode every fix waits for you to merge.</p>
+    </div>
+  </details>
+
+  <details class="accordion-item">
+    <summary class="accordion-summary">Can I show the agent a screenshot, or just say what is wrong?</summary>
+    <div class="accordion-body">
+      <p>Yes. Every request, answer and reply has <b>Add a screenshot</b> and a microphone button. The engineer sees your picture itself.
+      If a fix did not work, press <b>Still broken? Show the agent</b> on the case with a screenshot: it reopens the same case, looks at what it
+      already tried and does something different; the second time, a stronger AI takes over.</p>
+    </div>
+  </details>
+
+  <details class="accordion-item">
+    <summary class="accordion-summary">Will the agent overwrite changes I made while it was working?</summary>
+    <div class="accordion-body">
+      <p>No. Its fix is merged line by line onto your latest code right before it is written, so your newer edits stay. If you changed the very
+      same lines, nothing is written and the fix is redone on your version. <b>Undo this fix</b> also takes back only the agent's lines.</p>
     </div>
   </details>
 
@@ -429,14 +469,14 @@ def faq_page_html() -> str:
   <details class="accordion-item">
     <summary class="accordion-summary">What happens if a patch fails tests in CI?</summary>
     <div class="accordion-body">
-      <p>Agent Daemon will <b>never</b> merge a failing PR. If tests fail, the PR is left open with the CI failure status recorded, and the incident status is escalated to <code>needs_human</code> so an engineer can inspect the situation.</p>
+      <p>Nothing goes live. What failed (the test output, or what the browser saw) goes back to the engineer, which fixes its own fix; after 3 rounds the case comes to you as a pull request marked for review, with the last error.</p>
     </div>
   </details>
 
   <details class="accordion-item">
     <summary class="accordion-summary">Can Agent Daemon fix infrastructure or database issues?</summary>
     <div class="accordion-body">
-      <p>It never changes them itself. Fixes are confined to application source code (Python, JavaScript, TypeScript, Java, HTML and CSS). When the cause is a database, a key or environment variable, a sign-in setting or the hosting, the agent says so and gives you simple step-by-step instructions to fix it yourself, then checks your site again when you are done.</p>
+      <p>It never changes them itself. When the cause is a database, a key or environment variable, a sign-in setting or the hosting, the agent says so and gives you simple step-by-step instructions, then checks your site again when you press <b>I did it, check again</b>. It may add or update a hosting file when your fix needs it, always as a pull request first.</p>
     </div>
   </details>
 
@@ -475,6 +515,9 @@ def privacy_policy_page_html() -> str:
     <li><b>Account Information:</b> When you sign in via Google OAuth, we receive your email address, display name, and unique Google subject identifier. We do not store Google passwords.</li>
     <li><b>GitHub Integration Data:</b> To interact with your repository, you provide a classic Personal Access Token. This token is encrypted at rest using AES-128 Fernet keys and is used solely to inspect source files for bug diagnosis and open fix pull requests.</li>
     <li><b>Application Telemetry &amp; Logs:</b> When an error occurs in your application, the monitoring client transmits the exception message, stack traceback, timestamp, service name, and execution environment.</li>
+    <li><b>Screenshots you add:</b> pictures you attach to a request or reply are shrunk in your browser, stripped of location data, stored with that case (the last few per case) and shown to the AI model working on it. Do not upload screenshots that show passwords or keys.</li>
+    <li><b>Voice:</b> the microphone button uses your browser's own speech recognition; your browser's maker (for example Google in Chrome) may process the audio. We only receive the text you choose to send.</li>
+    <li><b>Browser check:</b> for fixes that change what people see, your app is built and opened on GitHub's own machines (in your repository's GitHub Actions) and the screenshots are downloaded to the case.</li>
   </ul>
 
   <h3 style="color:var(--silver);margin:24px 0 8px">3. How We Use and Protect Source Code</h3>
@@ -507,7 +550,7 @@ def terms_of_service_page_html() -> str:
 
   <h3 style="color:var(--silver);margin:24px 0 8px">2. Autonomous Pull Requests &amp; Customer Responsibility</h3>
   <p>Agent Daemon provides autonomous error diagnosis and code fixes. While our system checks every change against safety rules, runs it in a sandbox and gates pushes on your GitHub tests, <b>the customer retains ultimate responsibility for reviewing and validating any code pushed or merged into their production repositories</b>.</p>
-  <p>In Automatic mode, Agent Daemon merges a pull request only when the fix is proven in our sandbox (the check that failed before now passes) and every GitHub check on the pull request reports success. We recommend keeping tests in every repository you connect: the more your tests cover, the more a green check means.</p>
+  <p>In Automatic mode, Agent Daemon puts a fix on your branch only when it is proven (in our sandbox, by your GitHub checks and, for visual changes, by a real-browser check) and the agent is sure; otherwise it opens a pull request for you. We recommend keeping tests in every repository you connect: the more your tests cover, the more a green check means.</p>
   <p>Push checks: by connecting a repository you allow us to add a webhook to it and to post commit statuses ("Agent Daemon / push check") on the commits we test.</p>
 
   <h3 style="color:var(--silver);margin:24px 0 8px">3. Subscriptions &amp; Billing</h3>

@@ -524,6 +524,6 @@ def trail_html(view: dict | None) -> str:
     elif bug["status"] == "needs_human" and bug.get("review_report"):
         extra = f"<details><summary>Review report</summary><pre style='white-space:pre-wrap;overflow:auto'>{E(bug['review_report'])}</pre></details>"
     return (f"<h2>How the agent worked on this</h2><p class='muted'>Status: <strong>{E(status)}</strong>. "
-            f"A try is one attempt by the AI to fix the bug. The agent starts with the free and economical modes and moves to a stronger AI "
+            f"A try is one attempt by the AI to fix the bug. Every case starts with the low-cost Normal engineer and moves to a stronger AI "
             f"only when it has to.</p>"
             f"{path}{table}{extra}")
