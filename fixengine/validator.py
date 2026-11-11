@@ -110,9 +110,10 @@ def verification_level(*, baseline_failing, baseline_had_tests: bool, result, ch
     return "failed"
 
 
-PROVEN_LEVELS = ("tests_fixed", "check_fixed", "journey_fixed")
+PROVEN_LEVELS = ("tests_fixed", "check_fixed", "journey_fixed", "new_test_fixed")
 
 VERIFY_TEXT = {
+    "new_test_fixed": "The engineer wrote a new test for this problem: it FAILS on the old code and PASSES with the fix, and the build and checks pass too.",
     "journey_fixed": "A browser journey (opening the pages and clicking the buttons) failed before the fix and passes with it, and the build and checks pass too.",
     "parse_only": "Every changed file still parses. The sandbox could not be used for this check.",
     "check_fixed": "The pushed commit failed our sandbox check (install, build, type-check, tests or site check). With this fix the same check passes.",
@@ -254,8 +255,30 @@ def _agent_review(original: dict[str, str], changed: dict[str, str]) -> tuple[li
     return problems, warnings
 
 
-def agent_risk_notes(changed: dict[str, str]) -> list[str]:
+SAFE_SCRIPTS = {"test", "lint", "format", "typecheck", "check", "test:watch", "test:unit", "coverage"}
+
+
+def _only_test_scripts(old: str | None, new: str) -> bool:
+    """package.json where the only change is a test / lint script: that runs nothing on the live site."""
+    import json as _json
+    try:
+        before, after = _json.loads(old or "{}"), _json.loads(new)
+    except ValueError:
+        return False
+    if not isinstance(before, dict) or not isinstance(after, dict):
+        return False
+    rest = lambda d: {k: v for k, v in d.items() if k != "scripts"}          # noqa: E731
+    if rest(before) != rest(after):
+        return False
+    sb, sa = before.get("scripts") or {}, after.get("scripts") or {}
+    touched = {k for k in set(sb) | set(sa) if sb.get(k) != sa.get(k)}
+    return bool(touched) and touched <= SAFE_SCRIPTS
+
+
+def agent_risk_notes(changed: dict[str, str], original: dict[str, str] | None = None) -> list[str]:
     """Not forbidden, but a person should look first (the change goes to a pull request, not straight to the live branch)."""
-    notes = [f"{p} changes a dependency or build setting" for p in changed if name_of(p) in BUILD_FILES]
+    original = original or {}
+    notes = [f"{p} changes a dependency or build setting" for p in changed if name_of(p) in BUILD_FILES
+             and not (name_of(p) == "package.json" and _only_test_scripts(original.get(p), changed[p]))]
     notes += [f"{p} changes how your app is hosted" for p in changed if name_of(p) in HOSTING_FILES]
     return notes

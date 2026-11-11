@@ -375,6 +375,18 @@ def _combine(results: list[tuple[Profile, "SandboxResult"]]) -> "SandboxResult":
     return out
 
 
+def refresh_profile(root: Path, fallback):
+    """How to run the project AS IT IS NOW. The profile is first worked out from the code before any change; when the engineer adds
+    a test script or test files, re-reading the working copy is what makes those new tests actually run."""
+    try:
+        fresh = detect_profiles(Path(root))
+    except Exception:
+        return fallback
+    if fresh is None or (not isinstance(fresh, StackSet) and getattr(fresh, "language", "none") == "none"):
+        return fallback
+    return fresh
+
+
 def run_profile(runner, root: Path, profile) -> "SandboxResult":
     """Run one Profile, or every stack of a StackSet, each in its own fresh sandbox, and merge the results."""
     if not isinstance(profile, StackSet):

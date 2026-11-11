@@ -82,7 +82,9 @@ asked to check them before they go live:
 - replacing a real value with a placeholder, or moving a working value into an environment variable (front-end keys such as a
   Supabase anon key, a Firebase web config or a Stripe publishable key are public by design and normally stay in the code);
 - adding fake / stub / mock objects instead of the real service;
-- removing error reporting (console.error, logging, throw/raise);
+- removing error reporting (console.error, logging, throw/raise). When you make something fail gracefully (save the form even if the
+  AI is down, show a friendly message), still log the real reason with console.error / logging so the error monitor and the owner
+  can see it: a wrong key or no credit must never look like "busy" forever;
 - removing an option, menu entry or feature.
 Hard limits (refused): writing secret keys into code, editing existing tests, CI files, lock files, secret files or the Agent
 Daemon monitor files. You may ADD a new test that reproduces the bug.
@@ -622,7 +624,7 @@ class Engineer:
         self.checks_left -= 1
         self._note("run_checks", "running install, build, tests and start-up in the sandbox")
         from . import sandbox
-        res = sandbox.run_profile(self.runner, self.ws.dir, self.profile)
+        res = sandbox.run_profile(self.runner, self.ws.dir, sandbox.refresh_profile(self.ws.dir, self.profile))
         if res.system_fault:
             self.sandbox_broken = True
             return f"The sandbox could not run ({res.error}). Reason from the code; do not keep calling run_checks."

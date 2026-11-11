@@ -185,13 +185,13 @@ def list_attempts(bug_id) -> list[dict]:
 def tier_used(user_id, tier, period=None) -> int:
     """Tries counted against the quota. System faults are restored (plan 18)."""
     row = _one("""SELECT COUNT(*) AS n FROM fx_attempts WHERE user_id=? AND tier=? AND period=?
-                  AND result<>'system_fault'""", (user_id, tier, period or current_period()))
-    return int(row["n"]) if row else 0
+                  AND result NOT IN ('system_fault','review')""", (user_id, tier, period or current_period()))
+    return int(row["n"]) if row else 0          # a review of a fix is our quality check, never one of the customer's tries
 
 
 def pack_tries_used(user_id, tier, period=None) -> int:
     row = _one("""SELECT COUNT(*) AS n FROM fx_attempts WHERE user_id=? AND tier=? AND period=?
-                  AND pack_try=1 AND result<>'system_fault'""", (user_id, tier, period or current_period()))
+                  AND pack_try=1 AND result NOT IN ('system_fault','review')""", (user_id, tier, period or current_period()))
     return int(row["n"]) if row else 0
 
 

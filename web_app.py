@@ -3558,11 +3558,32 @@ def _page_incident(request, project_id, incident_id):
         conn.close()
     if not incident:
         return _response("<h1>Incident not found</h1>", request, "404 Not Found")
-    diff = "".join(f"<article class='card'><div class='row'><strong>{_escape(f['file_path'])}</strong><span class='pill'>{_escape(f['ci_result'])}</span></div><pre style='overflow:auto;white-space:pre-wrap;color:#c7d2e4'>{_escape(f['diff'])}</pre></article>" for f in fixes) or "<div class='empty'>No proposed fix has been saved yet.</div>"
+    diff = "".join(f"<article class='card'><div class='row'><strong>{_escape(f['file_path'])}</strong><span class='pill'>{_escape(f['ci_result'])}</span></div><pre style='overflow:auto;white-space:pre-wrap;color:#c7d2e4'>{_escape(f['diff'])}</pre></article>" for f in fixes)
+    if not diff:
+        diff = _proof_diff_html(incident_id)
+    diff = diff or "<div class='empty'>No proposed fix has been saved yet.</div>"
     pr_link = (f"<p><a class='button primary' href='{_escape(incident['pr_url'])}' target='_blank' rel='noopener'>Open fix pull request</a></p>"
                if incident.get("pr_url") else "")
     body = f"<section class='section'><p><a href='/projects/{_escape(project_id)}'>← {_escape(project['name'])}</a></p><div class='eyebrow'>Incident</div><h1>{_escape(incident['signature'])}</h1><div class='stats'><span class='pill'>{_escape(incident_board.stage_for(incident, project['mode'])['headline'])}</span><span class='pill'>Occurrences · {_escape(incident['occurrences'])}</span><span class='pill'>CI · {_escape(incident['ci_status'])}</span><span class='pill'>Last seen · {_escape(_fmt_time(incident.get('last_seen')))}</span></div>{pr_link}<article class='card'><h2>What happened</h2><p>{_escape(incident['root_cause']) or 'Diagnosis is pending.'}</p><p class='muted' style='white-space:pre-wrap'>{_escape(incident['report'])}</p></article>{_case_panel_html(incident, project_id, request)}{_timeline_html(incident_id)}{_fx_trail_html(incident_id, request.session["user_id"])}<h2>Proposed changes</h2>{diff}</section>"
     return _response(body, request)
+
+
+def _proof_diff_html(incident_id: str) -> str:
+    """The change of a fix on the direct-push route (it is kept with the GitHub proof, not as a pull request)."""
+    try:
+        from fixengine import store as fx_store
+        bug = fx_store.get_bug_by_incident(incident_id)
+        state = fx_store.gh_state(bug["id"]) if bug else {}
+    except Exception:
+        return ""
+    text = str(state.get("diff") or "")
+    if not text:
+        return ""
+    files = ", ".join(state.get("files") or [])
+    merged = state.get("merged_with_owner") or []
+    note = (f"<p class='muted'>Merged with your newer edits in {_escape(', '.join(merged))}: both are kept.</p>" if merged else "")
+    return (f"<article class='card'><div class='row'><strong>{_escape(files)}</strong><span class='pill'>{_escape(state.get('branch', ''))}</span></div>"
+            f"{note}<pre style='overflow:auto;white-space:pre-wrap;color:#c7d2e4'>{_escape(text)}</pre></article>")
 
 
 def _case_panel_html(incident: dict, project_id: str, request) -> str:

@@ -12,7 +12,7 @@ import json
 import shutil
 import tempfile
 import time
-from pathlib import Path
+from pathlib import Path, PurePosixPath
 
 import portal_db
 
@@ -27,6 +27,8 @@ log = logging.getLogger("fixengine")
 PAID = fx_config.PAID_TIERS
 AGENT_MARK = "[agent-daemon]"   # in every fix title, so a later push of the agent's own fix is recognised (no fix loops)
 OUTAGE_MINUTES = 10
+TEST_SETUP_FILES = {"package.json", "requirements.txt", "requirements-dev.txt", "pyproject.toml", "setup.cfg", "pytest.ini", "jest.config.js",
+                    "jest.config.cjs", "jest.config.mjs", "vitest.config.js", "vitest.config.ts", "vitest.config.mjs", "babel.config.js", "tsconfig.json"}
 MAX_GITHUB_ROUNDS = int(os.getenv("FIX_GITHUB_ROUNDS", "3") or 3)        # red GitHub runs before a human is asked
 GITHUB_WAIT_SECONDS = int(os.getenv("FIX_GITHUB_WAIT_SECONDS", "1200") or 1200)
 GITHUB_NO_CHECKS_GRACE = int(os.getenv("FIX_GITHUB_NO_CHECKS_GRACE", "150") or 150)
@@ -541,7 +543,7 @@ class Engine:
                     target.relative_to(patched.resolve())
                     target.parent.mkdir(parents=True, exist_ok=True)
                     target.write_text(text, encoding="utf-8")
-                sres = sandbox.run_profile(self.runner, patched, profile)
+                sres = sandbox.run_profile(self.runner, patched, sandbox.refresh_profile(patched, profile))
             finally:
                 shutil.rmtree(work, ignore_errors=True)
             if not sres.system_fault and not sres.passed:
@@ -563,14 +565,16 @@ class Engine:
                    "attempt_id": attempt_id, "client_message": client.strip(),
                    "verification": investigator.clean_steps(res.data.get("verification") or []),
                    "base_files": {p: files.get(p) for p in res.new_files}}
-            review = validator.agent_risk_notes(res.new_files) + validator.agent_change_warnings(files, res.new_files)
+            review = validator.agent_risk_notes(res.new_files, files) + validator.agent_change_warnings(files, res.new_files)
             tests = [str(p) for p in (res.data.get("tests_written") or []) if str(p) in res.new_files]
             if tests and not sres.system_fault:
-                caught = self._test_catches_bug(root, profile, {p: res.new_files[p] for p in tests})
+                setup = {p: t for p, t in res.new_files.items() if p not in tests and PurePosixPath(p).name in TEST_SETUP_FILES}
+                caught = self._test_catches_bug(root, profile, {**setup, **{p: res.new_files[p] for p in tests}})
                 if caught is False:
                     review.append("the new test also passes WITHOUT the fix, so it may not really test the problem")
-                elif caught is True:
+                elif caught is True and sres.passed and sres.tests_ran:
                     win["test_proof"] = "A new test (" + ", ".join(tests[:3]) + ") fails without the fix and passes with it."
+                    win["level"] = level = "new_test_fixed"
             risk = str(res.data.get("risk", "")).lower() or "unknown"
             if risk != "low":
                 review.append(f"the engineer rated the risk of this change as {risk}")
@@ -625,34 +629,66 @@ class Engine:
             return ""
         return "the fix could not be proven by a test or a browser check, and the reviewer did not approve it: " + str(verdict.get("reason") or "no reason given")[:300]
 
+    REVIEW_ORDER = {"haiku": ("sonnet", "opus"), "sonnet": ("opus", "haiku"), "opus": ("sonnet", "haiku")}
+
     def _independent_review(self, claimed, project, bug, win: dict, ctx: dict) -> dict:
-        """A DIFFERENT model reads the diff against the evidence. Charged like a try (ledger row 'review'), never fixes anything."""
-        user_id = project["user_id"]
-        for tier in ([t for t in ("sonnet", "opus", "haiku") if t != win.get("tier")]):
-            adapter = self.adapters.get(tier)
-            if not adapter or not adapter.configured() or getattr(adapter, "dry_run", False) or not self.guard.check(user_id, tier).ok:
+        """A DIFFERENT model reads the diff against the evidence and never fixes anything.
+
+        It is our quality check, not the customer's try: it never needs or uses their quota (only a mode an admin paused is skipped),
+        and it goes through the same OpenRouter connection as the engineer. Its cost is recorded on the case (ledger row 'review')."""
+        body = ("=== CLIENT REQUEST / PROBLEM ===\n" + (_evidence_of(claimed).get("owner_report") or ctx.get("live_text") or "")[:2500] + "\n\n"
+                + "=== UNTRUSTED: THE LIVE SITE / EVIDENCE ===\n" + prompts.redact((ctx.get("live_text") or "") + "\n"
+                                                                          + prompts.format_evidence(_evidence_of(claimed)))[:3000] + "\n\n"
+                + ("=== UNTRUSTED: OTHER REPORTS IN THIS CASE ===\n" + "\n".join(ctx.get("reports") or [])[:1500] + "\n\n" if ctx.get("reports") else "")
+                + "=== THE FIXER'S DIAGNOSIS ===\n" + str(win.get("diagnosis", ""))[:1500] + "\n\n"
+                + "=== UNTRUSTED: THE DIFF ===\n" + prompts.redact(str(win.get("diff", "")))[:12000])
+        paused = store.paused_tiers()
+        problems = []
+        for tier in self.REVIEW_ORDER.get(win.get("tier"), ("sonnet", "opus", "haiku")):
+            if tier in paused:
+                problems.append(f"{tier} is paused by an admin")
                 continue
-            attempt_id = store.add_attempt(bug=bug, tier=tier, model=adapter.model, used_strong_diag=False,
-                                           info_hash=prompts.info_hash("review", win.get("diff", "")[:200]), pack_try=False)
-            body = ("=== CLIENT REQUEST / PROBLEM ===\n" + (ctx.get("live_text") or "")[:2500] + "\n\n"
-                    + "=== UNTRUSTED: EVIDENCE ===\n" + prompts.redact(prompts.format_evidence(_evidence_of(claimed)))[:2000] + "\n\n"
-                    + ("=== UNTRUSTED: OTHER REPORTS IN THIS CASE ===\n" + "\n".join(ctx.get("reports") or [])[:1500] + "\n\n" if ctx.get("reports") else "")
-                    + "=== THE FIXER'S DIAGNOSIS ===\n" + str(win.get("diagnosis", ""))[:1500] + "\n\n"
-                    + "=== UNTRUSTED: THE DIFF ===\n" + prompts.redact(str(win.get("diff", "")))[:12000])
             try:
-                res = adapter.call(prompts.REVIEW_PROMPT, [fx_adapters.Block(body)], 700)
-            except fx_adapters.AdapterError as exc:
-                store.finish_attempt(attempt_id, result="system_fault", error_summary=exc.summary())
+                text, tokens_in, tokens_out, cached, cost_usd, model = self._review_call(tier, body)
+            except Exception as exc:
+                problems.append(f"{tier}: {str(exc)[:160]}")
+                log.warning("review with %s failed: %s", tier, exc)
                 continue
-            cost = fx_config.estimate_cost_inr(self.cfg, tier, res.tokens_in, res.tokens_out, res.cache_read)
-            verdict = prompts.parse_review(res.text)
-            store.finish_attempt(attempt_id, result="review", tokens_in=res.tokens_in, tokens_out=res.tokens_out, cache_read=res.cache_read,
-                                 cost_inr=cost, model=res.model or adapter.model,
+            usd_inr = float(self.cfg.get("usd_inr", 85.0) or 85.0)
+            cost = cost_usd * usd_inr if cost_usd else fx_config.estimate_cost_inr(self.cfg, tier, tokens_in, tokens_out, cached)
+            verdict = prompts.parse_review(text)
+            attempt_id = store.add_attempt(bug=bug, tier=tier, model=model, used_strong_diag=False,
+                                           info_hash=prompts.info_hash("review", win.get("diff", "")[:200]), pack_try=False)
+            store.finish_attempt(attempt_id, result="review", tokens_in=tokens_in, tokens_out=tokens_out, cache_read=cached,
+                                 cost_inr=cost, model=model,
                                  diagnosis=("approved: " if verdict["approve"] else "rejected: ") + verdict["reason"][:450])
             bug = store.get_bug(bug["id"])
             store.update_bug(bug["id"], spent_inr=float(bug["spent_inr"] or 0) + cost)
             return verdict
-        return {"approve": False, "reason": "no independent reviewer model was available"}
+        reason = "no reviewer model could be reached (" + "; ".join(problems)[:240] + ")" if problems else "no reviewer model is configured"
+        key = f"review_unavailable_mail:{store.now()[:10]}"
+        if not store.get_flag(key):
+            store.set_flag(key, "1")
+            notify._to_admins("Auto-fix: the independent reviewer could not run (fixes wait for a person)",
+                              reason + "\n\nEvery fix that cannot be proven by a test now goes to human review. Check the OpenRouter key, credit "
+                              "and model settings.", "fix_pause")
+        return {"approve": False, "reason": reason}
+
+    def _review_call(self, tier: str, body: str):
+        """(text, tokens_in, tokens_out, cached, cost_usd, model). The engineer's OpenRouter connection, no reasoning, short answer."""
+        if self.agent_transport is not None or isinstance(self.adapters.get(tier), fx_adapters.OpenRouterAdapter):
+            transport = self._transport(tier)
+            if hasattr(transport, "effort"):
+                transport.effort = ""
+            reply = transport.complete([{"role": "system", "content": prompts.REVIEW_PROMPT}, {"role": "user", "content": body}],
+                                       None, max_tokens=1200)
+            tin, tout, cached, cost = fx_agent.usage_numbers(reply.get("usage") or {})
+            return (str((reply.get("message") or {}).get("content") or ""), tin, tout, cached, cost, getattr(transport, "model", tier))
+        adapter = self.adapters.get(tier)
+        if not adapter or not adapter.configured() or getattr(adapter, "dry_run", False):
+            raise RuntimeError("not configured")
+        res = adapter.call(prompts.REVIEW_PROMPT, [fx_adapters.Block(body)], 1200)
+        return res.text, res.tokens_in, res.tokens_out, res.cache_read, 0.0, res.model or adapter.model
 
     def _router_input(self, user_id, bug, attempts, blocked, repo_tok, kind: str = "") -> router.RouterInput:
         counted = [a for a in attempts if a["result"] != "system_fault"]
@@ -986,7 +1022,7 @@ class Engine:
 
     def _test_catches_bug(self, root: Path, profile, tests: dict) -> bool | None:
         """Run the ORIGINAL code plus only the new test files. A real regression test fails there. None when it cannot be told."""
-        if self.runner is None or profile is None or not (getattr(profile, "test", None) or getattr(profile, "has_tests", False)):
+        if self.runner is None or profile is None:
             return None
         work = Path(tempfile.mkdtemp(prefix="fx-testproof-"))
         try:
@@ -997,7 +1033,7 @@ class Engine:
                 target.relative_to(probe.resolve())
                 target.parent.mkdir(parents=True, exist_ok=True)
                 target.write_text(text, encoding="utf-8")
-            res = sandbox.run_profile(self.runner, probe, profile)
+            res = sandbox.run_profile(self.runner, probe, sandbox.refresh_profile(probe, profile))
         except Exception:
             return None
         finally:
