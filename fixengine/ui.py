@@ -192,20 +192,25 @@ def usage_page(view: dict, csrf: str, msg: str = "") -> str:
 
 
 ADMIN_CSS = """<style>
-.fx-admin .money{display:grid;grid-template-columns:repeat(auto-fit,minmax(min(230px,100%),1fr));gap:14px;margin:14px 0}
-.fx-admin .money article{background:linear-gradient(145deg,#170d22,#0f0817);border:1px solid var(--line);border-radius:14px;padding:16px}
-.fx-admin .money .big{font-size:28px;font-weight:700;margin:4px 0}.fx-admin .money p{margin:4px 0;font-size:13.5px}
-.fx-admin .meter{position:relative;height:14px;border-radius:8px;background:#ffffff12;overflow:visible;margin:22px 0 30px}
-.fx-admin .meter>i{display:block;height:100%;border-radius:8px;background:linear-gradient(90deg,#1f8a63,#e3bd74,#d1121f)}
+.fx-admin .money{display:grid;grid-template-columns:repeat(auto-fit,minmax(min(250px,100%),1fr));gap:18px;margin:18px 0}
+.fx-admin .money article{background:linear-gradient(165deg,#150c1fd9,#0d0814e6) padding-box,linear-gradient(140deg,#e11d2a66,#372440 34%,#372440 66%,#9a4dff66) border-box;
+  border:1px solid transparent;border-radius:18px;padding:22px}
+.fx-admin .money .eyebrow{font-size:11.5px;letter-spacing:.14em;line-height:1.4}
+.fx-admin .money .big{font-family:var(--serif);font-size:32px;font-weight:700;margin:8px 0 10px;line-height:1.1}.fx-admin .money p{margin:6px 0;font-size:14px;line-height:1.55}
+.fx-admin .meter{position:relative;height:14px;border-radius:999px;background:#ffffff12;overflow:visible;margin:30px 0 44px;padding:0;border:0;box-shadow:none;-webkit-backdrop-filter:none;backdrop-filter:none}
+.fx-admin .meter>i{display:block;height:100%;border-radius:999px;background:linear-gradient(90deg,#1f8a63,#e3bd74,#d1121f)}
 .fx-admin .meter .tick{position:absolute;top:-6px;height:26px;border-left:2px dashed #ffffff55}
-.fx-admin .meter .tick span{position:absolute;top:28px;left:-14px;font-size:11px;color:var(--muted);white-space:nowrap}
-.fx-admin tr.now td{background:#2a1645}.fx-admin .why{font-size:13px;color:#cfc5dc}
-.fx-admin .hold{background:linear-gradient(145deg,#170d22,#0f0817);border:1px solid var(--line);border-radius:14px;padding:16px;margin:12px 0}
-.fx-admin .hold dl{display:grid;grid-template-columns:minmax(150px,max-content) 1fr;gap:6px 14px;margin:10px 0}.fx-admin .hold dt{color:var(--muted)}
-.fx-admin .hold dd{margin:0}.fx-admin details.tech{margin-top:10px}.fx-admin details.tech pre{white-space:pre-wrap;font-size:12px;background:#0a0610;border:1px solid var(--line);border-radius:8px;padding:10px;overflow:auto}
-.fx-admin .explain{background:#120a1bcc;border:1px solid var(--line);border-radius:12px;padding:12px 14px;margin:10px 0;font-size:14px;color:#d8cde6}
+.fx-admin .meter .tick span{position:absolute;top:30px;left:-14px;font-size:12px;color:var(--muted);white-space:nowrap}
+.fx-admin tr.now td{background:#2a1645}.fx-admin .why{font-size:14px;color:#cfc5dc}
+.fx-admin .hold{background:linear-gradient(165deg,#150c1fd9,#0d0814e6);border:1px solid var(--line);border-radius:18px;padding:22px;margin:16px 0}
+.fx-admin .hold dl{display:grid;grid-template-columns:minmax(170px,max-content) 1fr;gap:8px 18px;margin:14px 0}.fx-admin .hold dt{color:var(--muted)}
+.fx-admin .hold dd{margin:0}.fx-admin details.tech{margin-top:12px}.fx-admin details.tech pre{white-space:pre-wrap;font-size:12.5px;background:#0a0610;border:1px solid var(--line);border-radius:10px;padding:12px;overflow:auto}
+.fx-admin .explain{background:#ffffff07;border:1px solid #ffffff12;border-radius:14px;padding:16px 18px;margin:14px 0;font-size:14.5px;line-height:1.6;color:#d8cde6}
 .fx-admin .explain b{color:#fff}.fx-admin code{overflow-wrap:anywhere}
-@media(max-width:640px){.fx-admin .hold dl{grid-template-columns:1fr}.fx-admin .money .big{font-size:24px}}
+.fx-admin .grid{grid-template-columns:repeat(auto-fit,minmax(min(230px,100%),1fr))}
+.fx-admin .card form{margin-top:14px}
+.fx-admin .table td{font-size:14.5px}
+@media(max-width:640px){.fx-admin .hold dl{grid-template-columns:1fr}.fx-admin .money .big{font-size:26px}}
 </style>"""
 
 ADMIN_KIND_TEXT = {

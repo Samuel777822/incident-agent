@@ -189,6 +189,16 @@ def _render_steps(steps) -> str:
     return f"<ol class='steps'>{items}</ol>"
 
 
+def _case_title(inc: dict) -> str:
+    """A name a person recognises: the error itself, or 'Your report' for something the owner typed."""
+    signature = " ".join(str(inc.get("signature") or "").split())
+    if not signature or signature == "unknown":
+        return "Incident"
+    if signature.startswith("user_report:"):
+        return "Your report"
+    return signature if len(signature) <= 90 else signature[:88] + "…"
+
+
 def render_board(project_id: str, incidents: list, mode: str, csrf: str = "") -> str:
     """The HTML that sits inside #incident-board. This exact string is also what the live endpoint returns."""
     if not incidents:
@@ -228,7 +238,7 @@ def render_board(project_id: str, incidents: list, mode: str, csrf: str = "") ->
         cards.append(
             f"<article class='inc' id='case-{_e(iid)}' data-active='{1 if stage['active'] else 0}'>"
             f"<details data-id='{_e(iid)}'><summary>"
-            f"<div class='inc-top'><strong>Incident {_e(iid[:8])}</strong>"
+            f"<div class='inc-top'><strong>{_e(_case_title(inc))}<span class='inc-id'>#{_e(iid[:8])}</span></strong>"
             f"<span class='pill tone-{_e(stage['tone'])}'>{_e(stage['headline'])}</span></div>"
             f"<div class='inc-sub muted'>{_e(cause) + '<br>' if cause else ''}{' · '.join(meta)}</div>"
             f"{_render_steps(stage['steps'])}"
@@ -241,29 +251,34 @@ def render_board(project_id: str, incidents: list, mode: str, csrf: str = "") ->
 
 
 _STYLE = """<style>
-.board-head{display:flex;justify-content:flex-end;margin:-6px 0 10px}
-.live{font-size:12px;color:#8ce4c0}.live[data-state='off']{color:#ffdc91}
-.inc{background:linear-gradient(145deg,#171027,#0e0a18);border:1px solid var(--line);border-radius:20px;margin:0 0 16px;overflow:hidden;box-shadow:0 12px 40px #0004}
-.inc[data-active='1']{border-color:#3b5a99;box-shadow:0 12px 40px #1b3a7a40}
-.inc>details>summary{list-style:none;cursor:pointer;padding:18px 20px;display:block}
+.board-head{display:flex;justify-content:flex-end;margin:0 0 12px}
+.live{font-size:13px;color:#8ce4c0;font-weight:600}.live[data-state='off']{color:#ffdc91}
+.inc{border-radius:20px;margin:0 0 20px;overflow:hidden}
+.inc[data-active='1']{box-shadow:0 18px 50px #0008,0 0 0 1px #9a4dff66,0 0 36px #9a4dff26}
+.inc>details>summary{list-style:none;cursor:pointer;padding:24px 26px;display:block}
 .inc>details>summary::-webkit-details-marker{display:none}
-.inc-top{display:flex;justify-content:space-between;align-items:center;gap:12px;flex-wrap:wrap}
-.inc-sub{margin:6px 0 12px;font-size:13px}
-.pill.tone-green{color:#8ce4c0;background:#14392f}.pill.tone-amber{color:#ffdc91;background:#3a301b}
-.pill.tone-red{color:#ffb3b3;background:#3d1c24}.pill.tone-blue{color:#d6c8ff;background:#2a1d4a}.pill.tone-muted{color:#b8c9df;background:#1b2d43}
+.inc-top{display:flex;justify-content:space-between;align-items:flex-start;gap:14px;flex-wrap:wrap}
+.inc-top strong{font-size:17px;line-height:1.4;min-width:0;overflow-wrap:anywhere;color:#fff}
+.inc-top .inc-id{font-size:12.5px;font-weight:500;color:#8f84a3;margin-left:8px;font-family:Consolas,Menlo,monospace}
+.inc-sub{margin:10px 0 4px;font-size:14px;line-height:1.6}
+.inc-sub b{color:#efe7fa;font-weight:600}
 @keyframes pulse{50%{opacity:.35}}
-.hint{display:inline-block;margin-top:12px;font-size:12px;color:var(--blue)}
+.hint{display:inline-flex;align-items:center;gap:6px;margin-top:18px;font-size:13.5px;font-weight:600;color:#ff7d6e}
+.hint::after{content:"▾"}
 .inc>details[open] .hint{display:none}
-.inc-body{border-top:1px solid var(--line);padding:6px 20px 18px}
-.rp-sec h4{margin:16px 0 4px;font-size:11px;letter-spacing:.12em;text-transform:uppercase;color:var(--green)}
-.rp-sec p,.rp-sub p{margin:0;white-space:pre-wrap;color:#d7e2f5}
-.rp-sub{margin-top:14px}.rp-sub summary{cursor:pointer;color:var(--muted);font-size:13px}
-.inc-actions{display:flex;gap:10px;flex-wrap:wrap;margin-top:18px}
-.inc-decide{margin:12px 0 0;display:flex;flex-wrap:wrap;gap:8px;align-items:center}
-.inc-guide{margin:12px 0 0}
-.inc-guide .guide{margin:10px 0 0;padding:12px 14px;border-radius:12px;border:1px solid #a47e2e;background:#f0c36b10;color:#f3e6c4;font-size:14px;line-height:1.55}
-.inc-guide .guide ol{margin:8px 0 10px 20px;padding:0}.inc-guide .guide li{margin:4px 0}
-.inc-guide .guide-text{margin:8px 0 10px;white-space:normal}.inc-guide .guide-line{margin:4px 0 8px;color:#b8c9df;font-size:13px}
+.inc-body{border-top:1px solid #ffffff12;padding:8px 26px 26px;background:#00000026}
+.rp-sec h4{margin:22px 0 6px;font-size:12px;letter-spacing:.14em;text-transform:uppercase;color:#c9a15a}
+.rp-sec p,.rp-sub p{margin:0;white-space:pre-wrap;color:#ded3ec;line-height:1.65;font-size:15px}
+.rp-sub{margin-top:18px}.rp-sub summary{cursor:pointer;color:var(--muted);font-size:14px}
+.inc-actions{display:flex;gap:12px;flex-wrap:wrap;margin-top:24px}
+.inc-decide{margin:18px 0 0;padding:16px 18px;border-radius:14px;background:#33270f66;border:1px solid #6b5320;display:flex;flex-wrap:wrap;gap:10px;align-items:center}
+.inc-decide b{margin-right:6px;color:#f4dfae}
+.inc-decide form,.inc-guide form{display:inline-flex;margin:0}
+.inc-guide{margin:18px 0 0;display:flex;flex-wrap:wrap;gap:10px 12px;align-items:center}
+.inc-guide .guide{flex:1 1 100%;margin:0;padding:18px 20px;border-radius:14px;border:1px solid #6b5320;background:#33270f66;color:#f6e9c8;font-size:15px;line-height:1.65}
+.inc-guide .guide ol{margin:10px 0 14px 22px;padding:0}.inc-guide .guide li{margin:8px 0;padding-left:4px}
+.inc-guide .guide-text{margin:8px 0 14px;white-space:normal}.inc-guide .guide-line{flex:1 1 280px;margin:0;color:var(--muted);font-size:14px;line-height:1.5}
+@media(max-width:640px){.inc>details>summary{padding:18px}.inc-body{padding:6px 18px 20px}}
 @media(prefers-reduced-motion:reduce){.steps .active .dot{animation:none}}
 </style>"""
 

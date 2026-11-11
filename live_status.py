@@ -182,7 +182,7 @@ def stack_chips(stacks_json: str | list) -> str:
     except ValueError:
         stacks = []
     chips = []
-    for s in stacks[:6]:
+    for s in [x for x in stacks if isinstance(x, dict)][:6]:
         ok = s.get("ok")
         cls = "ok" if ok else ("bad" if ok is False else "")
         mark = "✓" if ok else ("✗" if ok is False else "…")

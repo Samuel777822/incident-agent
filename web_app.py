@@ -31,6 +31,7 @@ import httpx
 
 import incident_board
 import ui_flow
+import theme
 import notifications
 import plans
 import chatbot
@@ -516,6 +517,7 @@ main.wrap{overflow-x:clip}
   .actions form,.actions .button{max-width:100%}}
 """
 CSS += ui_flow.FLOW_CSS
+CSS += theme.THEME_CSS
 
 
 
@@ -1058,7 +1060,7 @@ def _github_setup_guide() -> str:
         "<section class='card guide'><h2>Before you connect a repository</h2>"
         "<p class='muted'>Agent Daemon talks to GitHub with a <b>classic</b> personal access token. "
         "Fine-grained tokens are not supported. Two things to do first:</p>"
-        "<h3>1. Make your repository private</h3>"
+        "<details class='fold' open><summary>1. Make your repository private</summary><div class='fold-body'>"
         "<p class='muted'>We read your source files and error logs to diagnose problems, and Auto mode only pushes fixes to private repositories. "
         "A private repository keeps your code and logs away from the public.</p>"
         "<ol class='steps muted'>"
@@ -1066,19 +1068,19 @@ def _github_setup_guide() -> str:
         "<li>Tap or click the <b>Settings</b> tab of the repository (not your profile settings).</li>"
         "<li>Stay on <b>General</b> and scroll to the very bottom, to the <b>Danger Zone</b>.</li>"
         "<li>Press <b>Change visibility</b>, then <b>Change to private</b>.</li>"
-        "<li>Read the warnings, type the repository name when GitHub asks, and confirm.</li></ol>"
-        "<h3>2. Create a classic token</h3>"
+        "<li>Read the warnings, type the repository name when GitHub asks, and confirm.</li></ol></div></details>"
+        "<details class='fold' open><summary>2. Create a classic token</summary><div class='fold-body'>"
         "<ol class='steps muted'>"
         "<li>On GitHub press your profile picture, then <b>Settings</b>.</li>"
         "<li>At the bottom of the left menu open <b>Developer settings</b>, then <b>Personal access tokens</b>, then <b>Tokens (classic)</b>.</li>"
         "<li>Press <b>Generate new token</b>, then <b>Generate new token (classic)</b>.</li>"
         "<li>Name it <b>Agent Daemon</b> and pick how long it should last. When it expires, use <b>Update GitHub token</b> on your project page.</li>"
         "<li>Tick exactly two boxes: <code>repo</code> and <code>workflow</code>. Leave everything else unticked.</li>"
-        "<li>Press <b>Generate token</b> and copy it right away. GitHub shows it only once. Paste it into the connect form.</li></ol>"
-        "<h3>What the agent uses each permission for</h3>"
+        "<li>Press <b>Generate token</b> and copy it right away. GitHub shows it only once. Paste it into the connect form.</li></ol></div></details>"
+        "<details class='fold'><summary>What the agent uses each permission for</summary><div class='fold-body'>"
         "<ul class='muted'>"
         "<li><code>repo</code>: read your code, create a test branch for each fix and read your GitHub test results. In Pull request mode it opens a pull request for you. In Auto mode it pushes a fix to your branch, only after our sandbox and your GitHub tests pass.</li>"
-        "<li><code>workflow</code>: add a small test workflow file, so Auto mode has a GitHub check that must pass before a fix is pushed.</li></ul>"
+        "<li><code>workflow</code>: add a small test workflow file, so Auto mode has a GitHub check that must pass before a fix is pushed.</li></ul></div></details>"
         "<p class='muted'>Classic tokens are not limited to one repository, so keep yours secret. "
         "You can delete the token on GitHub at any time to cut our access immediately.</p></section>")
 
@@ -2217,15 +2219,15 @@ def _admin_view(request):
     for item in portal_db.recent_notifications(10):
         result = _pill("accepted", "green") if item["ok"] else _pill("failed", "red")
         fix = "" if item["ok"] else notifications.explain(item["detail"] or "")
-        fix_html = (f"<div style='margin-top:6px;padding:8px 10px;border-radius:10px;background:#2a210c;border:1px solid #7a5a20;color:#f3e2b8'>"
+        fix_html = (f"<div class='fix-note'>"
                     f"<b>How to fix:</b> {_escape(fix)}</div>") if fix else ""
         notif_rows.append(f"<tr><td><span title='{_escape(_fmt_time(item['created_at']))}'>{_escape(_ago(item['created_at']))}</span><br><small class='muted'>{_escape(_fmt_time(item['created_at']))}</small></td><td>{_escape(item['recipient'])}</td><td>{_escape(item['kind'])}</td>"
                           f"<td>{result}<br><small class='muted'>{_escape(item['detail'])}</small>{fix_html}</td></tr>")
-    system = (f"<h2>System</h2><div class='stats'>{worker}{email_state}{payments_state}{_pill('Database: ' + portal_db.database_kind())}</div>"
-              f"<form method='post' action='/admin' style='margin-top:12px'><input type='hidden' name='csrf' value='{csrf}'>"
-              "<button class='button' name='action' value='send_test_email' type='submit'>Send test email to both admins</button></form>"
-              "<p class='actions'><a class='button' href='/admin/fix'>Auto-fix budget and controls</a>"
-              "<a class='button' href='/admin/architecture'>Architecture, adapters &amp; cost function</a></p>"
+    system = (f"<h2 id='system'>System</h2><div class='stats'>{worker}{email_state}{payments_state}{_pill('Database: ' + portal_db.database_kind())}</div>"
+              f"<div class='actions'><form method='post' action='/admin'><input type='hidden' name='csrf' value='{csrf}'>"
+              "<button class='button primary' name='action' value='send_test_email' type='submit'>Send test email to both admins</button></form>"
+              "<a class='button' href='/admin/fix'>Auto-fix budget and controls</a>"
+              "<a class='button' href='/admin/architecture'>Architecture, adapters &amp; cost function</a></div>"
               "<h3>Email status</h3><p class='muted'>Accepted means the email provider took the message. It does not guarantee inbox delivery.</p>"
               + _table(["When", "To", "Kind", "Result"], notif_rows, "No emails sent yet."))
 
@@ -2254,7 +2256,7 @@ def _admin_view(request):
             pill_color = "green"
             st_label = "Closed"
         elif st == "for_review":
-            pill_color = "violet"
+            pill_color = "tone-blue"
             st_label = "For Review"
         else:
             pill_color = "amber"
@@ -2270,11 +2272,11 @@ def _admin_view(request):
         msg_body = _escape(s['message']).replace("\n", "<br>")
         res_display = ""
         if s.get("resolution_note"):
-            res_display = f"<div style='margin-top:6px;padding:6px 10px;background:rgba(111,224,176,0.1);border-left:3px solid #6fe0b0;border-radius:4px;font-size:12px;color:#a9f0d1'><b>Resolution:</b> {_escape(s['resolution_note'])}</div>"
+            res_display = f"<div class='ticket-resolution'><b>Resolution:</b> {_escape(s['resolution_note'])}</div>"
 
         inquiry_cell = (
             f"<b>{_escape(s['subject'])}</b><br>"
-            f"<div style='max-width:320px;font-size:12.5px;color:#cfc5dc;margin-top:4px;word-break:break-word'>{msg_body}</div>"
+            f"<div class='ticket-msg'>{msg_body}</div>"
             f"{res_display}"
         )
 
@@ -2291,24 +2293,24 @@ def _admin_view(request):
         admin_select_html = "".join(admin_options)
 
         action_form = (
-            f"<form method='post' action='/admin' style='display:flex;flex-direction:column;gap:6px;min-width:180px'>"
+            f"<form method='post' action='/admin' class='ticket-form'>"
             f"<input type='hidden' name='csrf' value='{csrf}'>"
             f"<input type='hidden' name='action' value='update_support_ticket'>"
             f"<input type='hidden' name='ticket_id' value='{_escape(s['id'])}'>"
-            f"<div style='display:flex;gap:6px'>"
-            f"<select name='status' style='background:#0a0610;color:#fff;border:1px solid #3a2338;border-radius:6px;padding:4px 6px;font-size:12px;flex:1'>"
+            f"<div class='ticket-row'>"
+            f"<select name='status' aria-label='Status'>"
             f"<option value='open' {'selected' if st == 'open' else ''}>Open</option>"
             f"<option value='for_review' {'selected' if st == 'for_review' else ''}>For Review</option>"
             f"<option value='closed' {'selected' if st == 'closed' else ''}>Closed</option>"
             f"</select>"
-            f"<select name='assigned_to' style='background:#0a0610;color:#fff;border:1px solid #3a2338;border-radius:6px;padding:4px 6px;font-size:12px;flex:1'>"
+            f"<select name='assigned_to' aria-label='Assigned to'>"
             f"{admin_select_html}"
             f"</select>"
             f"</div>"
-            f"<input name='resolution_note' type='text' placeholder='Resolution note (sent on close)...' value='{_escape(s.get('resolution_note', ''))}' style='background:#0a0610;color:#fff;border:1px solid #3a2338;border-radius:6px;padding:4px 8px;font-size:11.5px'>"
-            f"<div style='display:flex;gap:6px;align-items:center'>"
-            f"<button class='button primary' type='submit' style='padding:4px 10px;font-size:11.5px;flex:1'>Update</button>"
-            f"<a class='button' href='mailto:{_escape(s['email'])}?subject={quote("[Ticket #" + t_ref + "] Re: " + s['subject'])}' style='padding:4px 8px;font-size:11.5px' title='Reply via Email'>Email</a>"
+            f"<input name='resolution_note' type='text' placeholder='Resolution note (sent on close)...' value='{_escape(s.get('resolution_note', ''))}'>"
+            f"<div class='ticket-row'>"
+            f"<button class='button primary' type='submit'>Update</button>"
+            f"<a class='button' href='mailto:{_escape(s['email'])}?subject={quote("[Ticket #" + t_ref + "] Re: " + s['subject'])}' title='Reply via Email'>Email</a>"
             f"</div>"
             f"</form>"
         )
@@ -2318,9 +2320,9 @@ def _admin_view(request):
     support_table = _table(["Ticket", "Requester", "Inquiry & Resolution", "Timeline & Assigned", "Manage Ticket"], support_rows, "No support tickets submitted yet.")
     support_section = (
         f"<h2 id='support-tickets'>Support Tickets &amp; Inquiries</h2>"
-        f"<div class='stats' style='margin-bottom:14px'>"
+        f"<div class='stats'>"
         f"<span class='pill amber'>{ticket_stats['open']} Open</span>"
-        f"<span class='pill' style='color:#b98aff;border-color:#5b1fa8'>{ticket_stats['for_review']} For Review</span>"
+        f"<span class='pill tone-blue'>{ticket_stats['for_review']} For Review</span>"
         f"<span class='pill green'>{ticket_stats['closed']} Closed</span>"
         f"<span class='pill'>{ticket_stats['total']} Total Tickets</span>"
         f"</div>"
@@ -2395,10 +2397,13 @@ setInterval(() => {
 """
 
     body = (f"<section class='section'><div class='eyebrow'>Administrator</div><h1>Operations</h1>"
-            f"<p class='muted'>Signed in as {_escape(request.session['email'])}</p>{flash}{_email_health_card()}<div class='statgrid'>{cards}</div>{attention}"
-            f"<h2>Customers</h2>{_table(['Customer', 'Contact & Referral', 'Access', 'Action'], customer_rows, 'No customer accounts yet.')}"
-            f"<h2>Applications</h2>{_table(['App', 'Owner', 'State', 'Last check-in', 'Open incidents'], project_rows, 'No applications connected yet.')}"
-            f"<h2>Recent incidents and fixes</h2>{_table(['When', 'App', 'Error', 'Agent status', 'Fix'], incident_rows, 'No incidents yet.')}"
+            f"<p class='muted'>Signed in as {_escape(request.session['email'])}</p>"
+            f"<nav class='subnav' aria-label='On this page'><a href='#customers'>Customers</a><a href='#applications'>Applications</a><a href='#incidents'>Incidents</a>"
+            f"<a href='#live-chats'>Chats</a><a href='#support-tickets'>Support</a><a href='#system'>System &amp; email</a><a href='/admin/fix'>AI spending →</a></nav>"
+            f"{flash}{_email_health_card()}<div class='statgrid'>{cards}</div>{attention}"
+            f"<h2 id='customers'>Customers</h2>{_table(['Customer', 'Contact & Referral', 'Access', 'Action'], customer_rows, 'No customer accounts yet.')}"
+            f"<h2 id='applications'>Applications</h2>{_table(['App', 'Owner', 'State', 'Last check-in', 'Open incidents'], project_rows, 'No applications connected yet.')}"
+            f"<h2 id='incidents'>Recent incidents and fixes</h2>{_table(['When', 'App', 'Error', 'Agent status', 'Fix'], incident_rows, 'No incidents yet.')}"
             f"{chat_section}"
             f"{support_section}"
             f"{system}</section>" + admin_chat_modal)
@@ -2792,8 +2797,9 @@ You do not need to install anything yourself.</p></div>
 <div class='field'><label class='checkbox'><input name='allow_remediation' type='checkbox' value='yes'><span>For Pull request or Auto mode, I authorize small code fixes. Pull request mode opens pull requests. Auto mode pushes a fix to my branch only after the sandbox proves it and all GitHub checks pass; if that fails 3 times it opens a pull request for me to review.</span></label></div>"""
         note = (f"<p class='muted'>Project {slots['used'] + 1} of {slots['limit']}. Extra projects are ₹{plans.PROJECT_SLOT_PRICE} each.</p>"
                 if not _is_admin(request) else "")
-        body = _github_setup_guide() + _form("Connect a project", "Connect a GitHub repository. The first check starts right away." + note, fields,
+        body = "<div class='connect-layout'>" + _form("Connect a project", "Connect a GitHub repository. The first check starts right away." + note, fields,
                      "/projects/new", "<button class='button primary' type='submit'>Save project</button>", _csrf(request))
+        body += _github_setup_guide() + "</div>"
         return _response(body, request)
     if not _csrf_valid(request):
         return _response("<div class='alert'>This form expired. Refresh and try again.</div>", request, "403 Forbidden")
@@ -3117,19 +3123,25 @@ def _page_project(request, project_id):
     cards.append(f"<article class='card'><h3>Update GitHub token</h3><p class='muted'>Use a classic token with the repo and workflow scopes ticked. The new token replaces the saved one and is never shown again.</p><form method='post' action='/projects/{_escape(project_id)}/github-token'><input type='hidden' name='csrf' value='{csrf}'><div class='field'><label>New GitHub token</label><input name='github_token' type='password' autocomplete='new-password' required minlength='20' maxlength='500'></div><button class='button primary' type='submit'>Validate and save token</button></form></article>")
     if watch in ("runtime", "both"):
         cards.append(f"<article class='card'><h3>Monitor key</h3><p class='muted'>The monitor uses a key that can only <b>send</b> check-ins and error reports for this project. If you think it leaked, replace it: the old key stops working and we put the new one into your code for you.</p><form method='post' action='/projects/{_escape(project_id)}/rotate-key'><input type='hidden' name='csrf' value='{csrf}'><button class='button' type='submit'>Replace key</button></form></article>")
-    cards.append(f"<article class='card'><h3>Delete project data</h3><p class='muted'>Remove this project, its incidents, checks, fixes, and stored GitHub token. The project slot stays on your account.</p><form method='post' action='/projects/{_escape(project_id)}/delete'><input type='hidden' name='csrf' value='{csrf}'><label class='check'><input type='checkbox' name='clean_repo' value='yes'> Also clean my repository: remove the Agent Daemon webhook and the <code>agent-daemon/fix-…</code> branches (your code and the monitor files stay)</label><div class='field'><label>Type DELETE to confirm</label><input name='confirm' required autocomplete='off'></div><button class='button danger' type='submit'>Delete project</button></form></article>")
+    danger = (f"<article class='card danger-zone'><div class='eyebrow'>Danger zone</div><h3>Delete project data</h3><p class='muted'>Remove this project, its incidents, checks, fixes, and stored GitHub token. The project slot stays on your account.</p><form method='post' action='/projects/{_escape(project_id)}/delete'><input type='hidden' name='csrf' value='{csrf}'><label class='checkbox'><input type='checkbox' name='clean_repo' value='yes'> <span>Also clean my repository: remove the Agent Daemon webhook and the <code>agent-daemon/fix-…</code> branches (your code and the monitor files stay)</span></label><div class='field'><label>Type DELETE to confirm</label><input name='confirm' required autocomplete='off'></div><button class='button danger' type='submit'>Delete project</button></form></article>")
     state, css = _project_state(project)
     checkin = ""
     monitor_panel = _monitor_status_html(project) if watch != "push" else ""
+    monitor_link = "<a href='#monitor'>Live monitor</a>" if monitor_panel else ""
     body = (f"<section class='section'><p><a href='/dashboard'>← Projects</a></p><div class='row page-head'><div><div class='eyebrow'>Project</div><h1>{_escape(project['name'])}</h1>"
             f"<p class='muted'><a href='https://github.com/{_escape(project['repo_owner'])}/{_escape(project['repo_name'])}' target='_blank' rel='noopener'>{_escape(project['repo_owner'])}/{_escape(project['repo_name'])}</a> · {_escape(project['branch'])} · {_escape(MODE_LABELS.get(project['mode'], project['mode']))}</p></div>"
             f"<form method='post'><input type='hidden' name='csrf' value='{csrf}'><input type='hidden' name='paused' value='{'no' if paused else 'yes'}'><button class='button {'primary' if paused else 'danger'}' type='submit'>{button}</button></form></div>"
             f"<div class='stats'><span class='pill {'amber' if paused else css}'>{'Paused' if paused else _escape(state)}</span>"
             f"<span class='pill'>{_escape(WATCH_LABELS.get(watch, watch))}</span><span class='pill'>{_escape(MODE_LABELS.get(project['mode'], project['mode']))}</span>"
-            f"{checkin}</div>{flash}{_hosting_card(project, request)}{ui_flow.flow_diagram_html()}{monitor_panel}"
-            f"{ui_flow.report_card_html(project_id, _csrf(request))}"
-            f"{_push_checks_html(project, request)}"
-            f"<h2>Bugs and fixes</h2>{_cases_toolbar(project, request)}{table}<h2>Settings</h2><section class='grid'>{''.join(cards)}</section></section>")
+            f"{checkin}</div>"
+            f"<nav class='subnav' aria-label='On this page'><a href='#tell'>Tell the agent</a><a href='#cases'>Bugs and fixes</a>"
+            f"<a href='#push-guard'>Push guard</a>{monitor_link}<a href='#settings'>Settings</a></nav>"
+            f"{flash}{_hosting_card(project, request)}"
+            f"<div id='tell' class='anchor'></div>{ui_flow.report_card_html(project_id, _csrf(request))}"
+            f"<h2 id='cases'>Bugs and fixes</h2>{_cases_toolbar(project, request)}{table}"
+            f"<div id='push-guard' class='anchor'></div>{_push_checks_html(project, request)}{monitor_panel}"
+            f"<details class='fold'><summary>How Agent Daemon looks after your site</summary>{ui_flow.flow_diagram_html()}</details>"
+            f"<h2 id='settings'>Settings</h2><section class='settings-grid'>{''.join(cards)}</section>{danger}</section>")
     return _response(body, request)
 
 
@@ -3885,17 +3897,17 @@ def _page_billing(request):
             opts_html = "".join(f"<option value='{_escape(val)}'{' selected' if prefill_ref == val else ''}>{_escape(lbl)}</option>" for val, lbl in ref_opts)
             trial_card = (
                 f"<article class='card'><div class='eyebrow'>Free trial</div><h3>1 day, free</h3>{note}"
-                f"<form method='post' action='/billing/trial-request' style='display:flex;flex-direction:column;gap:10px;margin-top:12px'>"
+                f"<form method='post' action='/billing/trial-request' class='stack-form'>"
                 f"<input type='hidden' name='csrf' value='{csrf}'>"
-                f"<div class='field' style='margin-bottom:0'><label style='font-size:12px'>Your Name</label>"
+                f"<div class='field'><label>Your Name</label>"
                 f"<input name='name' value='{_escape(prefill_name)}' placeholder='Full name' maxlength='100'></div>"
-                f"<div class='field' style='margin-bottom:0'><label style='font-size:12px'>Mobile / WhatsApp Number</label>"
+                f"<div class='field'><label>Mobile / WhatsApp Number</label>"
                 f"<input name='phone' type='tel' value='{_escape(prefill_phone)}' placeholder='+91 98765 43210' maxlength='30'></div>"
-                f"<div class='field' style='margin-bottom:0'><label style='font-size:12px'>How did you find out about us?</label>"
+                f"<div class='field'><label>How did you find out about us?</label>"
                 f"<select name='referral_source'><option value=''>Select an option...</option>{opts_html}</select></div>"
-                f"<div class='field' style='margin-bottom:0'><label style='font-size:12px'>Company / Project Name <small class='muted'>(optional)</small></label>"
+                f"<div class='field'><label>Company / Project Name <small class='muted'>(optional)</small></label>"
                 f"<input name='organization' value='{_escape(prefill_org)}' placeholder='e.g. Acme Inc' maxlength='100'></div>"
-                "<button class='button primary' type='submit' style='margin-top:4px'>Request free trial</button></form></article>"
+                "<button class='button primary' type='submit'>Request free trial</button></form></article>"
             )
     plan_cards = []
     for key, plan in PLANS.items():
@@ -3910,7 +3922,7 @@ def _page_billing(request):
         per_month = (f" (about ₹{plans.YEARLY_PER_MONTH:,} a month, you save ₹{plans.YEARLY_SAVING:,} against twelve monthly payments)"
                      if key == "yearly" else "")
         quota_rows = "".join(f"<li><b>{_escape(m)}</b> · {_escape(amt)}</li>" for m, amt, _what in plans.quota_lines())
-        plan_cards.append(f"<article class='card price-card{' featured' if key == 'monthly' else ''}'><div class='eyebrow'>{plan['label']}</div><h2>₹{plan['rupees']:,} <small class='muted'>/ {period}</small></h2>"
+        plan_cards.append(f"<article class='card price-card{' featured' if key == 'monthly' else ''}'><div class='eyebrow'>{plan['label']}</div><h2 class='price'>₹{plan['rupees']:,} <small class='muted'>/ {period}</small></h2>"
                           f"<p class='muted'>{plan['days']} days of access{per_month}. Every month you get:</p>"
                           f"<ul class='quota-list'>{quota_rows}<li><b>Push checks</b> · on every commit</li>"
                           f"<li><b>Projects</b> · {plans.INCLUDED_PROJECTS} included, ₹{plans.PROJECT_SLOT_PRICE} per extra</li></ul>{action}</article>")
@@ -3932,8 +3944,8 @@ def _page_billing(request):
                   + addon("pack_extra", f"{plans.PACK_EXTRA_TRIES} Extra tries", "Added to this month, on top of your plan.")
                   + "</div>")
     body = (f"<section class='section'><div class='eyebrow'>Account</div><h1>Plan &amp; billing</h1>{banner}"
-            f"<div class='grid'>{current}{trial_card}</div><h2>Plans</h2><div class='grid'>{''.join(plan_cards)}</div>"
-            f"<p class='muted'>Every plan includes {_escape(plans.quota_sentence())}. {_escape(plans.TRY_DEFINITION)} {_escape(plans.quota_fine_print())} "
+            f"<div class='grid'>{current}{trial_card}</div><h2>Plans</h2><div class='price-grid'>{''.join(plan_cards)}</div>"
+            f"<p class='muted fineprint'>Every plan includes {_escape(plans.quota_sentence())}. {_escape(plans.TRY_DEFINITION)} {_escape(plans.quota_fine_print())} "
             f"See your usage on the <a href='/usage'>Usage</a> page.</p>{addons}{history}</section>")
     return _response(body, request)
 
@@ -4526,13 +4538,13 @@ def _cases_toolbar(project: dict, request) -> str:
     csrf = _escape(_csrf(request))
     pid = _escape(project["id"])
     auto = int(project.get("auto_start", 1) or 0) == 1
-    return ("<div class='cases-bar' style='display:flex;flex-wrap:wrap;gap:10px;align-items:center;margin:0 0 12px'>"
-            f"<form method='post' action='/projects/{pid}/pause-all' style='display:inline'><input type='hidden' name='csrf' value='{csrf}'>"
+    return ("<div class='cases-bar'>"
+            f"<form method='post' action='/projects/{pid}/pause-all'><input type='hidden' name='csrf' value='{csrf}'>"
             "<button class='button' type='submit'>Pause all open cases</button></form>"
-            f"<form method='post' action='/projects/{pid}/auto-start' style='display:inline'><input type='hidden' name='csrf' value='{csrf}'>"
+            f"<form method='post' action='/projects/{pid}/auto-start'><input type='hidden' name='csrf' value='{csrf}'>"
             f"<input type='hidden' name='auto_start' value='{'off' if auto else 'on'}'>"
             f"<button class='button' type='submit'>{'Turn auto-start off' if auto else 'Turn auto-start on'}</button></form>"
-            f"<span class='muted' style='font-size:13px'>Auto-start is <b>{'on' if auto else 'off'}</b>: "
+            f"<span class='muted cases-note'>Auto-start is <b>{'on' if auto else 'off'}</b>: "
             + ("problems the agent finds by itself are worked on right away." if auto else
                "problems the agent finds by itself wait until you press Start. Your own reports always start.")
             + "</span></div>")
@@ -4665,8 +4677,14 @@ def _email_health_card() -> str:
     if res.get("ok") or not res.get("problems"):
         return ""
     probs = "".join(f"<li>{_escape(p)}</li>" for p in res["problems"])
-    steps = "".join(f"<li>{_escape(s)}</li>" for s in email_health.fix_steps(res.get("domain", ""), res.get("service", "")))
-    return ("<article class='card' style='border-color:#8a3342'><h3>Your emails are likely going to spam</h3>"
-            f"<p class='muted'>Checked the public DNS of <b>{_escape(res.get('domain', ''))}</b>. Payment alerts, pause alerts and customer "
+    domain = res.get("domain", "")
+    if not domain:
+        return ("<article class='card warn-card'><div class='eyebrow'>Email</div><h3>No email can be sent yet</h3>"
+                f"<ul>{probs}</ul><p class='muted'>In Render (the web service AND the worker), open Environment and add "
+                "<code>EMAIL_FROM</code> (an address on your domain, for example alerts@agentdaemon.xyz) and <code>BREVO_API_KEY</code>, "
+                "then press Save. This card then checks whether your emails will reach the inbox.</p></article>")
+    steps = "".join(f"<li>{_escape(s)}</li>" for s in email_health.fix_steps(domain, res.get("service", "")))
+    return ("<article class='card warn-card'><div class='eyebrow'>Email</div><h3>Your emails are likely going to spam</h3>"
+            f"<p class='muted'>Checked the public DNS of <b>{_escape(domain)}</b>. Payment alerts, pause alerts and customer "
             f"emails all depend on this.</p><ul>{probs}</ul><details class='more' open><summary>How to fix it (about 15 minutes)</summary>"
             f"<ol>{steps}</ol></details></article>")

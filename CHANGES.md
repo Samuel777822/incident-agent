@@ -6,6 +6,19 @@ read code, could not see the live site, and pushed fixes that nothing had proven
 on-call engineer: understand the request, look at the real site, find the cause, fix it, prove it, push it, check the live site
 again, and tell the client honestly.
 
+## v5.0: One look for every page (11 November 2026)
+
+* **Shared design layer (`theme.py`):** a wider page, larger text, calmer headings (Cinzel only for titles), and one style each for
+  cards, buttons, pills, tables, forms and messages, on every public, customer and admin page. The background artwork is dimmed
+  behind working pages so text stays readable. The header stays at the top while you scroll.
+* **Project page:** a section menu (Tell the agent, Bugs and fixes, Push guard, Live monitor, Settings), cases named after the error
+  instead of "Incident 4f3a...", roomier case cards, Settings as wide cards, and deleting a project in its own danger zone. The
+  explainer diagram is folded away.
+* **Connect a project:** the form sits beside the GitHub setup guide, which is now three folds instead of one wall of text.
+* **Admin:** a section menu, a ticket form you can read, a clear card when EMAIL_FROM is missing, and the spending page restyled.
+* **Billing and Usage:** larger prices, a fine-print box, pack buttons that no longer wrap.
+* **Fix:** a push check whose saved stack list is not in the expected shape no longer breaks the dashboard.
+
 ## v4.3: Emails that get through, and the How it works / Usage pages redesigned (11 November 2026)
 
 * **Email:** every configured provider is tried in turn (Brevo, then Resend, then SMTP), and a busy or unreachable provider gets one
