@@ -3885,7 +3885,8 @@ def _case_shots_html(project_id: str, incident_id: str) -> str:
     items = "".join(f"<a href='/projects/{_escape(project_id)}/incidents/{_escape(incident_id)}/images/{_escape(s['id'])}' target='_blank' "
                     f"rel='noopener' title='{_escape(s['note'])}'><img src='/projects/{_escape(project_id)}/incidents/{_escape(incident_id)}"
                     f"/images/{_escape(s['id'])}' alt='{_escape(s['note'])}' loading='lazy'></a>" for s in shots)
-    return f"<article class='card'><h2>Your screenshots</h2><p class='muted'>The engineer sees these with your messages.</p><div class='case-shots'>{items}</div></article>"
+    return (f"<article class='card'><h2>Screenshots</h2><p class='muted'>Yours (the engineer sees them with your messages) and the ones a "
+            f"real browser took of the fix on GitHub, at phone and desktop size.</p><div class='case-shots'>{items}</div></article>")
 
 
 def _live_gate(request: Request):

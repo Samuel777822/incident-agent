@@ -20,7 +20,7 @@ from . import adapters as fx_adapters
 from . import agent as fx_agent
 from . import admin_tools, fingerprint, investigator, journeys, notify, oncall, project_map, prompts, repo_context, review, router, sandbox, store, triage, validator
 from . import config as fx_config
-from . import git_ops, merge3
+from . import browser_check, git_ops, merge3
 from .guard import Guard
 
 log = logging.getLogger("fixengine")
@@ -945,6 +945,110 @@ class Engine:
                           f"{detail[:600]}\n\nThe agent moves on to the next mode for each case. Fix the key, the credit or the model "
                           "setting (OpenRouter). If you want to stop this mode meanwhile: Admin, AI spending, Mode switches.", "fix_pause")
 
+    # ---- the browser check on GitHub: the agent's eyes before a visual fix goes live ------------------------------------------
+    BROWSER_WAIT_SECONDS = int(os.getenv("BROWSER_CHECK_WAIT_SECONDS", "600") or 600)
+    BROWSER_MISSING_GRACE = 120
+
+    def _browser_wanted(self, win: dict) -> bool:
+        if os.getenv("BROWSER_CHECK", "1").strip().lower() in ("0", "false", "no", "off"):
+            return False
+        return hasattr(self.gh, "browser_bundle") and browser_check.is_visual(win.get("new_files") or {})
+
+    def _browser_gate(self, claimed, project, bug, state) -> bool:
+        """True when the fix may go live now. A visual fix waits for the browser check, then a model compares the screenshots with
+        the problem. Not fixed, or something new broken: back to the engineer with what the browser showed, nothing goes live."""
+        b = state.get("browser") or {}
+        if not b.get("wanted") or b.get("done"):
+            return True
+        age = time.time() - float(b.get("since", 0) or 0)
+        try:
+            got = self.gh.browser_bundle(project, state["head_sha"])
+        except Exception as exc:
+            got = {"state": "missing", "error": type(exc).__name__}
+        if got.get("state") == "pending" or (got.get("state") == "missing" and age < self.BROWSER_MISSING_GRACE):
+            if age < self.BROWSER_WAIT_SECONDS:
+                _stage(claimed["incident_id"], "github_testing", "Your tests passed. Checking your pages in a real browser (phone and desktop)",
+                       state.get("tier", ""))
+                return False
+        b["done"] = True
+        b["run_url"] = got.get("url", "")
+        bundle = browser_check.read_bundle(got["zip"]) if got.get("zip") else None
+        if not bundle or not bundle["shots"]:
+            b["note"] = ("the browser check did not finish in time" if got.get("state") == "pending" else "the browser check did not run")
+            state["browser"] = b
+            store.save_gh_state(bug["id"], state)
+            return True
+        verdict = self._judge_browser(claimed, bug, state, bundle)
+        b.update(verdict=verdict, problems=browser_check.problems_text(bundle["results"])[:1500])
+        state["browser"] = b
+        store.save_gh_state(bug["id"], state)
+        self._keep_after_shots(claimed, bundle)
+        if verdict is None:
+            b["note"] = "the browser screenshots could not be judged"
+            store.save_gh_state(bug["id"], state)
+            return True
+        if verdict["fixed"] and not verdict["new_problems"]:
+            pages = ", ".join(b.get("pages") or ["/"])
+            state["verified_text"] = (state.get("verified_text") or validator.VERIFY_TEXT.get(state.get("level", ""), "")) + \
+                f" A real browser opened {pages} at phone and desktop size on GitHub and the fix looks right: {verdict['reason']}"
+            store.save_gh_state(bug["id"], state)
+            return True
+        text = ("The browser check on GitHub opened the fixed app at phone and desktop size and the fix is NOT right yet: "
+                + verdict["reason"] + "\nWhat the browser saw:\n" + b["problems"])
+        state.pop("browser", None)                        # the next round gets its own browser check
+        store.save_gh_state(bug["id"], state)
+        self._github_red(claimed, project, bug, state, text=text, label="The browser check failed")
+        return False
+
+    def _judge_browser(self, claimed, bug, state, bundle) -> dict | None:
+        """A model looks at the screenshots of the fixed app (and the owner's own screenshot of the problem). Our check, not a try."""
+        asked = str(state.get("asked") or "")
+        content = [{"type": "text", "text": "THE OWNER'S REQUEST OR THE ERROR:\n" + asked[:2000] + "\n\nTHE FIX (diagnosis):\n"
+                    + str(state.get("diagnosis", ""))[:1500] + "\n\nTHE CHANGE:\n" + prompts.redact(str(state.get("diff", "")))[:8000]
+                    + "\n\nWHAT THE BROWSER SAW:\n" + browser_check.problems_text(bundle["results"])}]
+        before = self._owner_images(claimed["incident_id"])[:1]
+        if before:
+            content.append({"type": "text", "text": "BEFORE: the owner's own screenshot of the problem."})
+            content.append({"type": "image_url", "image_url": {"url": before[0]["url"]}})
+        import base64 as _b64
+        for name, data in bundle["shots"]:
+            content.append({"type": "text", "text": f"AFTER THE FIX: {name}"})
+            content.append({"type": "image_url", "image_url": {"url": "data:image/png;base64," + _b64.b64encode(data).decode("ascii")}})
+        tier = state.get("tier") if state.get("tier") in self.AGENT_TIERS else "haiku"
+        try:
+            transport = self._transport(tier)
+            if hasattr(transport, "effort"):
+                transport.effort = ""
+            reply = transport.complete([{"role": "system", "content": browser_check.JUDGE_PROMPT}, {"role": "user", "content": content}],
+                                       None, max_tokens=900)
+        except Exception as exc:
+            log.warning("browser judgement for bug %s failed: %s", bug["id"], exc)
+            return None
+        tin, tout, cached, cost_usd = fx_agent.usage_numbers(reply.get("usage") or {})
+        verdict = browser_check.parse_verdict(str((reply.get("message") or {}).get("content") or ""))
+        cost = cost_usd * float(self.cfg.get("usd_inr", 85.0) or 85.0)
+        attempt_id = store.add_attempt(bug=bug, tier=tier, model=getattr(transport, "model", tier), used_strong_diag=False,
+                                       info_hash=prompts.info_hash("browser", state.get("head_sha", "")), pack_try=False)
+        store.finish_attempt(attempt_id, result="review", tokens_in=tin, tokens_out=tout, cache_read=cached, cost_inr=cost,
+                             model=getattr(transport, "model", tier),
+                             diagnosis=("browser: fixed. " if verdict["fixed"] and not verdict["new_problems"] else "browser: NOT fixed. ")
+                             + verdict["reason"][:400])
+        return verdict
+
+    @staticmethod
+    def _keep_after_shots(claimed, bundle) -> None:
+        """The first phone and desktop screenshot go with the case, so the owner sees what the browser saw."""
+        try:
+            kept = 0
+            for name, data in bundle["shots"]:
+                if name.endswith("-scrolled.png") or kept >= 2:
+                    continue
+                portal_db.add_case_image(claimed["incident_id"], claimed["project_id"], "image/png", data,
+                                         "after the fix, real browser on GitHub: " + name[:-4])
+                kept += 1
+        except Exception:
+            log.debug("could not keep the browser screenshots")
+
     # ---- never overwrite the owner's newer work ------------------------------------------------------------------------------
     def _onto_latest(self, project, win: dict, reader=None) -> tuple[dict, list[str]]:
         """Merge the fix onto the branch AS IT IS NOW. The engineer worked on a snapshot; if the owner pushed changes to the same
@@ -1095,18 +1199,32 @@ class Engine:
         short = " ".join(str(win["diagnosis"]).split())[:60].rstrip(" .")
         title = f"fix: {short or 'incident ' + incident_id[:8]} {AGENT_MARK}"
         _stage(incident_id, "pushing", f"sending the fix to a test branch on GitHub (round {round_no} of {MAX_GITHUB_ROUNDS})", win["tier"])
+        visual = self._browser_wanted(win)
+        browser_note = ""
         try:
             pushed = None
             for _turn in range(2):
                 win, conflicts = self._onto_latest(project, win, getattr(self.gh, "read_files", None))
                 if conflicts:
                     return self._owner_changed_same_lines(claimed, project, bug, conflicts)
+                files, message = dict(win["new_files"]), title
+                if visual:
+                    files[browser_check.WORKFLOW_PATH] = browser_check.WORKFLOW_SOURCE
+                    message = browser_check.commit_message(title, browser_check.pages_for(win, _evidence_of(claimed)))
                 try:
-                    pushed = self.gh.push_fix_branch(project, bug_id=bug["id"], new_files=win["new_files"], title=title,
+                    pushed = self.gh.push_fix_branch(project, bug_id=bug["id"], new_files=files, title=message,
                                                      **self._expect(self.gh.push_fix_branch, win))
                     break
                 except git_ops.BranchMoved:
                     continue                      # the owner pushed this very second: read the branch again and merge again
+                except Exception:
+                    if not visual:
+                        raise
+                    visual = False                # usually: the token may not write workflow files. The fix itself still goes.
+                    browser_note = "the browser check could not be added (the GitHub token needs the 'workflow' permission)"
+                    pushed = self.gh.push_fix_branch(project, bug_id=bug["id"], new_files=win["new_files"], title=title,
+                                                     **self._expect(self.gh.push_fix_branch, win))
+                    break
             if pushed is None:
                 return self._fault_wait(claimed, bug, "your branch kept changing while the fix was being merged", 120)
         except Exception as exc:
@@ -1122,6 +1240,10 @@ class Engine:
                       "title": title, "files": sorted(win["new_files"])[:20]})
         if win.get("merged_with_owner"):
             state["merged_with_owner"] = win["merged_with_owner"][:20]
+        ev = _evidence_of(claimed)
+        state["asked"] = (str(ev.get("owner_report") or "") or str((claimed.get("first_event") or {}).get("message") or ""))[:2000]
+        state["browser"] = ({"wanted": True, "since": time.time(), "pages": browser_check.pages_for(win, ev)}
+                            if visual else ({"wanted": False, "note": browser_note} if browser_note else {}))
         if win.get("verified_text"):
             state["verified_text"] = str(win["verified_text"])[:600]
         if win.get("evidence"):
@@ -1136,7 +1258,9 @@ class Engine:
                   "root_cause": win["diagnosis"], "report": f"Fixed by the {win['tier']} model. {validator.VERIFY_TEXT.get(win['level'], '')}"}
         portal_db.complete_diagnosis(incident_id, claimed["project_id"], result)
         store.update_bug(bug["id"], status="github_testing")
-        _stage(incident_id, "github_testing", f"GitHub is running your tests on the fix (round {round_no} of {MAX_GITHUB_ROUNDS})", win["tier"])
+        _stage(incident_id, "github_testing", (f"GitHub is running your tests and opening your pages in a real browser (phone and desktop), "
+                                               f"round {round_no} of {MAX_GITHUB_ROUNDS}") if visual else
+               f"GitHub is running your tests on the fix (round {round_no} of {MAX_GITHUB_ROUNDS})", win["tier"])
         return "github_testing"
 
     def start_proof_for_files(self, claimed, project, *, new_files, diff, diagnosis, level, verified_text="", evidence=None) -> str:
@@ -1315,18 +1439,20 @@ class Engine:
                 self._needs_review(claimed, project, bug, state, "No GitHub test ran and the sandbox could not prove the fix by itself.")
             return
         if status == "success":
-            self._push_to_branch(claimed, project, bug, state)
+            if self._browser_gate(claimed, project, bug, state):
+                self._push_to_branch(claimed, project, bug, state)
             return
         if status == "failed":
             self._github_red(claimed, project, bug, state)
 
-    def _github_red(self, claimed, project, bug, state) -> None:
+    def _github_red(self, claimed, project, bug, state, text: str | None = None, label: str = "GitHub tests failed") -> None:
         round_no = int(state.get("round", 1))
-        try:
-            text = self.gh.failed_check_log(project, state["head_sha"])
-        except Exception:
-            text = "GitHub reported a failed check but its log could not be read."
-        summary = f"GitHub tests failed after your patch (round {round_no} of {MAX_GITHUB_ROUNDS}).\n{text}"
+        if text is None:
+            try:
+                text = self.gh.failed_check_log(project, state["head_sha"])
+            except Exception:
+                text = "GitHub reported a failed check but its log could not be read."
+        summary = f"{label} after your patch (round {round_no} of {MAX_GITHUB_ROUNDS}).\n{text}"
         if state.get("attempt_id"):
             try:
                 store.finish_attempt(state["attempt_id"], result="fail", error_summary=summary[:6000], progress=0)

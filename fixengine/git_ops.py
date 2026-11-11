@@ -291,6 +291,31 @@ def failed_check_log(project: dict, sha: str, limit: int = 3500) -> str:
     return "\n\n".join(parts)[:limit * 2] or "GitHub reported a failed check but gave no log."
 
 
+def browser_bundle(project: dict, sha: str) -> dict:
+    """The browser check of one commit: {"state": "pending" | "done" | "missing", "zip": bytes or None, "url": run page}."""
+    from . import browser_check
+    token = _tok(project)
+    api = _api_root(project)
+    call = portal_remediation._api
+    with httpx.Client(headers=_headers(token), timeout=httpx.Timeout(60, connect=8), follow_redirects=False) as client:
+        runs = call(client, "GET", f"{api}/actions/runs?head_sha={quote(sha, safe='')}&per_page=30").get("workflow_runs") or []
+        mine = [r for r in runs if r.get("name") == browser_check.WORKFLOW_NAME]
+        if not mine:
+            return {"state": "missing", "zip": None, "url": ""}
+        run = sorted(mine, key=lambda r: str(r.get("created_at") or ""))[-1]
+        if run.get("status") != "completed":
+            return {"state": "pending", "zip": None, "url": run.get("html_url", "")}
+        arts = call(client, "GET", f"{api}/actions/runs/{int(run.get('id'))}/artifacts").get("artifacts") or []
+        art = next((a for a in arts if a.get("name") == browser_check.ARTIFACT and not a.get("expired")), None)
+        if not art:
+            return {"state": "done", "zip": None, "url": run.get("html_url", "")}
+        resp = client.get(str(art.get("archive_download_url")))
+        if resp.status_code in (301, 302, 303, 307, 308) and resp.headers.get("location"):
+            resp = httpx.get(resp.headers["location"], timeout=60)            # a signed storage link: no token is sent there
+        data = resp.content if resp.status_code == 200 and len(resp.content) <= 40_000_000 else None
+        return {"state": "done", "zip": data, "url": run.get("html_url", "")}
+
+
 def fast_forward_base(project: dict, head_sha: str, base_sha: str) -> str:
     """Move the tracked branch to the tested commit. Never forced. 'ok' | 'moved' (someone pushed meanwhile) | 'protected'."""
     owner, repo, base = _validate(project)

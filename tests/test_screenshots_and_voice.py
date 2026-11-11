@@ -77,7 +77,7 @@ def test_a_request_with_a_screenshot_keeps_it_with_the_case_and_only_the_owner_c
     shots = portal_db.case_images(inc["id"])
     assert len(shots) == 1 and shots[0]["mime"] == "image/jpeg" and b"GPS" not in shots[0]["data"]
     _, _, page = _request(f"/projects/{project_id}/incidents/{inc['id']}", cookie=cookie)
-    assert "Your screenshots" in page and f"/images/{shots[0]['id']}" in page
+    assert "Screenshots" in page and f"/images/{shots[0]['id']}" in page
     status, headers, body = _raw_get(f"/projects/{project_id}/incidents/{inc['id']}/images/{shots[0]['id']}", cookie)
     assert status == "200 OK" and ("Content-Type", "image/jpeg") in headers and body[:2] == bytes([0xFF, 0xD8])
     from tests.test_push_guard import make_session
