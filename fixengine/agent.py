@@ -482,6 +482,13 @@ class Engineer:
             if self.checked_version == self.ws.version and self.last_checks_passed is False:
                 return False, ("Error: your last run_checks FAILED. Never finish on red: read what failed, fix it (your change, or what "
                                "it broke), and run_checks again. If you cannot make it pass, use give_up with what you found.")
+            blank = [f for f in ("understanding", "root_cause", "changes_summary", "client_message")
+                     if len(str(args.get(f) or "").strip()) < 12]
+            if blank or str(args.get("risk") or "").lower() not in ("low", "medium", "high"):
+                missing = blank + ([] if str(args.get("risk") or "").lower() in ("low", "medium", "high") else ["risk (low, medium or high)"])
+                return False, ("Error: the report is incomplete: " + ", ".join(missing) + ". Fill in every field in plain words: the owner "
+                               "reads root_cause, changes_summary and client_message, and the next run learns from them. Mention anything "
+                               "you could not do (for example images that should be made smaller) in client_message. Then call finish_fixed again.")
             tests = [self.ws.clean(p) for p in (args.get("tests_written") or []) if str(p).strip()]
             missing = [p for p in tests if p not in self.ws.changed]
             if missing:

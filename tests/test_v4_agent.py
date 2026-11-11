@@ -96,10 +96,10 @@ def test_the_engineer_reads_edits_runs_checks_and_finishes(tmp_path):
     t = FakeTransport([
         reply(call("read_file", path="src/App.jsx"), call("search_code", query="api/verse")),
         reply(call("edit_file", path="src/App.jsx", old_text='" " + chapter', new_text='"/" + chapter')),
-        reply(call("finish_fixed", tests_written=[], why_no_test="a static site with no test runner; checked in the browser", impact_checked="callers checked", understanding="u", root_cause="space instead of slash", changes_summary="slash", client_message="Fixed.",
+        reply(call("finish_fixed", tests_written=[], why_no_test="a static site with no test runner; checked in the browser", impact_checked="callers checked", understanding="u explained in plain words", root_cause="space instead of slash", changes_summary="slash explained in plain words", client_message="Fixed. explained in plain words",
                    verification=[], owner_steps=[], risk="low", project_notes="Vite + Supabase")),      # refused: no checks yet
         reply(call("run_checks")),
-        reply(call("finish_fixed", tests_written=[], why_no_test="a static site with no test runner; checked in the browser", impact_checked="callers checked", understanding="u", root_cause="space instead of slash", changes_summary="slash", client_message="Fixed.",
+        reply(call("finish_fixed", tests_written=[], why_no_test="a static site with no test runner; checked in the browser", impact_checked="callers checked", understanding="u explained in plain words", root_cause="space instead of slash", changes_summary="slash explained in plain words", client_message="Fixed. explained in plain words",
                    verification=[{"goto": "/isaiah/1"}], owner_steps=[], risk="low", project_notes="Vite + Supabase")),
     ])
     runner = OkRunner()
@@ -135,7 +135,7 @@ def test_the_engineer_may_make_a_judgement_call_and_can_still_hand_it_to_the_own
     t2 = FakeTransport([
         reply(call("edit_file", path="src/App.jsx", old_text='"NIV", ', new_text="")),
         reply(call("run_checks")),
-        reply(call("finish_fixed", tests_written=[], why_no_test="a static site with no test runner; checked in the browser", impact_checked="callers checked", understanding="u", root_cause="the NIV source is gone for good", changes_summary="removed NIV on purpose",
+        reply(call("finish_fixed", tests_written=[], why_no_test="a static site with no test runner; checked in the browser", impact_checked="callers checked", understanding="u explained in plain words", root_cause="the NIV source is gone for good", changes_summary="removed NIV on purpose",
                    client_message="NIV is no longer offered by the API, so it was removed.", verification=[], owner_steps=[], risk="low",
                    project_notes="")),
     ])
@@ -150,7 +150,7 @@ def test_a_judgement_call_goes_to_a_pull_request_with_the_warning(tmp_path, monk
     fix = [reply(call("edit_file", path="pricing.py", old_text="price * pct / 10\n", new_text="price * pct / 100\n")),
            reply(call("write_file", path="helpers.py", content="# stub payment client used while the real one is down\nclass Stub:\n    pass\n")),
            reply(call("run_checks")),
-           reply(call("finish_fixed", tests_written=[], why_no_test="a static site with no test runner; checked in the browser", impact_checked="callers checked", understanding="u", root_cause="r", changes_summary="c", client_message="m", verification=[],
+           reply(call("finish_fixed", tests_written=[], why_no_test="a static site with no test runner; checked in the browser", impact_checked="callers checked", understanding="u explained in plain words", root_cause="r explained in plain words", changes_summary="c explained in plain words", client_message="m explained in plain words", verification=[],
                       owner_steps=[], risk="low", project_notes=""))]
     engine, transports, prs, pid = _engine(tmp_path, monkeypatch, {"haiku": fix}, mode="auto")
     sent = []
@@ -278,7 +278,7 @@ def test_not_a_code_problem_ends_with_beginner_steps_and_no_more_models(tmp_path
 def test_an_unsafe_fix_is_never_sent_even_if_the_model_insists(tmp_path, monkeypatch):
     bad = [reply(call("write_file", path="pricing.py", content="def apply_discount(price, pct):\n    return price  # stub\n")),
            reply(call("run_checks")),
-           reply(call("finish_fixed", tests_written=[], why_no_test="a static site with no test runner; checked in the browser", impact_checked="callers checked", understanding="", root_cause="", changes_summary="", client_message="", verification=[], owner_steps=[],
+           reply(call("finish_fixed", tests_written=[], why_no_test="a static site with no test runner; checked in the browser", impact_checked="callers checked", understanding="explained in plain words", root_cause="explained in plain words", changes_summary="explained in plain words", client_message="explained in plain words", verification=[], owner_steps=[],
                       risk="low", project_notes="")),
            reply(call("give_up", reason="my only idea was a stub", findings=""))]
     engine, transports, prs, pid = _engine(tmp_path, monkeypatch, {"haiku": bad, "sonnet": list(bad), "opus": [reply(call("give_up", reason="no", findings=""))]})
@@ -358,7 +358,7 @@ def test_undo_this_fix_puts_the_files_back(web_env, monkeypatch):
 # ============================================================================================ Auto mode: sure pushes, not sure asks
 def _auto(tmp_path, monkeypatch, risk):
     monkeypatch.setenv("AGENT_DIRECT_PUSH", "1")
-    fix = list(FIX[:-1]) + [reply(call("finish_fixed", tests_written=[], why_no_test="a static site with no test runner; checked in the browser", impact_checked="callers checked", understanding="u", root_cause="r", changes_summary="c", client_message="m",
+    fix = list(FIX[:-1]) + [reply(call("finish_fixed", tests_written=[], why_no_test="a static site with no test runner; checked in the browser", impact_checked="callers checked", understanding="u explained in plain words", root_cause="r explained in plain words", changes_summary="c explained in plain words", client_message="m explained in plain words",
                                        verification=[], owner_steps=[], risk=risk, project_notes=""))]
     engine, transports, prs, pid = _engine(tmp_path, monkeypatch, {"haiku": fix}, mode="auto")
     sent = []
@@ -466,7 +466,7 @@ def test_a_run_that_hits_its_limit_is_continued_with_its_edits(tmp_path, monkeyp
     run1 = [reply(call("edit_file", path="pricing.py", old_text="price * pct / 10\n", new_text="price * pct / 100\n"), cost=0.002),
             reply(call("list_files"), cost=0.002), reply(call("list_files"), cost=0.002)]
     run2 = [reply(call("run_checks"), cost=0.002),
-            reply(call("finish_fixed", tests_written=[], why_no_test="a static site with no test runner; checked in the browser", impact_checked="callers checked", understanding="u", root_cause="divides by 10", changes_summary="divide by 100", client_message="Fixed.",
+            reply(call("finish_fixed", tests_written=[], why_no_test="a static site with no test runner; checked in the browser", impact_checked="callers checked", understanding="u explained in plain words", root_cause="divides by 10", changes_summary="divide by 100", client_message="Fixed. explained in plain words",
                        verification=[], owner_steps=[], risk="low", project_notes=""), cost=0.002)]
     engine, transports, prs, pid = _engine(tmp_path, monkeypatch, {"haiku": run1 + run2})
     engine.cfg["agent"]["max_inr_per_run"] = {"haiku": 0.3, "sonnet": 0.3, "opus": 0.3}

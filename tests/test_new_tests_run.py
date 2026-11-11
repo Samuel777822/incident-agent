@@ -93,3 +93,42 @@ def test_adding_a_test_script_is_not_a_risky_dependency_change():
 
 def test_the_engineer_is_told_to_keep_logging_when_it_fails_gracefully():
     assert "still log the real reason" in agent.SYSTEM_PROMPT
+
+
+# ---- second Bible-Well run (mobile background): the report was blank and the node:test file never ran ----------------------------
+def test_node_builtin_tests_run_without_a_test_script(tmp_path):
+    root = _node_repo(tmp_path)
+    (root / "tests").mkdir()
+    (root / "tests" / "mobile-background.test.mjs").write_text("import { test } from 'node:test'\ntest('x', () => {})\n")
+    prof = sandbox.detect_profiles(root)
+    assert prof.test == "node --test 'tests/mobile-background.test.mjs'" and prof.has_tests
+
+
+def test_a_test_script_still_wins_over_the_builtin_runner(tmp_path):
+    root = _node_repo(tmp_path, with_test_script=True)
+    (root / "tests").mkdir()
+    (root / "tests" / "a.test.mjs").write_text("x")
+    assert sandbox.detect_profiles(root).test == "npm test --silent"
+
+
+def test_a_blank_report_is_refused_until_it_is_written(tmp_path):
+    root = _node_repo(tmp_path)
+    files = {"package.json": (root / "package.json").read_text(), "api/openrouter.mjs": (root / "api" / "openrouter.mjs").read_text()}
+    ws = agent.Workspace(root, files)
+    blank = dict(understanding="", root_cause="", changes_summary="", client_message="", verification=[], owner_steps=[], risk="",
+                 tests_written=[], why_no_test="only a stylesheet rule changed", impact_checked="", project_notes="")
+    full = dict(blank, understanding="The photo zooms on phones", root_cause="background-attachment: fixed is ignored by iOS Safari",
+                changes_summary="moved the photo to a fixed ::before layer", client_message="The background now fits phones. Your photos are "
+                "1.9 MB; smaller copies would load faster.", risk="low")
+    t = FakeTransport([reply(call("edit_file", path="api/openrouter.mjs", old_text="free'", new_text="free' // x")), reply(call("run_checks")),
+                       reply(call("finish_fixed", **blank)), reply(call("finish_fixed", **full))])
+
+    class Green:
+        def run(self, root, profile):
+            return sandbox.SandboxResult(passed=True, tests_ran=True, phases=[sandbox.PhaseResult("build", True, 0, 1.0, "ok")], output="ok")
+    res = agent.Engineer(transport=t, workspace=ws, cfg=fx_config.load(), runner=Green(),
+                         profile=sandbox.detect_profiles(root, files)).run([{"type": "text", "text": "x"}])
+    ws.close()
+    answers = [m["content"] for c in t.calls for m in c["messages"] if m.get("role") == "tool"]
+    assert any("the report is incomplete: understanding, root_cause, changes_summary, client_message, risk" in a for a in answers)
+    assert res.outcome == "fixed" and res.data["root_cause"].startswith("background-attachment") and res.data["risk"] == "low"

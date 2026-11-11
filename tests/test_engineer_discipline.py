@@ -10,7 +10,7 @@ from tests.test_fixengine_core import cfg, fx_db  # noqa: F401  (fixtures)
 
 LONG = "".join(f"line {i}\n" for i in range(1, 101))
 FILES = {"app.py": LONG, "small.py": "x = 1\n"}
-DONE = dict(understanding="u", root_cause="r", changes_summary="c", client_message="m", verification=[], owner_steps=[], risk="low",
+DONE = dict(understanding="u explained in plain words", root_cause="r explained in plain words", changes_summary="c explained in plain words", client_message="m explained in plain words", verification=[], owner_steps=[], risk="low",
             impact_checked="nothing else uses it", project_notes="n")
 
 

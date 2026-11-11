@@ -109,6 +109,9 @@ def _under(names: set[str], base: str) -> set[str]:
     return {n[len(prefix):] for n in names if n.startswith(prefix)}
 
 
+NODE_BUILTIN_TEST = re.compile(r"(^|/)(tests?|__tests__)/[^/]+\.test\.(mjs|cjs|js)$|(^|/)[^/]+\.test\.(mjs|cjs)$")
+
+
 def _node_profile(root: Path, names: set[str], base: str) -> Profile:
     """names are relative to the project folder `base`."""
     prof = Profile(language="node", workdir=base)
@@ -138,6 +141,10 @@ def _node_profile(root: Path, names: set[str], base: str) -> Profile:
     test = str(scripts.get("test", ""))
     if test and "no test specified" not in test:
         prof.test, prof.has_tests = "npm test --silent", True
+    else:
+        builtin = sorted(n for n in names if NODE_BUILTIN_TEST.search(n) and not n.startswith(("node_modules/", "dist/", "build/")))
+        if builtin:                           # tests for Node's own runner (node:test) need no package and no script
+            prof.test, prof.has_tests = "node --test " + " ".join(f"'{n}'" for n in builtin[:40]), True
     if "start" in scripts:
         prof.smoke = "npm start"
     return prof
