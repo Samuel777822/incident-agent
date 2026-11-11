@@ -750,7 +750,31 @@ def sign(secret: str, timestamp: str, body: bytes) -> str:
 
 
 class RemoteRunner(_BaseRunner):
+    """11 Nov 2026: the sandbox server's disk filled up (24 GB, 0 free) and every run failed until someone logged in. Now a failed
+    run asks the server to clean itself up (signed /maintenance) and tries once more."""
+
     def run(self, repo_dir: Path, profile: Profile) -> SandboxResult:
+        first = self._run_once(repo_dir, profile)
+        if not first.system_fault or "not set" in first.error:
+            return first
+        if not self.maintenance().get("cleaned"):
+            return first
+        return self._run_once(repo_dir, profile)
+
+    def maintenance(self) -> dict:
+        """Ask the sandbox server to free disk space now. {} when it cannot be asked (old server, unreachable)."""
+        url, secret = os.getenv("FIXENGINE_SANDBOX_URL", "").rstrip("/"), os.getenv("FIXENGINE_SANDBOX_SECRET", "")
+        if not url or not secret:
+            return {}
+        body, ts = b"{}", str(int(time.time()))
+        try:
+            resp = httpx.post(url + "/maintenance", content=body, timeout=300,
+                              headers={"X-Timestamp": ts, "X-Signature": sign(secret, ts, body), "Content-Type": "application/json"})
+            return resp.json() if resp.status_code == 200 else {}
+        except (httpx.HTTPError, ValueError):
+            return {}
+
+    def _run_once(self, repo_dir: Path, profile: Profile) -> SandboxResult:
         url, secret = os.getenv("FIXENGINE_SANDBOX_URL", "").rstrip("/"), os.getenv("FIXENGINE_SANDBOX_SECRET", "")
         if not url or not secret:
             return SandboxResult(system_fault=True, error="FIXENGINE_SANDBOX_URL / FIXENGINE_SANDBOX_SECRET are not set")

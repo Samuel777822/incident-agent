@@ -154,13 +154,18 @@ class Handler(BaseHTTPRequestHandler):
             length = int(self.headers.get("Content-Length", "0"))
         except ValueError:
             length = 0
-        if self.path not in ("/run", "/investigate") or not secret or length <= 0 or length > MAX_BODY:
+        if self.path not in ("/run", "/investigate", "/maintenance") or not secret or length <= 0 or length > MAX_BODY:
             return self._reply(400, {"error": "bad request"})
         body = self.rfile.read(length)
         ts = self.headers.get("X-Timestamp", "")
         good = hmac.compare_digest(sandbox.sign(secret, ts, body), self.headers.get("X-Signature", ""))
         if not good or not ts.isdigit() or abs(time.time() - int(ts)) > 300:
             return self._reply(401, {"error": "unauthorized"})
+        if self.path == "/maintenance":       # the portal asks after a failed run: free space now, say how it went
+            with LOCK:
+                before = free_gb()
+                after = free_space(force=True)
+            return self._reply(200, {**health(), "cleaned": True, "freed_gb": round(max(0.0, after - before), 1)})
         if self.path == "/investigate":
             if len(body) > 64 * 1024:
                 return self._reply(400, {"error": "bad request"})

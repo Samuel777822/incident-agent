@@ -115,3 +115,25 @@ def _job() -> bytes:
     with tarfile.open(fileobj=buf, mode="w:gz") as tar:
         info = tarfile.TarInfo("app.py"); info.size = 1; tar.addfile(info, io.BytesIO(b"x"))
     return json.dumps({"repo_b64": base64.b64encode(buf.getvalue()).decode(), "profile": {"language": "python"}}).encode()
+
+
+def test_the_portal_can_ask_the_server_to_clean_up_and_the_run_is_retried(host, tmp_path, monkeypatch):
+    url, _seen = host
+    monkeypatch.setenv("FIXENGINE_SANDBOX_URL", url)
+    cleaned = []
+    monkeypatch.setattr(sandbox_service, "free_space", lambda force=False: cleaned.append(force) or 12.0)
+    from fixengine import config as fx_config
+    runner = sandbox.RemoteRunner(fx_config.load())
+    got = runner.maintenance()
+    assert got["cleaned"] is True and cleaned == [True] and "disk_free_gb" in got
+    bad = httpx.post(url + "/maintenance", content=b"{}", headers={"X-Timestamp": "1", "X-Signature": "00"})
+    assert bad.status_code == 401                                            # only the portal can ask
+    calls = []
+
+    def flaky(repo_dir, profile):
+        calls.append(1)
+        return sandbox.SandboxResult(system_fault=True, error="sandbox host error: OSError") if len(calls) == 1 \
+            else sandbox.SandboxResult(passed=True, tests_ran=True)
+    monkeypatch.setattr(runner, "_run_once", flaky)
+    (tmp_path / "app.py").write_text("x = 1\n")
+    assert runner.run(tmp_path, sandbox.detect_profile(tmp_path)).passed and len(calls) == 2
