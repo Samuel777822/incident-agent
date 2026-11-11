@@ -1755,6 +1755,7 @@ HttpClient.newHttpClient().sendAsync(req, HttpResponse.BodyHandlers.discarding()
       <summary class="accordion-summary">Does the browser check cost me anything?</summary>
       <div class="accordion-body">
         <p>No AI tries. It runs on GitHub's own machines, only on Agent Daemon's fix branches and only when a fix changes what people see. On a private repository it uses a few of your free GitHub Actions minutes (GitHub gives 2,000 a month on the free plan; one check takes about 2 to 4). Pages behind your sign-in show the sign-in screen, unless you give the agent a test account.</p>
+        <p>The first visual fix adds one small file to your repository, <code>.github/workflows/agent-daemon-browser.yml</code>. It runs only on <code>agent-daemon/fix-…</code> branches, never on your own pushes, and it never fails your build. Keep it so later fixes reuse it. If you delete it, the next visual fix adds it back.</p>
       </div>
     </details>
 

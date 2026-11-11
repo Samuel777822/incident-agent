@@ -424,6 +424,8 @@ def test_help_center_page_and_navigation(web_env):
     assert 'referrerpolicy="strict-origin-when-cross-origin"' in body
     assert "https://www.youtube.com/embed/Y3neE_B2d-M" in body
     assert "What the agent may do with a fix" in body
+    # the browser check's workflow file stays in the owner's repo after a visual fix: Help says what it is and that it is safe
+    assert ".github/workflows/agent-daemon-browser.yml" in body and "never on your own pushes" in body
     assert "Auto (pushes proven fixes)" in body
     assert "Pull request" in body
     assert "Report only" in body
