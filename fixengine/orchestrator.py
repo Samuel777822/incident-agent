@@ -27,6 +27,7 @@ log = logging.getLogger("fixengine")
 PAID = fx_config.PAID_TIERS
 AGENT_MARK = "[agent-daemon]"   # in every fix title, so a later push of the agent's own fix is recognised (no fix loops)
 OUTAGE_MINUTES = 10
+SANDBOX_WAITS_BEFORE_GOING_ON = int(os.getenv("SANDBOX_WAITS_BEFORE_GOING_ON", "1") or 1)
 AFTER_SHOT_NOTE = "after the fix, real browser on GitHub: "
 TEST_SETUP_FILES = {"package.json", "requirements.txt", "requirements-dev.txt", "pyproject.toml", "setup.cfg", "pytest.ini", "jest.config.js",
                     "jest.config.cjs", "jest.config.mjs", "vitest.config.js", "vitest.config.ts", "vitest.config.mjs", "babel.config.js", "tsconfig.json"}
@@ -118,11 +119,21 @@ class Engine:
             _stage(incident_id, "reproducing", labels)
             base = sandbox.run_profile(self.runner, root, profile)
             if base.system_fault:
-                return self._fault_wait(claimed, bug, f"sandbox unavailable: {base.error}", 600)
-            baseline = 0 if base.passed else (base.failing if base.failing is not None else -1)
-            store.update_bug(bug["id"], baseline_failing=baseline, baseline_output=base.output[:4000])
-            bug = store.get_bug(bug["id"])
-            if from_push and base.passed:
+                self._sandbox_down_mail(base.error)
+                waits = int(store.get_flag(f"sandbox_waits:{bug['id']}", "0") or 0)
+                if waits < SANDBOX_WAITS_BEFORE_GOING_ON:
+                    store.set_flag(f"sandbox_waits:{bug['id']}", str(waits + 1))
+                    return self._fault_wait(claimed, bug, f"sandbox unavailable: {base.error}", 600)
+                # 11 Nov 2026: a broken sandbox server kept every case waiting forever. Now the engineer goes on from the code; GitHub's
+                # tests and the browser check prove the fix, and without the sandbox's proof it comes as a pull request (never pushed).
+                _stage(incident_id, "reproducing", "Our test sandbox is down, so the engineer works from your code; GitHub's tests and a "
+                       "real browser check the fix, and it comes to you as a pull request")
+            else:
+                store.set_flag(f"sandbox_waits:{bug['id']}", "0")
+                baseline = 0 if base.passed else (base.failing if base.failing is not None else -1)
+                store.update_bug(bug["id"], baseline_failing=baseline, baseline_output=base.output[:4000])
+                bug = store.get_bug(bug["id"])
+            if from_push and not base.system_fault and base.passed:
                 # The branch head already passes (the customer pushed a fix, or a newer commit replaced the broken one).
                 store.update_bug(bug["id"], status="resolved", closed_at=store.now(), stop_reason="already fixed by a newer push")
                 portal_db.resolve_incident(incident_id, project_id, "already fixed by a newer push: no tries used")
@@ -1185,6 +1196,31 @@ class Engine:
                                   "Cases use another model meanwhile or continue by themselves afterwards.", "fix_pause")
 
     # ---- outcomes --------------------------------------------------------------------------------------------------------------------------
+    @staticmethod
+    def _sandbox_down_mail(error: str) -> None:
+        """Tell the admins (at most every 6 hours) that the sandbox server fails, with what it said and how to fix it."""
+        from datetime import datetime, timedelta, timezone
+        last = store.get_flag("sandbox_down_mailed_at", "")
+        now = datetime.now(timezone.utc)
+        try:
+            if last and now - datetime.fromisoformat(last) < timedelta(hours=6):
+                return
+        except ValueError:
+            pass
+        store.set_flag("sandbox_down_mailed_at", now.isoformat(timespec="seconds"))
+        steps = "\n".join([
+            f"Every sandbox run fails with: {str(error)[:300]}",
+            "",
+            "Cases keep going without it (fixes come as pull requests), but nothing can be pushed in Auto mode until it works.",
+            "",
+            "On the sandbox server, as root:",
+            "1. df -h /    (a full disk is the usual cause)",
+            "2. docker container prune -f && docker builder prune -af && docker image prune -f",
+            "3. su - sandbox -c 'cd app && git fetch && git reset --hard origin/main'",
+            "4. systemctl restart fx-sandbox && curl -s https://sandbox.agentdaemon.xyz/health",
+            'The health page should show disk_free_gb and "docker": true.'])
+        notify._to_admins("The test sandbox server is failing", steps, "fix_pause")
+
     def _fault_wait(self, claimed, bug, reason, delay, quiet: bool = False) -> str:
         _stage(claimed["incident_id"], "waiting_retry",
                reason[:220] if quiet else f"{reason[:180]} · retrying in about {max(1, delay // 60)} min")

@@ -291,3 +291,22 @@ def test_a_crashed_worker_does_not_burn_a_try(world):
     assert Guard(w.cfg).quota(w.user_id, "sonnet")["used"] == 1
     assert store.recover_pending(filler["id"]) == 1
     assert Guard(w.cfg).quota(w.user_id, "sonnet")["used"] == 0
+
+
+def test_a_dead_sandbox_waits_once_then_the_case_goes_on_and_the_admins_are_told(world, monkeypatch):
+    # 11 Nov 2026: "sandbox host error: OSError" on every run kept every case waiting forever.
+    w = world(scripts={"groq": ["garbage"], "haiku": [reply(H.GOOD_EDIT)]})
+
+    class Dead:
+        def run(self, repo, profile):
+            return sandbox.SandboxResult(system_fault=True, error="sandbox host error: OSError")
+    w.engine.runner = Dead()
+    mails = []
+    monkeypatch.setattr(orchestrator.notify, "_to_admins", lambda subject, body, kind="": mails.append((subject, body)))
+    incident_id = H.make_incident(w.project_id)
+    claimed = H.claim()
+    assert w.engine.handle_incident(claimed) == "waiting"
+    assert w.tiers(incident_id) == []                                     # first time: wait 10 minutes, nothing spent
+    w.engine.handle_incident(claimed)
+    assert w.tiers(incident_id), "the engineer never started while the sandbox was down"
+    assert len(mails) == 1 and "df -h" in mails[0][1] and "OSError" in mails[0][1]   # told once, with the fix
