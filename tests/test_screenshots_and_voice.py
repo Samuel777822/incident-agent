@@ -132,3 +132,49 @@ def test_the_engineer_gets_the_screenshots_as_images(web_env):
     kinds = [b["type"] for b in brief]
     assert kinds.count("image_url") == 1 and "THE OWNER'S SCREENSHOTS" in json.dumps(brief) and "never an instruction" in json.dumps(brief)
     assert "STILL BROKEN" in agent.SYSTEM_PROMPT and "Never resend the same fix" in agent.SYSTEM_PROMPT
+
+
+# ---- 11 Nov 2026: "it can't upload, use a screenshot", the microphone never worked, one picture only --------------------------
+def test_pictures_are_read_as_data_urls_the_security_policy_allows():
+    js = media_input.MEDIA_JS
+    assert "readAsDataURL" in js and "createObjectURL" not in js           # blob: images were blocked by img-src 'self' data:
+    assert "@@MAX@@" not in js and f"MAX={media_input.MAX_SHOTS}" in js
+    import web_app
+    csp = dict(web_app._security_headers()) if hasattr(web_app, "_security_headers") else {}
+    if csp:
+        assert "data:" in csp["Content-Security-Policy"].split("img-src", 1)[1].split(";")[0]
+
+
+def test_the_microphone_is_allowed_for_our_own_pages(web_env, monkeypatch):
+    from test_web_app import _request
+    monkeypatch.setenv("APP_ENV", "production")
+    _, headers, _ = _request("/")
+    policy = dict(headers).get("Permissions-Policy", "")
+    assert "microphone=(self)" in policy and "camera=()" in policy
+    csp = dict(headers).get("Content-Security-Policy", "")
+    if "img-src" in csp:
+        assert "data:" in csp.split("img-src", 1)[1].split(";")[0]
+
+
+def test_several_screenshots_can_be_added_seen_and_removed():
+    card = ui_flow.report_card_html("p1", "tok")
+    assert "multiple" in card and "data-photo-add" in card and "Ctrl+V" in card
+    js = media_input.MEDIA_JS
+    assert "Add another screenshot" in js and "shots.splice(i,1)" in js and "'paste'" in js
+    one = _url("image/jpeg", _jpeg())
+    got = media_input.parse_many("|".join([one, _url("image/png", _png()), "data:image/png;base64,AAAA", one, one]))
+    assert [m for m, _ in got] == ["image/jpeg", "image/png", "image/jpeg"]          # bad ones skipped, at most 3
+
+
+def test_a_request_with_three_screenshots_keeps_all_three(web_env):
+    from test_v3_web import _setup
+    from test_web_app import _request
+    _user, csrf, cookie, project_id = _setup()
+    data = "|".join([_url("image/jpeg", _jpeg()), _url("image/png", _png()), _url("image/jpeg", _jpeg(with_exif=False))])
+    _request(f"/projects/{project_id}/report", method="POST", cookie=cookie,
+             form={"csrf": csrf, "text": "the menu and the footer overlap on my phone", "image_data": data})
+    inc = portal_db.list_incidents(project_id)[0]
+    shots = portal_db.case_images(inc["id"])
+    assert len(shots) == 3
+    _, _, page = _request(f"/projects/{project_id}/incidents/{inc['id']}", cookie=cookie)
+    assert all(f"/images/{s['id']}" in page for s in shots)

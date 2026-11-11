@@ -1011,7 +1011,7 @@ def start_check_window(incident_id: str, seconds: int | None = None) -> str:
     return until
 
 
-CASE_IMAGES_KEPT = 6
+CASE_IMAGES_KEPT = 10                   # up to 3 owner screenshots per message, plus the browser check's phone and desktop shots
 
 
 def add_case_image(incident_id: str, project_id: str, mime: str, data: bytes, note: str = "") -> str:

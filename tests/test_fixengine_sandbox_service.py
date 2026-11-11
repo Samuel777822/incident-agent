@@ -47,7 +47,8 @@ def test_host_rejects_bad_signatures_and_stale_timestamps(host):
     ts = str(int(time.time()) - 4000)
     stale = httpx.post(url + "/run", content=body, headers={"X-Timestamp": ts, "X-Signature": sandbox.sign("s3cret-for-tests", ts, body)})
     assert stale.status_code == 401
-    assert httpx.get(url + "/health").json() == {"ok": True}
+    health = httpx.get(url + "/health").json()
+    assert set(health) == {"ok", "disk_free_gb", "docker"} and health["disk_free_gb"] > 0
 
 
 def test_host_never_extracts_outside_its_scratch_folder(tmp_path):
@@ -59,3 +60,58 @@ def test_host_never_extracts_outside_its_scratch_folder(tmp_path):
     dest = tmp_path / "d"; dest.mkdir()
     sandbox_service.safe_extract(buf.getvalue(), dest)
     assert (dest / "ok.py").exists() and not (tmp_path / "escape.py").exists() and not Path("/abs.py").exists()
+
+
+# ---- 11 Nov 2026: "sandbox host error: OSError" on every run, a restart did not help (a full disk) -------------------------
+def test_a_full_disk_is_cleaned_up_and_the_run_is_tried_again(monkeypatch):
+    import errno
+    calls = {"runs": 0, "cleaned": 0}
+
+    class Runner:
+        def __init__(self, cfg):
+            pass
+
+        def run(self, root, prof):
+            calls["runs"] += 1
+            if calls["runs"] == 1:
+                raise OSError(errno.ENOSPC, "No space left on device")
+            return sandbox.SandboxResult(passed=True, tests_ran=True)
+
+    monkeypatch.setattr(sandbox_service.sandbox, "DockerRunner", Runner)
+    monkeypatch.setattr(sandbox_service, "free_space", lambda force=False: calls.__setitem__("cleaned", calls["cleaned"] + 1) or 9.0)
+    out = sandbox_service.run_job(_job())
+    assert out["passed"] and calls == {"runs": 2, "cleaned": 2}
+
+
+def test_the_error_says_what_is_wrong_not_just_oserror(monkeypatch):
+    import errno
+
+    class Runner:
+        def __init__(self, cfg):
+            pass
+
+        def run(self, root, prof):
+            raise OSError(errno.ENOSPC, "No space left on device")
+
+    monkeypatch.setattr(sandbox_service.sandbox, "DockerRunner", Runner)
+    monkeypatch.setattr(sandbox_service, "free_space", lambda force=False: 0.2)
+    out = sandbox_service.run_job(_job())
+    assert out["system_fault"] and "disk is full" in out["error"] and out["error"] != "sandbox host error: OSError"
+    assert "not allowed to use Docker" in sandbox_service.describe(PermissionError(13, "Permission denied"))
+    assert "Docker is not installed" in sandbox_service.describe(FileNotFoundError(2, "No such file", "docker"))
+
+
+def test_cleanup_never_removes_the_sandbox_images(monkeypatch):
+    seen = []
+    monkeypatch.setattr(sandbox_service, "_quiet", lambda argv, timeout=180: seen.append(argv) or True)
+    sandbox_service.free_space(force=True)
+    assert ["docker", "image", "prune", "-f"] in seen                       # dangling layers only
+    assert not any("-a" in a and "image" in a for a in seen) and not any("rmi" in a for a in seen)
+
+
+def _job() -> bytes:
+    import base64, io, tarfile
+    buf = io.BytesIO()
+    with tarfile.open(fileobj=buf, mode="w:gz") as tar:
+        info = tarfile.TarInfo("app.py"); info.size = 1; tar.addfile(info, io.BytesIO(b"x"))
+    return json.dumps({"repo_b64": base64.b64encode(buf.getvalue()).decode(), "profile": {"language": "python"}}).encode()

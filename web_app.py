@@ -50,7 +50,7 @@ CSRF_COOKIE = "agent_csrf"
 SESSION_SECONDS = 60 * 60 * 24 * 7
 MAX_BODY = 65536
 WEBHOOK_MAX_BODY = 4 * 1024 * 1024      # GitHub push payloads list every commit; big pushes exceed 64 KB
-MEDIA_MAX_BODY = 1_100_000              # a request or reply with one screenshot (shrunk in the browser to about 500 KB)
+MEDIA_MAX_BODY = 2_400_000              # a request or reply with up to 3 screenshots (each shrunk in the browser to about 450 KB)
 MEDIA_PATHS = re.compile(r"^/projects/[0-9a-f-]{36}(/report|/incidents/[0-9a-f-]{36}/reply)$")
 GOOGLE_CALLBACK_PATH = "/auth/google/callback"
 GOOGLE_TOKENINFO_URL = "https://oauth2.googleapis.com/tokeninfo"
@@ -3446,11 +3446,12 @@ def _page_report(request, project_id):
     incident_id, _accepted = portal_db.ingest_event(
         project_id, timestamp=datetime.now(timezone.utc).isoformat(timespec="seconds"), level="ERROR",
         message="[user report] " + text[:300], traceback="[evidence] " + json.dumps(evidence) + "\n", signature=signature)
-    shot = media_input.parse_data_url(request.form.get("image_data", ""))
-    if shot and incident_id:
+    shots = media_input.parse_many(request.form.get("image_data", ""))
+    if shots and incident_id:
         row0 = portal_db.get_incident_row(incident_id) or {}
-        portal_db.add_case_image(row0.get("case_id") or incident_id, project_id, shot[0], shot[1], "with the request: " + text[:150])
-    portal_db.audit(project_id, "user_report_sent", {"chars": len(text), "screenshot": bool(shot)})
+        for mime, data in shots:
+            portal_db.add_case_image(row0.get("case_id") or incident_id, project_id, mime, data, "with the request: " + text[:150])
+    portal_db.audit(project_id, "user_report_sent", {"chars": len(text), "screenshot": bool(shots), "screenshots": len(shots)})
     row = portal_db.get_incident_row(incident_id) if incident_id else None
     if row and row.get("case_id"):
         return _redirect(f"/projects/{project_id}?reported=joined#case-{row['case_id']}")
@@ -3863,7 +3864,8 @@ def _page_case_reply(request, project_id, incident_id):
     if not project:
         return _response("<h1>Project not found</h1>", request, "404 Not Found")
     text = " ".join(str(request.form.get("text", "")).split())[:1000]
-    shot = media_input.parse_data_url(request.form.get("image_data", ""))
+    shots = media_input.parse_many(request.form.get("image_data", ""))
+    shot = shots[0] if shots else None
     still_broken = request.form.get("still_broken") == "1"
     if still_broken and len(text) < 2:
         text = "It is still broken (see my screenshot)." if shot else "It is still broken."
@@ -3875,9 +3877,10 @@ def _page_case_reply(request, project_id, incident_id):
     if not row or row.get("project_id") != project_id:
         return _response("<h1>Incident not found</h1>", request, "404 Not Found")
     target = row.get("case_id") or incident_id
-    if shot:
-        portal_db.add_case_image(target, project_id, shot[0], shot[1], ("still broken: " if still_broken else "with a reply: ") + text[:150])
-        text += " [screenshot attached]"
+    if shots:
+        for mime, data in shots:
+            portal_db.add_case_image(target, project_id, mime, data, ("still broken: " if still_broken else "with a reply: ") + text[:150])
+        text += " [screenshot attached]" if len(shots) == 1 else f" [{len(shots)} screenshots attached]"
     if still_broken:
         text = "STILL BROKEN: " + text
         _still_broken(target, project_id)
@@ -4682,7 +4685,7 @@ def application(environ, start_response):
         response.headers.extend([
             ("Strict-Transport-Security", "max-age=31536000; includeSubDomains"),
             ("X-Frame-Options", "DENY"),
-            ("Permissions-Policy", "camera=(), microphone=(), geolocation=()"),
+            ("Permissions-Policy", "camera=(), microphone=(self), geolocation=()"),     # the Speak button needs the microphone
         ])
     start_response(response.status, response.headers)
     return [response.body]
