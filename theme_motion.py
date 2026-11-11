@@ -58,7 +58,9 @@ main h1{background:linear-gradient(100deg,#fff 0%,#fff 35%,#ffc4ba 45%,#d9c2ff 5
 .warn-card{background:radial-gradient(520px circle at var(--mx,-600px) var(--my,-600px),#ffffff12,transparent 55%) padding-box,linear-gradient(165deg,#2a1e0cd9,#0d0814e6) padding-box,linear-gradient(140deg,#e3bd7499,#6b5320 55%,#e3bd7444) border-box}
 .danger-zone{background:radial-gradient(520px circle at var(--mx,-600px) var(--my,-600px),#ffffff12,transparent 55%) padding-box,linear-gradient(165deg,#2a0d12d9,#0d0814e6) padding-box,linear-gradient(140deg,#ff4a3a99,#5a1a22 60%,#ff4a3a55) border-box}
 .price-card.featured{background:radial-gradient(520px circle at var(--mx,-600px) var(--my,-600px),#ffffff14,transparent 55%) padding-box,linear-gradient(165deg,#1d0d22e6,#0d0814e6) padding-box,linear-gradient(140deg,#ff4a3a,#9a4dff) border-box}
-.tilt{transition:transform .3s ease,box-shadow .3s ease;will-change:transform}
+.tilt{transition:transform .3s ease,box-shadow .3s ease;will-change:transform;-webkit-backdrop-filter:none;backdrop-filter:none}
+/* Chrome on some graphics cards stops drawing the buttons inside a blurred-glass card while it is turned in 3D (the Pay buttons
+   on /billing and /pricing disappeared under the cursor). A tilting card has no glass blur, and price cards never tilt. */
 .tilt.tilting{transition:transform .06s linear}
 
 /* scroll reveal (only when the script is running; without it everything is simply visible) */
@@ -149,7 +151,7 @@ MOTION_JS = r"""
 
   /* 2. the light that follows the cursor + a gentle 3D tilt on the cards that matter */
   var GLOW='.card,.stat,.live-item,.inc,.meter,.price-card,.mode-card,.accordion-item,.flow-card,.table-wrap';
-  var TILT='.project-card,.price-card,.stat,.u-tier,.u-mode,.eng-tier,.founder-card,.mode-card';
+  var TILT='.project-card,.stat,.u-tier,.u-mode,.eng-tier,.founder-card,.mode-card';   /* never .price-card: its pay buttons vanished while it tilted */
   var last=null,tilted=null,raf=0,ev=null;
   function untilt(){if(tilted){tilted.classList.remove('tilting');tilted.style.transform='';tilted=null;}}
   function frame(){raf=0;var e=ev;if(!e)return;
