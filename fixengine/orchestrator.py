@@ -494,6 +494,7 @@ class Engine:
                 ws.write(fx_agent.Workspace.clean(rel), str(text))      # an earlier run's edits, merged onto today's code
             except (ValueError, OSError):
                 pass
+        eng = None
         try:
             eng = fx_agent.Engineer(
                 transport=transport, workspace=ws, cfg=self.cfg, runner=self.runner, profile=profile, site_url=ctx.get("site", ""),
@@ -504,7 +505,18 @@ class Engine:
                 usd_inr=usd_inr)
             res = eng.run(brief)
         except fx_agent.AgentFault as exc:
-            store.finish_attempt(attempt_id, result="system_fault", model=model,
+            # 11 Nov 2026: a run that failed half way (credit ran out at step 20, an outage, a rejected request) was saved with NO cost,
+            # so OpenRouter's bill was higher than the admin page. What the run had already spent is recorded now.
+            part = eng.result if eng is not None else None
+            spent = 0.0
+            if part is not None and (part.cost_usd or part.tokens_in or part.tokens_out):
+                spent = part.cost_usd * usd_inr if part.cost_usd else fx_config.estimate_cost_inr(self.cfg, tier, part.tokens_in,
+                                                                                                  part.tokens_out, part.cache_read)
+                bug_now = store.get_bug(bug["id"])
+                store.update_bug(bug["id"], spent_inr=float(bug_now["spent_inr"] or 0) + spent)
+            store.finish_attempt(attempt_id, result="system_fault", model=model, cost_inr=spent,
+                                 tokens_in=part.tokens_in if part else 0, tokens_out=part.tokens_out if part else 0,
+                                 cache_read=part.cache_read if part else 0,
                                  error_summary=f"origin=provider provider=openrouter kind={exc.kind} http={exc.status} | {exc}"[:300])
             if exc.kind in ("auth", "credit", "not_configured"):
                 self._provider_problem_mail(tier, exc.kind, "openrouter", str(exc))

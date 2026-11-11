@@ -626,3 +626,19 @@ def test_email_check_names_what_is_missing():
     assert not res["ok"] and "spf.brevo.com" in text and "DKIM" in text and "DMARC" in text and "No SPF" not in text
     steps = " ".join(email_health.fix_steps("agentdaemon.xyz", "brevo"))
     assert "v=spf1 include:zoho.in include:spf.brevo.com ~all" in steps and "_dmarc" in steps
+
+
+def test_a_run_that_runs_out_of_credit_half_way_still_records_what_it_spent(tmp_path, monkeypatch):
+    # 11 Nov 2026: OpenRouter showed $4.96 spent, the admin page Rs 363 (about $4.27): runs that failed half way were saved at Rs 0.
+    def no_credit(messages):
+        raise agent.AgentFault("credit", "OpenRouter says the account has no credit left (HTTP 402).", 402)
+    engine, transports, prs, pid = _engine(tmp_path, monkeypatch, {
+        "haiku": [reply(call("read_file", path="pricing.py"), cost=0.05), reply(call("list_files"), cost=0.07), no_credit]})
+    monkeypatch.setattr(engine, "_provider_problem_mail", lambda *a, **k: None)
+    inc = H.make_incident(pid)
+    engine.handle_incident(H.claim())
+    bug = store.get_bug_by_incident(inc)
+    faults = [a for a in store.list_attempts(bug["id"]) if a["tier"] == "haiku" and a["result"] == "system_fault"]
+    usd_inr = float(engine.cfg.get("usd_inr", 85.0) or 85.0)
+    assert faults and abs(float(faults[0]["cost_inr"]) - 0.12 * usd_inr) < 0.01           # the 2 steps it paid for are on record
+    assert float(store.get_bug(bug["id"])["spent_inr"]) >= 0.12 * usd_inr - 0.01
