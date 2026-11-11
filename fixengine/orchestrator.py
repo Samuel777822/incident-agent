@@ -462,7 +462,8 @@ class Engine:
             case_reports=ctx.get("reports") or [], replies=ctx.get("replies") or [], baseline=bug.get("baseline_output") or "",
             notes=store.get_flag(f"notes:{project_id}", ""), history=history, commits=recent, project_map=ctx.get("map", ""),
             code=fx_agent.code_dump(files, int(((self.cfg.get("agent") or {}).get("full_code_chars") or {}).get(tier, fx_agent.FULL_CODE_CHARS))),
-            previous=previous + self._seed_note(bug, files), memory=project_memory_text(project_id))
+            previous=previous + self._seed_note(bug, files), memory=project_memory_text(project_id),
+            images=self._owner_images(incident_id))
 
         def on_step(what: str) -> None:
             _stage(incident_id, "working", what[:280], tier)
@@ -988,6 +989,17 @@ class Engine:
         portal_db.requeue_incident(incident_id, project_id, f"You changed the same lines in {files} while the agent worked. Nothing was "
                                                             "overwritten: it is redoing the fix on your latest code.")
         return "waiting"
+
+    @staticmethod
+    def _owner_images(incident_id: str) -> list[dict]:
+        """The owner's screenshots on this case, newest first, as data URLs for the engineer (a vision model)."""
+        try:
+            import media_input
+            return [{"url": media_input.data_url(im["mime"], im["data"]), "note": im.get("note", "")}
+                    for im in portal_db.case_images(incident_id, limit=3)]
+        except Exception:
+            log.debug("could not load the owner's screenshots for %s", incident_id)
+            return []
 
     def _seed_files(self, bug, files: dict) -> dict:
         """An earlier run's unfinished edits, merged onto TODAY's code. A file the owner changed in the same lines is not seeded."""

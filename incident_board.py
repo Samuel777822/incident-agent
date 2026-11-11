@@ -12,6 +12,8 @@ Everything that reaches the page is escaped here. The browser script is served f
 from __future__ import annotations
 
 import html
+
+import media_input
 import re
 from datetime import datetime, timedelta, timezone
 
@@ -209,12 +211,30 @@ def question_box_html(inc: dict, project_id: str, csrf: str) -> str:
     return (f"<div class='inc-question' id='answer-{_e(iid)}'><div class='q-head'><span class='q-badge'>The agent is asking you</span>"
             "<small class='muted'>It waits for your answer and spends nothing meanwhile.</small></div>"
             f"<p class='q-text'>{_e(live[10:].strip())}</p>"
-            f"<form method='post' action='/projects/{_e(project_id)}/incidents/{_e(iid)}/reply'>"
+            f"<form method='post' action='/projects/{_e(project_id)}/incidents/{_e(iid)}/reply' data-media>"
             f"<input type='hidden' name='csrf' value='{_e(csrf)}'><input type='hidden' name='next' value='/projects/{_e(project_id)}#case-{_e(iid)}'>"
             "<label class='sr-only' for='answer-text-" + _e(iid) + "'>Your answer</label>"
             f"<textarea id='answer-text-{_e(iid)}' name='text' rows='3' maxlength='1000' required placeholder='Type your answer here'></textarea>"
+            + media_input.inputs_html() +
             "<div class='q-actions'><button class='button primary' type='submit'>Send answer</button>"
             "<small class='muted'>The agent continues right away with your answer.</small></div></form></div>")
+
+
+def still_broken_html(inc: dict, project_id: str, csrf: str) -> str:
+    """On a case the agent says it fixed: "Still broken?" with a screenshot and voice. The same case reopens with the agent's
+    memory of what it tried; the second time, a stronger model takes over."""
+    if not csrf or str(inc.get("status") or "") not in ("resolved", "pr_opened") or str(inc.get("live_result") or "").startswith("QUESTION: "):
+        return ""
+    iid = str(inc.get("id") or "")
+    return (f"<details class='inc-broken'><summary>Still broken? Show the agent</summary>"
+            f"<form method='post' action='/projects/{_e(project_id)}/incidents/{_e(iid)}/reply' data-media>"
+            f"<input type='hidden' name='csrf' value='{_e(csrf)}'><input type='hidden' name='still_broken' value='1'>"
+            f"<input type='hidden' name='next' value='/projects/{_e(project_id)}#case-{_e(iid)}'>"
+            "<p class='muted'>Add a screenshot of what you see and say what is still wrong. The agent reopens this case, looks at your "
+            "screenshot and at what it already tried, and does not repeat it.</p>"
+            "<textarea name='text' rows='3' maxlength='1000' placeholder='What do you still see? (optional with a screenshot)'></textarea>"
+            + media_input.inputs_html() +
+            "<button class='button primary' type='submit'>Send to the agent</button></form></details>")
 
 
 def render_board(project_id: str, incidents: list, mode: str, csrf: str = "") -> str:
@@ -264,7 +284,7 @@ def render_board(project_id: str, incidents: list, mode: str, csrf: str = "") ->
             f"{guide_html(inc, project_id, csrf, pr_url)}"
             f"<span class='hint'>Show report</span></summary>"
             f"<div class='inc-body'>{_render_report(inc, stage)}<div class='inc-actions'>{''.join(buttons)}</div></div>"
-            f"</details>{question_box_html(inc, project_id, csrf)}</article>")
+            f"</details>{question_box_html(inc, project_id, csrf)}{still_broken_html(inc, project_id, csrf)}</article>")
     return "".join(cards)
 
 
@@ -301,6 +321,12 @@ _STYLE = """<style>
 .inc-question .q-text{margin:10px 0 14px;font-size:16px;line-height:1.6;color:#fff;white-space:pre-wrap}
 .inc-question textarea{min-height:96px}
 .inc-question .q-actions{display:flex;flex-wrap:wrap;gap:10px 14px;align-items:center;margin-top:12px}
+.inc-broken{margin:0 26px 22px;border-radius:14px;border:1px solid #ffffff1a;background:#ffffff06}
+.inc-broken>summary{padding:12px 16px;cursor:pointer;font-weight:650;color:#ff9c90;list-style:none}
+.inc-broken>summary::-webkit-details-marker{display:none}
+.inc-broken>form{padding:0 16px 16px}
+.inc-broken textarea{min-height:84px}
+@media(max-width:640px){.inc-broken{margin:0 18px 18px}}
 .sr-only{position:absolute;width:1px;height:1px;overflow:hidden;clip:rect(0 0 0 0);white-space:nowrap}
 @media(max-width:640px){.inc-question{margin:0 18px 18px}}
 .inc-guide .guide-text{margin:8px 0 14px;white-space:normal}.inc-guide .guide-line{flex:1 1 280px;margin:0;color:var(--muted);font-size:14px;line-height:1.5}

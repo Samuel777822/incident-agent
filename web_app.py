@@ -31,6 +31,7 @@ import httpx
 
 import incident_board
 import ui_flow
+import media_input
 import theme
 import theme_motion
 import notifications
@@ -49,6 +50,8 @@ CSRF_COOKIE = "agent_csrf"
 SESSION_SECONDS = 60 * 60 * 24 * 7
 MAX_BODY = 65536
 WEBHOOK_MAX_BODY = 4 * 1024 * 1024      # GitHub push payloads list every commit; big pushes exceed 64 KB
+MEDIA_MAX_BODY = 1_100_000              # a request or reply with one screenshot (shrunk in the browser to about 500 KB)
+MEDIA_PATHS = re.compile(r"^/projects/[0-9a-f-]{36}(/report|/incidents/[0-9a-f-]{36}/reply)$")
 GOOGLE_CALLBACK_PATH = "/auth/google/callback"
 GOOGLE_TOKENINFO_URL = "https://oauth2.googleapis.com/tokeninfo"
 EMAIL_RE = re.compile(r"^[^\s@]+@[^\s@]+\.[^\s@]+$")
@@ -520,6 +523,7 @@ main.wrap{overflow-x:clip}
 CSS += ui_flow.FLOW_CSS
 CSS += theme.THEME_CSS
 CSS += theme_motion.MOTION_CSS
+CSS += media_input.MEDIA_CSS
 
 
 
@@ -578,7 +582,8 @@ class Request:
                 length = int(environ.get("CONTENT_LENGTH") or 0)
             except ValueError:
                 length = MAX_BODY + 1
-            limit = WEBHOOK_MAX_BODY if self.path.startswith("/webhooks/github/") else MAX_BODY
+            limit = (WEBHOOK_MAX_BODY if self.path.startswith("/webhooks/github/")
+                     else MEDIA_MAX_BODY if MEDIA_PATHS.match(self.path) else MAX_BODY)
             if length > limit:
                 raise ValueError("Request body is too large")
             self.raw_body = environ.get("wsgi.input", BytesIO()).read(length)
@@ -3393,7 +3398,11 @@ def _page_report(request, project_id):
     incident_id, _accepted = portal_db.ingest_event(
         project_id, timestamp=datetime.now(timezone.utc).isoformat(timespec="seconds"), level="ERROR",
         message="[user report] " + text[:300], traceback="[evidence] " + json.dumps(evidence) + "\n", signature=signature)
-    portal_db.audit(project_id, "user_report_sent", {"chars": len(text)})
+    shot = media_input.parse_data_url(request.form.get("image_data", ""))
+    if shot and incident_id:
+        row0 = portal_db.get_incident_row(incident_id) or {}
+        portal_db.add_case_image(row0.get("case_id") or incident_id, project_id, shot[0], shot[1], "with the request: " + text[:150])
+    portal_db.audit(project_id, "user_report_sent", {"chars": len(text), "screenshot": bool(shot)})
     row = portal_db.get_incident_row(incident_id) if incident_id else None
     if row and row.get("case_id"):
         return _redirect(f"/projects/{project_id}?reported=joined#case-{row['case_id']}")
@@ -3613,9 +3622,10 @@ def _case_panel_html(incident: dict, project_id: str, request) -> str:
     parts.append(f"<article class='card report-card'><h2>Reply to the agent</h2><p class='muted'>Answer its question, or tell it what you "
                  "still see (for example <i>“it still does not work on Psalms”</i>). Your reply is added to this case, not a new one, and "
                  "the agent continues right away.</p>"
-                 f"<form method='post' action='/projects/{_escape(project_id)}/incidents/{_escape(incident['id'])}/reply'>"
-                 f"<input type='hidden' name='csrf' value='{csrf}'><textarea name='text' rows='3' maxlength='1000' required></textarea>"
-                 "<button class='button primary' type='submit'>Send reply</button></form></article>")
+                 f"<form method='post' action='/projects/{_escape(project_id)}/incidents/{_escape(incident['id'])}/reply' data-media>"
+                 f"<input type='hidden' name='csrf' value='{csrf}'><textarea name='text' rows='3' maxlength='1000'></textarea>"
+                 + media_input.inputs_html() + "<button class='button primary' type='submit'>Send reply</button></form></article>")
+    parts.insert(0, _case_shots_html(project_id, incident.get("case_id") or incident["id"]))
     return "".join(parts)
 
 
@@ -3790,12 +3800,24 @@ def _page_case_reply(request, project_id, incident_id):
     if not project:
         return _response("<h1>Project not found</h1>", request, "404 Not Found")
     text = " ".join(str(request.form.get("text", "")).split())[:1000]
+    shot = media_input.parse_data_url(request.form.get("image_data", ""))
+    still_broken = request.form.get("still_broken") == "1"
+    if still_broken and len(text) < 2:
+        text = "It is still broken (see my screenshot)." if shot else "It is still broken."
+    if len(text) < 2 and shot:
+        text = "See my screenshot."
     if len(text) < 2:
         return _redirect(f"/projects/{project_id}/incidents/{incident_id}")
     row = portal_db.get_incident_row(incident_id)
     if not row or row.get("project_id") != project_id:
         return _response("<h1>Incident not found</h1>", request, "404 Not Found")
     target = row.get("case_id") or incident_id
+    if shot:
+        portal_db.add_case_image(target, project_id, shot[0], shot[1], ("still broken: " if still_broken else "with a reply: ") + text[:150])
+        text += " [screenshot attached]"
+    if still_broken:
+        text = "STILL BROKEN: " + text
+        _still_broken(target, project_id)
     try:
         from fixengine import store as fx_store
         if text not in fx_store.client_replies(target)[-1:]:          # the same reply twice (double click) counts once
@@ -3820,6 +3842,50 @@ def _page_case_reply(request, project_id, incident_id):
     return _redirect(f"/projects/{project_id}/incidents/{target}?replied=1")
 
 
+
+
+def _still_broken(incident_id: str, project_id: str) -> None:
+    """The owner says the fix did not work. It goes into the project's memory; the second time, a stronger model takes over."""
+    try:
+        from fixengine import orchestrator as fx_orch, store as fx_store
+        bug = fx_store.get_bug_by_incident(incident_id)
+        fx_orch.remember_event(project_id, f"the owner said the fix for case {incident_id[:8]} did NOT work (still broken)")
+        if not bug:
+            return
+        times = int(fx_store.get_flag(f"still_broken:{bug['id']}", "0") or 0) + 1
+        fx_store.set_flag(f"still_broken:{bug['id']}", str(times))
+        if times >= 2:
+            nxt = _next_tier(bug)
+            if nxt:
+                fx_store.set_flag(f"agent_start:{bug['id']}", nxt)
+    except Exception:
+        LOG.exception("could not record 'still broken' for case %s", incident_id)
+
+
+def _page_case_image(request, project_id, incident_id, image_id):
+    gate = _require_access(request)
+    if gate:
+        return gate
+    if not portal_db.get_project(project_id, request.session["user_id"]):
+        return _response("<h1>Not found</h1>", request, "404 Not Found")
+    img = portal_db.get_case_image(image_id, incident_id, project_id)
+    if not img:
+        return _response("<h1>Not found</h1>", request, "404 Not Found")
+    return Response(img["data"], "200 OK", [("Content-Type", img["mime"]), ("Cache-Control", "private, max-age=3600"),
+                                            ("X-Content-Type-Options", "nosniff"), ("Content-Security-Policy", "default-src 'none'")])
+
+
+def _case_shots_html(project_id: str, incident_id: str) -> str:
+    try:
+        shots = portal_db.case_images(incident_id, with_data=False)
+    except Exception:
+        return ""
+    if not shots:
+        return ""
+    items = "".join(f"<a href='/projects/{_escape(project_id)}/incidents/{_escape(incident_id)}/images/{_escape(s['id'])}' target='_blank' "
+                    f"rel='noopener' title='{_escape(s['note'])}'><img src='/projects/{_escape(project_id)}/incidents/{_escape(incident_id)}"
+                    f"/images/{_escape(s['id'])}' alt='{_escape(s['note'])}' loading='lazy'></a>" for s in shots)
+    return f"<article class='card'><h2>Your screenshots</h2><p class='muted'>The engineer sees these with your messages.</p><div class='case-shots'>{items}</div></article>"
 
 
 def _live_gate(request: Request):
@@ -4380,7 +4446,7 @@ def _dispatch(request: Request) -> Response:
     if request.path == "/assets/chat.js":
         return _page_chat_js(request)
     if request.path == "/assets/home.js":
-        return Response(homepage.HOME_JS + theme_motion.MOTION_JS, "200 OK",
+        return Response(homepage.HOME_JS + theme_motion.MOTION_JS + media_input.MEDIA_JS, "200 OK",
                         [("Content-Type", "application/javascript; charset=utf-8"),
                          ("Cache-Control", "public, max-age=300"), ("X-Content-Type-Options", "nosniff")])
     if request.path.startswith("/webhooks/github/"):
@@ -4486,6 +4552,9 @@ def _dispatch(request: Request) -> Response:
     match = re.fullmatch(r"/projects/([0-9a-f-]{36})/(pause-all|auto-start)", request.path)
     if match:
         return _page_project_cases(request, match.group(1), match.group(2))
+    match = re.fullmatch(r"/projects/([0-9a-f-]{36})/incidents/([0-9a-f-]{36})/images/([0-9a-f-]{32,36})", request.path)
+    if match:
+        return _page_case_image(request, *match.groups())
     match = re.fullmatch(r"/projects/([0-9a-f-]{36})/incidents/([0-9a-f-]{36})/reply", request.path)
     if match:
         return _page_case_reply(request, match.group(1), match.group(2))

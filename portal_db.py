@@ -193,6 +193,17 @@ CREATE TABLE IF NOT EXISTS notification_log (
 );
 CREATE INDEX IF NOT EXISTS idx_notification_log_time ON notification_log(created_at);
 
+CREATE TABLE IF NOT EXISTS case_images (
+  id TEXT PRIMARY KEY,
+  incident_id TEXT NOT NULL,
+  project_id TEXT NOT NULL,
+  mime TEXT NOT NULL,
+  data TEXT NOT NULL,
+  note TEXT NOT NULL DEFAULT '',
+  created_at TEXT NOT NULL
+);
+CREATE INDEX IF NOT EXISTS idx_case_images_incident ON case_images(incident_id, created_at);
+
 CREATE TABLE IF NOT EXISTS worker_status (
   name TEXT PRIMARY KEY,
   last_seen TEXT NOT NULL
@@ -998,6 +1009,54 @@ def start_check_window(incident_id: str, seconds: int | None = None) -> str:
     finally:
         conn.close()
     return until
+
+
+CASE_IMAGES_KEPT = 6
+
+
+def add_case_image(incident_id: str, project_id: str, mime: str, data: bytes, note: str = "") -> str:
+    """Keep a screenshot the owner sent with a case (base64 text, works on SQLite and PostgreSQL). Only the newest few are kept."""
+    import base64
+    image_id = _id()
+    conn = get_connection()
+    try:
+        _execute(conn, "INSERT INTO case_images(id,incident_id,project_id,mime,data,note,created_at) VALUES(?,?,?,?,?,?,?)",
+                 (image_id, incident_id, project_id, mime[:40], base64.b64encode(data).decode("ascii"), note[:200], _now()))
+        old = _execute(conn, "SELECT id FROM case_images WHERE incident_id=? ORDER BY created_at DESC", (incident_id,)).fetchall()
+        for row in old[CASE_IMAGES_KEPT:]:
+            _execute(conn, "DELETE FROM case_images WHERE id=?", (row["id"],))
+        conn.commit()
+    finally:
+        conn.close()
+    return image_id
+
+
+def case_images(incident_id: str, limit: int = CASE_IMAGES_KEPT, with_data: bool = True) -> list[dict]:
+    """Newest first: {id, mime, note, created_at[, data (bytes)]}."""
+    import base64
+    conn = get_connection()
+    try:
+        rows = _execute(conn, "SELECT * FROM case_images WHERE incident_id=? ORDER BY created_at DESC LIMIT ?", (incident_id, limit)).fetchall()
+    finally:
+        conn.close()
+    out = []
+    for r in rows:
+        item = {"id": r["id"], "mime": r["mime"], "note": r["note"], "created_at": r["created_at"], "project_id": r["project_id"]}
+        if with_data:
+            item["data"] = base64.b64decode(r["data"])
+        out.append(item)
+    return out
+
+
+def get_case_image(image_id: str, incident_id: str, project_id: str) -> dict | None:
+    import base64
+    conn = get_connection()
+    try:
+        r = _execute(conn, "SELECT * FROM case_images WHERE id=? AND incident_id=? AND project_id=?",
+                     (image_id, incident_id, project_id)).fetchone()
+    finally:
+        conn.close()
+    return {"mime": r["mime"], "data": base64.b64decode(r["data"])} if r else None
 
 
 def set_live_result(incident_id: str, text: str) -> None:

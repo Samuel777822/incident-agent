@@ -4,6 +4,8 @@ from __future__ import annotations
 
 import html
 
+import media_input
+
 FLOW_NODES = [
     ("1", "Connected", "Your repo is private and linked"),
     ("2", "Watching", "Every push, plus a daily visit to your site"),
@@ -35,8 +37,9 @@ def report_card_html(project_id: str, csrf: str) -> str:
             "<i>“Isaiah chapter 1 does not load”</i> or <i>“the Send button does nothing”</i>. The agent opens your live site, looks at "
             "your code, finds the cause, fixes it, tests it, pushes it and then checks your site again. If it truly needs something "
             "from you, it asks one clear question.</p>"
-            f"<form method='post' action='/projects/{pid}/report' data-once><input type='hidden' name='csrf' value='{token}'>"
+            f"<form method='post' action='/projects/{pid}/report' data-once data-media><input type='hidden' name='csrf' value='{token}'>"
             "<textarea name='text' rows='3' maxlength='1500' required placeholder='What is not working, and where?'></textarea>"
+            + media_input.inputs_html() +
             "<div class='field'><label>Page where it happens (optional)</label>"
             "<input name='page' maxlength='300' placeholder='https://your-site.com/isaiah/1 or /isaiah/1'></div>"
             "<button class='button primary' type='submit'>Send to the agent</button></form>"
