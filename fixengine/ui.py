@@ -82,6 +82,8 @@ USAGE_CSS = """<style>
 .use .u-empty{padding:30px;text-align:center;border-radius:18px;border:1px dashed #4a2d60;color:#a99dbb}
 .use .u-choice{padding:20px;border-radius:20px;margin:0 0 18px;border:1px solid #ffc85766;background:linear-gradient(120deg,#2a1f0c,#140b20);box-shadow:0 0 30px #ffc85718}
 .use .u-choice h3{margin:4px 0 8px;color:#fff}.use .u-choice .acts{display:flex;flex-wrap:wrap;gap:8px;margin-top:12px}
+
+.use .u-extra{margin-top:12px!important;padding:10px 14px;border-radius:12px;background:#62e6a412;border:1px solid #62e6a440;color:#d6ffe9;font-size:14.5px;max-width:620px}
 .use .u-msg{padding:12px 16px;border-radius:14px;background:#10261e;border:1px solid #62e6a466;color:#d6ffe9;margin:0 0 16px}
 @media(max-width:860px){.use .u-hero{grid-template-columns:1fr;justify-items:start}.use .u-tiers,.use .u-modes,.use .u-packs{grid-template-columns:1fr}
   .use .u-flow{grid-template-columns:1fr}.use .u-flow div{border-radius:0!important;margin:0 0 -1px}.use .u-flow div:first-child{border-radius:16px 16px 0 0!important}
@@ -111,12 +113,16 @@ def _tier_card(q: dict) -> str:
         return (f"<article class='u-tier' style='--tc:#8f84a3'><div class='top'><div><div class='tag'>Free</div><h3>{label}</h3></div></div>"
                 f"<p>Free, with a fair-use limit. Quality is basic.</p><div class='count'>{E(q['used'])} of {E(q['total'])} used today</div></article>")
     color, tag, blurb = TIER_LOOK.get(q.get("tier"), ("#b06cff", "", ""))
-    left_pct = 100 - _pct(q["used"], q["total"])
-    pack = f"<div class='count'>Plus <strong>{E(q['pack_left'])}</strong> extra tries you bought.</div>" if q.get("pack_total") else ""
+    plan = int(q.get("base") or q.get("total") or 0)                 # the plan's own tries: 30 / 6 / 3
+    extra = max(0, int(q.get("total") or 0) - plan)                  # packs you bought and tries the team added
+    used_plan = min(plan, int(q.get("used") or 0))
+    left_pct = 100 if int(q.get("left") or 0) >= plan else _pct(q.get("left") or 0, plan)
+    pack = (f"<div class='count'><strong>+{extra}</strong> extra {'try' if extra == 1 else 'tries'} on top of your plan "
+            f"(bought or added by the team).</div>") if extra else ""
     paused = "<span class='u-pill'>Busy right now</span>" if q.get("paused") else ""
     return (f"<article class='u-tier' style='--tc:{color}'><div class='top'><div><div class='tag'>{E(tag)}</div><h3>{label}</h3>{paused}</div>"
             f"<div class='u-ring' style='--p:{left_pct}'><span>{E(q['left'])}<small>LEFT</small></span></div></div>"
-            f"<p>{E(blurb)}</p><div class='count'>{E(q['used'])} of {E(q['total'])} tries used this month · <strong>{E(q['left'])} left</strong></div>"
+            f"<p>{E(blurb)}</p><div class='count'>{used_plan} of {plan} tries used this month · <strong>{E(q['left'])} left</strong></div>"
             f"{pack}</article>")
 
 
@@ -137,9 +143,13 @@ def usage_page(view: dict, csrf: str, msg: str = "") -> str:
     panel = [q for q in view["panel"] if q.get("tier") != "groq"]       # the free model no longer fixes
     cards = "".join(_tier_card(q) for q in panel)
     monthly = [q for q in panel if not q.get("daily")]
-    total = sum(int(q.get("total") or 0) for q in monthly)
+    total = sum(int(q.get("base") or q.get("total") or 0) for q in monthly)          # the plan: 30 + 6 + 3 = 39
+    extra_total = max(0, sum(int(q.get("total") or 0) for q in monthly) - total)       # bought packs and added tries
     left = sum(int(q.get("left") or 0) for q in monthly)
-    ring_pct = 0 if total <= 0 else round(100 * left / total)
+    ring_pct = 0 if total <= 0 else min(100, round(100 * left / total))
+    extra_note = (f"<p class='u-extra'>Your plan has <b>{total}</b> tries a month. You also have <b>+{extra_total}</b> extra "
+                  f"{'try' if extra_total == 1 else 'tries'} this month (bought or added by the team), so more can be left than {total}.</p>"
+                  ) if extra_total else ""
     choices = "".join(_choice_card(c, csrf) for c in view["choices"])
     mode = view["mode"]
     tiles = "".join(
@@ -167,8 +177,8 @@ def usage_page(view: dict, csrf: str, msg: str = "") -> str:
                 f"<input type='hidden' name='kind' value='{kind}'><button class='button' type='submit'>{E(text)}</button></form>")
     return (f"{USAGE_CSS}<section class='section use'><p><a href='/dashboard'>← Projects</a></p>{msg_html}"
             f"<div class='u-hero'><div><div class='eyebrow'>Fix usage</div><h1>Your tries this month</h1>"
-            f"<p class='muted'>{E(plans.TRY_DEFINITION)} Tries reset on the 1st and buy attempts, not a guaranteed fix.</p></div>"
-            f"<div class='u-total' style='--p:{ring_pct}'><div><b>{left}</b><small>of {total} tries left</small></div></div></div>"
+            f"<p class='muted'>{E(plans.TRY_DEFINITION)} Tries reset on the 1st and buy attempts, not a guaranteed fix.</p>{extra_note}</div>"
+            f"<div class='u-total' style='--p:{ring_pct}'><div><b>{left}</b><small>{'tries left' if extra_total else f'of {total} tries left'}</small></div></div></div>"
             f"{choices}<div class='u-tiers'>{cards}</div>"
             f"<div class='u-flow'><div><b>Normal first</b>Every case starts with Normal. Most end here.</div>"
             f"<div><b>High if needed</b>Takes over with everything Normal found.</div>"

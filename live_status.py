@@ -196,13 +196,15 @@ def quota_strip(panel: list[dict]) -> str:
     order = {"haiku": 0, "sonnet": 1, "opus": 2}
     cells = []
     for q in sorted((r for r in panel if r.get("tier") in order), key=lambda r: order.get(r.get("tier"), 9)):
-        total = max(1, int(q.get("total") or 0))
+        total = max(1, int(q.get("base") or q.get("total") or 0))        # the plan's own tries; extras are shown separately
         left = max(0, int(q.get("left") if q.get("left") is not None else total - int(q.get("used") or 0)))
         pct = min(100, round(100 * left / total))
         tone = "ok" if pct > 40 else ("warn" if pct > 10 else "bad")
         period = "today" if q.get("daily") else "this month"
         paused = " · paused" if q.get("paused") else ""
-        extra = f" (+{q['pack_left']} bought)" if q.get("pack_left") else ""
+        extra_left = max(0, left - total)
+        extra = f" (+{extra_left} extra)" if extra_left else ""
+        left = min(left, total)
         cells.append(f"<div class='meter {tone}'><div class='meter-top'><b>{e(q.get('label'))}</b>"
                      f"<span>{left} of {total} left{e(extra)}</span></div><div class='meter-bar'><i style='width:{pct}%'></i></div>"
                      f"<small>{period}{e(paused)}</small></div>")

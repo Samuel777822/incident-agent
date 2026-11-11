@@ -32,6 +32,7 @@ import httpx
 import incident_board
 import ui_flow
 import theme
+import theme_motion
 import notifications
 import plans
 import chatbot
@@ -518,6 +519,7 @@ main.wrap{overflow-x:clip}
 """
 CSS += ui_flow.FLOW_CSS
 CSS += theme.THEME_CSS
+CSS += theme_motion.MOTION_CSS
 
 
 
@@ -4343,7 +4345,7 @@ def _dispatch(request: Request) -> Response:
     if request.path == "/assets/chat.js":
         return _page_chat_js(request)
     if request.path == "/assets/home.js":
-        return Response(homepage.HOME_JS, "200 OK",
+        return Response(homepage.HOME_JS + theme_motion.MOTION_JS, "200 OK",
                         [("Content-Type", "application/javascript; charset=utf-8"),
                          ("Cache-Control", "public, max-age=300"), ("X-Content-Type-Options", "nosniff")])
     if request.path.startswith("/webhooks/github/"):
