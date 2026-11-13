@@ -338,6 +338,9 @@ class Engine:
         passes the checks does Sonnet take over (with what Haiku found), then Opus once, after asking the owner. A run that ends with
         steps for the owner or a question stops the case there: no stronger model is paid for it unless the owner asks for one."""
         incident_id, project_id, user_id = claimed["incident_id"], claimed["project_id"], project["user_id"]
+        gate_out = self._diagnose_first(claimed, project, bug, event, root, files, profile, message, traceback_text, commits, ctx)
+        if gate_out:
+            return gate_out
         gh_round = int(store.gh_state(bug["id"]).get("round", 0))
         reason = "the engineer could not find a safe fix"
         unavailable: list[str] = []
@@ -438,6 +441,113 @@ class Engine:
                              f"The agent reached the spending limit for this case (about Rs {spent:.0f}). Keep going?")
         return "awaiting_client"
 
+    # ---- v6: diagnose first ---------------------------------------------------------------------------------------------------
+    # A problem the agent caught by itself (live error, red push check, site audit) is first only DIAGNOSED: what broke, why, and
+    # the fix it proposes. The owner answers on the case card: "Yes, fix it" (quick or proper), "That's not it" (with words,
+    # screenshots, voice), or sends a big job to the founders. The owner's own requests ("Tell the agent") are already approval.
+    # Flags (shared with the web app): diagnosis:{incident}, fix_approved:{incident}, diagnosis_rejected:{incident},
+    # founder_request:{incident}, founder_offer:{incident}, autofix:{project}; approved:{bug} remembers the owner's yes.
+    EST_INR = {"small": (8.0, 0.0), "medium": (17.0, 9.0), "big": (0.0, 0.0)}      # (Engineer, Lead on Pro) for a typical fix
+
+    def _diagnose_cap(self, project, tier: str) -> float:
+        caps = (self.cfg.get("agent") or {}).get("diagnose_max_inr", {"haiku": 6.0, "sonnet": 14.0})
+        cap = float(caps.get(tier, 6.0))
+        bar_left = getattr(self.guard, "bar_left_inr", None)
+        try:
+            left = float(bar_left(project["user_id"], tier)) if bar_left else cap
+        except Exception:
+            left = cap
+        return min(cap, left) if left > 0 else cap
+
+    def _diagnose_first(self, claimed, project, bug, event, root, files, profile, message, traceback_text, commits, ctx) -> str | None:
+        """None when the engineer may go on fixing; otherwise the outcome to return (the case waits for the owner)."""
+        incident_id, project_id, user_id = claimed["incident_id"], claimed["project_id"], project["user_id"]
+        if str(_evidence_of(claimed).get("kind") or "") == "user_report":
+            return None                                   # the owner's own request IS the approval
+        if store.get_flag(f"autofix:{project_id}") == "1" or store.get_flag(f"approved:{bug['id']}"):
+            return None
+        if store.get_flag(f"founder_request:{incident_id}") == "1":
+            reason = "Sent to the founders. They will reply to you by email."
+            store.update_bug(bug["id"], status="needs_human", stop_reason=reason, closed_at=store.now())
+            _stage(incident_id, "needs_human", reason)
+            portal_db.mark_remediation_needs_human(incident_id, project_id, reason)
+            return "needs_human"
+        approved = store.get_flag(f"fix_approved:{incident_id}")
+        if approved:
+            try:
+                style = str(json.loads(approved).get("style") or "proper")
+            except ValueError:
+                style = "proper"
+            store.set_flag(f"approved:{bug['id']}", "quick" if style == "quick" else "proper")
+            store.set_flag(f"fix_approved:{incident_id}", "")
+            return None
+        rnd = int(store.get_flag(f"diagnosis_round:{incident_id}", "0") or 0)
+        if store.get_flag(f"diagnosis_rejected:{incident_id}") == "1":
+            store.set_flag(f"diagnosis_rejected:{incident_id}", "")
+            store.set_flag(f"diagnosis:{incident_id}", "")
+        elif store.get_flag(f"diagnosis:{incident_id}"):
+            store.park_incident(incident_id, project_id, waiting_for_choice=True)     # still waiting for the owner
+            return "awaiting_approval"
+        import plans
+        plan = plans.user_plan(user_id)
+        if rnd >= 2 and plan != "pro":
+            # The owner said "that's not it" twice. Basic has no Lead engineer: stop guessing and offer the founders.
+            store.set_flag(f"founder_offer:{incident_id}", "1")
+            reason = ("The engineer could not pin this down after two tries. You can send it to the founders, or tell the agent more "
+                      "and press Run again.")
+            store.update_bug(bug["id"], status="awaiting_client", stop_reason=reason)
+            _stage(incident_id, "awaiting_approval", reason)
+            store.park_incident(incident_id, project_id, waiting_for_choice=True)
+            return "awaiting_approval"
+        tier = "sonnet" if (plan == "pro" and rnd >= 2) else "haiku"
+        gate = self.guard.check(user_id, tier)
+        if not gate.ok and tier == "sonnet":
+            tier, gate = "haiku", self.guard.check(user_id, "haiku")
+        if not gate.ok:
+            return self._fault_wait(claimed, bug, gate.message, 3600, quiet=True)
+        _stage(incident_id, "diagnosing", "The engineer is finding out what broke and why. Nothing is changed yet.", tier)
+        info = "diagnose:" + prompts.info_hash(tier, str(rnd), str(len(ctx.get("replies") or [])))
+        kind, payload = self._agent_try(claimed, project, bug, tier, False, files, root, profile, message, traceback_text, commits,
+                                        ctx, info, mode="diagnose")
+        if kind == "model_fault":
+            return self._fault_wait(claimed, bug, payload, 300)
+        if kind != "diagnosed":
+            return None                                   # no diagnosis: the engineer works the case as before (it still proves its fix)
+        d = payload
+        if plan == "pro" and tier == "haiku" and str(d.get("confidence")) == "low" and self.guard.check(user_id, "sonnet").ok:
+            kind2, payload2 = self._agent_try(claimed, project, bug, "sonnet", False, files, root, profile, message, traceback_text,
+                                              commits, ctx, info + ":lead", mode="diagnose")
+            if kind2 == "diagnosed":
+                d, tier = payload2, "sonnet"
+        if not d.get("is_code_problem", True):
+            steps = [str(x) for x in (d.get("owner_steps") or []) if str(x).strip()]
+            return self._finish_owner_action(claimed, project, bug, event, {"message": str(d.get("what_broke", "")),
+                                                                            "diagnosis": str(d.get("why", "")), "steps": steps,
+                                                                            "how_to_check": ""})
+        size = str(d.get("size") or "medium")
+        est_eng, est_lead = self.EST_INR.get(size, (17.0, 9.0))
+        if plan != "pro":
+            est_lead = 0.0
+        sizes = plans.bar_sizes(plan)
+        record = {**{k: d.get(k) for k in ("what_broke", "why", "where", "proposed_fix", "size", "is_code_problem", "owner_steps", "confidence")},
+                  "by": tier, "round": rnd + 1, "est_engineer_inr": est_eng, "est_lead_inr": est_lead,
+                  "est_engineer_pct": round(100 * est_eng / sizes["haiku"]) if sizes.get("haiku") else 0,
+                  "est_lead_pct": round(100 * est_lead / sizes["sonnet"]) if sizes.get("sonnet") else 0}
+        store.set_flag(f"diagnosis:{incident_id}", json.dumps(record)[:8000])
+        store.set_flag(f"diagnosis_round:{incident_id}", str(rnd + 1))
+        if size == "big":
+            store.set_flag(f"founder_offer:{incident_id}", "1")
+        store.update_bug(bug["id"], status="awaiting_client")
+        _stage(incident_id, "awaiting_approval", str(d.get("what_broke", ""))[:240])
+        store.park_incident(incident_id, project_id, waiting_for_choice=True)
+        try:
+            notify.user_question(project["user_id"], project["name"], project_id, incident_id,
+                                 "We found a problem: " + str(d.get("what_broke", ""))[:300] + "\nWhy: " + str(d.get("why", ""))[:500]
+                                 + "\nOpen the case to see the fix we propose and press Yes, fix it.")
+        except Exception:
+            log.debug("could not email the diagnosis")
+        return "awaiting_approval"
+
     def _run_cap(self, project, tier: str) -> float | None:
         """v6: one run may spend at most the lower of its own cap and what is left in the owner's bar for this model."""
         acfg = self.cfg.get("agent") or {}
@@ -452,7 +562,8 @@ class Engine:
         except Exception:
             return cap
 
-    def _agent_try(self, claimed, project, bug, tier, pack_try, files, root, profile, message, traceback_text, commits, ctx, info):
+    def _agent_try(self, claimed, project, bug, tier, pack_try, files, root, profile, message, traceback_text, commits, ctx, info,
+                   mode: str = "fix"):
         incident_id, project_id = claimed["incident_id"], claimed["project_id"]
         transport = self._transport(tier)
         model = transport.model
@@ -470,6 +581,20 @@ class Engine:
                         f"What it found: {last['diagnosis'][:1200]}")
         if bug.get("strong_diagnosis"):
             previous += "\nEarlier diagnosis: " + str(bug["strong_diagnosis"])[:1500]
+        approved_style = store.get_flag(f"approved:{bug['id']}")
+        if mode == "fix" and approved_style:
+            try:
+                dg = json.loads(store.get_flag(f"diagnosis:{incident_id}", "") or "{}")
+            except ValueError:
+                dg = {}
+            if dg:
+                previous += ("\nTHE OWNER APPROVED THIS DIAGNOSIS (start from it, but check it):\nWhat broke: " + str(dg.get("what_broke", ""))[:400]
+                             + "\nWhy: " + str(dg.get("why", ""))[:800] + "\nWhere: " + ", ".join(str(x) for x in (dg.get("where") or [])[:8])
+                             + "\nProposed fix: " + str(dg.get("proposed_fix", ""))[:800])
+            previous += ("\nTHE OWNER CHOSE A QUICK FIX: make the smallest correct change; a new test is optional (if you skip it, write "
+                         "'the owner chose a quick fix' in why_no_test). Still run_checks and never finish on red."
+                         if approved_style == "quick" else
+                         "\nTHE OWNER CHOSE A PROPER FIX: write a new test that reproduces the problem first (required), then fix it.")
         gstate = store.gh_state(bug["id"])
         if gstate.get("conflict_note"):
             previous += "\n" + str(gstate["conflict_note"])[:1200]
@@ -516,7 +641,8 @@ class Engine:
                 commits=(lambda path, n: self.gh.commits_list(project, path, n)) if hasattr(self.gh, "commits_list") else None,
                 commit_show=(lambda sha: self.gh.commit_show(project, sha)) if hasattr(self.gh, "commit_show") else None,
                 web_model=(self.cfg.get("openrouter_models") or {}).get("haiku", ""), should_stop=should_stop, on_step=on_step,
-                usd_inr=usd_inr, max_inr=self._run_cap(project, tier))
+                usd_inr=usd_inr, max_inr=self._diagnose_cap(project, tier) if mode == "diagnose" else self._run_cap(project, tier),
+                mode=mode)
             res = eng.run(brief)
         except fx_agent.AgentFault as exc:
             # 11 Nov 2026: a run that failed half way (credit ran out at step 20, an outage, a rejected request) was saved with NO cost,
@@ -550,6 +676,14 @@ class Engine:
             store.set_flag(f"notes:{project_id}", notes[:3000])
         common = dict(tokens_in=res.tokens_in, tokens_out=res.tokens_out, cache_read=res.cache_read, cost_inr=cost, model=model,
                       patch_json=json.dumps(sorted(res.new_files))[:20000])
+        if mode == "diagnose":
+            if res.outcome == "diagnosed":
+                store.finish_attempt(attempt_id, result="diagnosis", diagnosis=str(res.data.get("why", ""))[:500],
+                                     error_summary="diagnosis: " + str(res.data.get("what_broke", ""))[:280], **common)
+                return ("diagnosed", res.data)
+            store.finish_attempt(attempt_id, result="unusable", error_summary="the diagnosis did not finish: "
+                                 + str(res.data.get("reason") or res.outcome)[:250], **common)
+            return ("fail", str(res.data.get("reason") or "the diagnosis did not finish"))
         if res.outcome in ("fixed", "needs_owner", "question"):
             st = store.gh_state(bug["id"])
             if st.pop("wip_files", None) is not None or st.pop("wip_base", None) is not None or st.pop("conflict_note", None):

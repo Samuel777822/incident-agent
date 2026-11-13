@@ -220,6 +220,67 @@ def question_box_html(inc: dict, project_id: str, csrf: str) -> str:
             "<small class='muted'>The agent continues right away with your answer.</small></div></form></div>")
 
 
+def diagnosis_box_html(inc: dict, project_id: str, csrf: str) -> str:
+    """v6 diagnose first: what the engineer found, the fix it proposes and what it will use of the bars, with the owner's buttons.
+    Reads the flags the engine writes (diagnosis:, guide_offer:, founder_offer:). Nothing shows when there is no diagnosis waiting."""
+    if not csrf:
+        return ""
+    import json
+    from fixengine import store as fx_store
+    iid = str(inc.get("id") or "")
+    try:
+        raw = fx_store.get_flag(f"diagnosis:{iid}", "")
+        founder_offer = fx_store.get_flag(f"founder_offer:{iid}", "") == "1"
+        guide_offer = fx_store.get_flag(f"guide_offer:{iid}", "")
+    except Exception:          # the case card must always render, even if the engine's tables are not reachable
+        return ""
+    if not raw and not founder_offer and not guide_offer:
+        return ""
+    try:
+        d = json.loads(raw) if raw else {}
+    except ValueError:
+        d = {}
+    base = f"/projects/{_e(project_id)}/incidents/{_e(iid)}"
+    hidden = (f"<input type='hidden' name='csrf' value='{_e(csrf)}'>"
+              f"<input type='hidden' name='next' value='/projects/{_e(project_id)}#case-{_e(iid)}'>")
+    parts = ["<div class='inc-diagnosis' id='diagnosis-" + _e(iid) + "'><div class='q-head'><span class='q-badge'>Diagnosis</span>"
+             "<small class='muted'>Nothing is changed until you say yes.</small></div>"]
+    if d:
+        where = ", ".join(str(w) for w in (d.get("where") or [])[:6])
+        sure = {"high": "The engineer is sure.", "medium": "The engineer is fairly sure.", "low": "The engineer is not sure yet."}.get(
+            str(d.get("confidence")), "")
+        use = f"This fix will use about {int(d.get('est_engineer_pct') or 0)}% of your Engineer bar"
+        if d.get("est_lead_pct"):
+            use += f" and about {int(d.get('est_lead_pct'))}% of your Lead engineer bar (a review before it goes live)"
+        parts.append(f"<p><b>What broke:</b> {_e(d.get('what_broke', ''))}</p><p><b>Why:</b> {_e(d.get('why', ''))}</p>"
+                     + (f"<p><b>Where:</b> <code>{_e(where)}</code></p>" if where else "")
+                     + f"<p><b>The fix:</b> {_e(d.get('proposed_fix', ''))}</p><p class='muted'>{_e(sure)}</p>")
+        if str(d.get("size")) != "big":
+            parts.append(f"<form method='post' action='{base}/approve' class='diag-yes'>{hidden}"
+                         "<label><input type='radio' name='style' value='proper' checked> <b>Proper fix</b> · with a test that proves it</label>"
+                         "<label><input type='radio' name='style' value='quick'> <b>Quick fix</b> · faster, no new test</label>"
+                         f"<button class='button primary' type='submit'>Yes, fix it</button><small class='muted'>{_e(use)}.</small></form>")
+        parts.append(f"<details class='diag-no'><summary>That's not it</summary>"
+                     f"<form method='post' action='{base}/reply' data-media>{hidden}<input type='hidden' name='rejects_diagnosis' value='1'>"
+                     "<p class='muted'>Tell the agent what you see or what you think is wrong. Add a screenshot or just speak. "
+                     "It looks again with your words.</p>"
+                     "<textarea name='text' rows='3' maxlength='1000' placeholder='What is really happening?'></textarea>"
+                     + media_input.inputs_html() + "<button class='button' type='submit'>Look again</button></form></details>")
+    if guide_offer:
+        try:
+            pct = int(json.loads(guide_offer).get("est_lead_pct") or 0)
+        except ValueError:
+            pct = 0
+        parts.append(f"<form method='post' action='{base}/guide'>{hidden}<p>The engineer tried twice and could not finish. The Lead "
+                     f"engineer can look at both tries and tell it exactly what to change.</p><button class='button primary' type='submit'>"
+                     f"Let the Lead engineer guide it</button><small class='muted'>About {pct}% of your Lead engineer bar.</small></form>")
+    if founder_offer or str(d.get("size")) == "big":
+        parts.append(f"<form method='post' action='{base}/founders'>{hidden}<p>This is a bigger job than an automatic fix. The founders "
+                     "can build it for you (Rs 200 for plan members, tips welcome).</p><button class='button' type='submit'>"
+                     "Send it to the founders</button></form>")
+    return "".join(parts) + "</div>"
+
+
 def still_broken_html(inc: dict, project_id: str, csrf: str) -> str:
     """On a case the agent says it fixed: "Still broken?" with a screenshot and voice. The same case reopens with the agent's
     memory of what it tried; the second time, a stronger model takes over."""
@@ -284,7 +345,8 @@ def render_board(project_id: str, incidents: list, mode: str, csrf: str = "") ->
             f"{guide_html(inc, project_id, csrf, pr_url)}"
             f"<span class='hint'>Show report</span></summary>"
             f"<div class='inc-body'>{_render_report(inc, stage)}<div class='inc-actions'>{''.join(buttons)}</div></div>"
-            f"</details>{question_box_html(inc, project_id, csrf)}{still_broken_html(inc, project_id, csrf)}</article>")
+            f"</details>{diagnosis_box_html(inc, project_id, csrf)}{question_box_html(inc, project_id, csrf)}"
+            f"{still_broken_html(inc, project_id, csrf)}</article>")
     return "".join(cards)
 
 
@@ -320,6 +382,13 @@ _STYLE = """<style>
 .inc-question .q-badge{font-size:12px;font-weight:700;letter-spacing:.12em;text-transform:uppercase;color:#d9c6ff}
 .inc-question .q-text{margin:10px 0 14px;font-size:16px;line-height:1.6;color:#fff;white-space:pre-wrap}
 .inc-question textarea{min-height:96px}
+.inc-diagnosis{margin:0 26px 24px;padding:18px 20px;border-radius:14px;border:1px solid #e3bd7488;background:linear-gradient(160deg,#2a1e0ccc,#140b20e6);box-shadow:0 0 30px #e3bd7422}
+.inc-diagnosis .q-head{display:flex;flex-wrap:wrap;gap:8px 14px;align-items:center}
+.inc-diagnosis .q-badge{font-size:12px;font-weight:700;letter-spacing:.12em;text-transform:uppercase;color:#f0d9a8}
+.inc-diagnosis p{margin:8px 0;line-height:1.6}.inc-diagnosis code{overflow-wrap:anywhere}
+.inc-diagnosis form{display:flex;flex-wrap:wrap;gap:10px 16px;align-items:center;margin:12px 0}
+.inc-diagnosis .diag-yes label{display:flex;gap:8px;align-items:center;flex-basis:100%}
+.inc-diagnosis details.diag-no form{display:block}.inc-diagnosis textarea{min-height:90px;width:100%}
 .inc-question .q-actions{display:flex;flex-wrap:wrap;gap:10px 14px;align-items:center;margin-top:12px}
 .inc-broken{margin:0 26px 22px;border-radius:14px;border:1px solid #ffffff1a;background:#ffffff06}
 .inc-broken>summary{padding:12px 16px;cursor:pointer;font-weight:650;color:#ff9c90;list-style:none}

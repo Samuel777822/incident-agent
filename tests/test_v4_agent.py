@@ -209,6 +209,7 @@ def _engine(tmp_path, monkeypatch, scripts, *, mode="pr"):
     c["warn_at"].update({"haiku": 0, "sonnet": 0, "opus": 0})
     repo = H.make_repo(tmp_path)
     uid, pid = H.make_user_and_project(mode=mode)
+    store.set_flag(f"autofix:{pid}", "1")          # v6: these tests cover the fix path; diagnose-first has its own tests
     transports = {t: FakeTransport(s, model=f"anthropic/claude-{t}-5.5") for t, s in scripts.items()}
     prs = []
     engine = orchestrator.Engine(c, runner=sandbox.LocalUnsafeRunner(c), repo_provider=H.repo_provider(repo), commits_provider=lambda p: "",

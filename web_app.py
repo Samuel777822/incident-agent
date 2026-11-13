@@ -3723,6 +3723,37 @@ def _page_case_action(request, project_id, incident_id, action):
         return _redirect(back + "?case=started#case-" + incident_id)
     from fixengine import store as fx_store
     bug = fx_store.get_bug_by_incident(incident_id)
+    if action == "approve":
+        if not fx_store.get_flag(f"diagnosis:{incident_id}"):
+            return _redirect(back + "#case-" + incident_id)
+        style = "quick" if request.form.get("style") == "quick" else "proper"
+        fx_store.set_flag(f"fix_approved:{incident_id}", json.dumps({"style": style}))
+        if bug:
+            fx_store.update_bug(bug["id"], status="open", closed_at=None, stop_reason="")
+        portal_db.set_live_result(incident_id, "")
+        portal_db.reopen_incident_with_reply(incident_id, project_id, f"Yes, fix it ({'quick fix' if style == 'quick' else 'proper fix with a test'})")
+        return _redirect(back + "?case=approved#case-" + incident_id)
+    if action == "guide":
+        if not fx_store.get_flag(f"guide_offer:{incident_id}"):
+            return _redirect(back + "#case-" + incident_id)
+        fx_store.set_flag(f"guide_approved:{incident_id}", "1")
+        if bug:
+            fx_store.update_bug(bug["id"], status="open", closed_at=None, stop_reason="")
+        portal_db.reopen_incident_with_reply(incident_id, project_id, "Let the Lead engineer guide it")
+        return _redirect(back + "?case=guided#case-" + incident_id)
+    if action == "founders":
+        fx_store.set_flag(f"founder_request:{incident_id}", "1")
+        reason = "Sent to the founders. They will reply to you by email."
+        if bug:
+            fx_store.update_bug(bug["id"], status="needs_human", stop_reason=reason, closed_at=fx_store.now())
+        portal_db.set_incident_stage(incident_id, "needs_human", reason)
+        email = portal_db.get_user_email(request.session["user_id"]) or ""
+        notifications.notify_admins("Founder build request from a case",
+                                    f"{email} asked the founders to handle a case in {project.get('name', '')}.\n"
+                                    f"{_base_url()}/projects/{project_id}/incidents/{incident_id}\n\nReply to them by email. "
+                                    "Plan members: Rs 200, tips welcome.", "founder_request")
+        portal_db.audit(project_id, "founder_request", {"incident_id": incident_id})
+        return _redirect(back + "?case=founders#case-" + incident_id)
     if action == "rerun":
         target = row.get("case_id") or incident_id
         if bug:
@@ -3807,6 +3838,12 @@ def _page_project_cases(request, project_id, action):
     if action == "pause-all":
         n = portal_db.pause_all_incidents(project_id)
         return _redirect(f"/projects/{project_id}?case=paused_all&n={n}")
+    if action == "fix-without-asking":
+        from fixengine import store as fx_store
+        on = request.form.get("autofix") == "on"
+        fx_store.set_flag(f"autofix:{project_id}", "1" if on else "")
+        portal_db.audit(project_id, "autofix_" + ("on" if on else "off"))
+        return _redirect(f"/projects/{project_id}?case={'autofix_on' if on else 'autofix_off'}")
     on = request.form.get("auto_start") == "on"
     portal_db.set_auto_start(project_id, request.session["user_id"], on)
     return _redirect(f"/projects/{project_id}?case={'auto_on' if on else 'auto_off'}")
@@ -3836,6 +3873,11 @@ CASE_FLASH = {
     "rerun": ("green", "Running again with your original request. The agent picks it up in a few seconds and starts from what was already found."),
     "paused_all": ("amber", "All open cases are paused. Start the ones you want the agent to work on."),
     "auto_on": ("green", "Auto-start is on: problems the agent finds by itself are worked on right away."),
+    "approved": ("green", "OK. The engineer is fixing it now and proves the fix before it reaches your branch."),
+    "guided": ("green", "OK. The Lead engineer is looking at both tries and will tell the engineer exactly what to change."),
+    "founders": ("green", "Sent to the founders. They will reply to you by email."),
+    "autofix_on": ("green", "Fix without asking is on: the agent fixes problems it finds without waiting for your OK (it still proves every fix)."),
+    "autofix_off": ("amber", "Fix without asking is off: the agent tells you what broke and waits for Yes, fix it."),
     "auto_off": ("amber", "Auto-start is off: problems the agent finds by itself wait (paused) until you press Start. Your own reports always start."),
     "checking": ("green", "Thanks. The agent checks your live site in about a minute and writes the result on the case."),
     "merged_nosite": ("amber", "Thanks. The agent cannot check your site because its address is not set: add it under Settings below."),
@@ -3885,6 +3927,13 @@ def _page_case_reply(request, project_id, incident_id):
     if still_broken:
         text = "STILL BROKEN: " + text
         _still_broken(target, project_id)
+    if request.form.get("rejects_diagnosis") == "1":
+        # v6: "That's not it" on a diagnosis. The engineer looks again with the owner's words and screenshots.
+        from fixengine import store as fx_store
+        for key in {incident_id, target}:
+            if fx_store.get_flag(f"diagnosis:{key}"):
+                fx_store.set_flag(f"diagnosis_rejected:{key}", "1")
+        text = "THAT'S NOT IT (about the diagnosis): " + text
     try:
         from fixengine import store as fx_store
         if text not in fx_store.client_replies(target)[-1:]:          # the same reply twice (double click) counts once
@@ -4618,13 +4667,13 @@ def _dispatch(request: Request) -> Response:
     match = re.fullmatch(r"/projects/([0-9a-f-]{36})/site-url", request.path)
     if match:
         return _page_site_url(request, match.group(1))
-    match = re.fullmatch(r"/projects/([0-9a-f-]{36})/incidents/([0-9a-f-]{36})/(pause|resume|merged|undo|escalate|keepgoing|rerun)", request.path)
+    match = re.fullmatch(r"/projects/([0-9a-f-]{36})/incidents/([0-9a-f-]{36})/(pause|resume|merged|undo|escalate|keepgoing|rerun|approve|founders|guide)", request.path)
     if match:
         return _page_case_action(request, match.group(1), match.group(2), match.group(3))
     match = re.fullmatch(r"/projects/([0-9a-f-]{36})/host-ready", request.path)
     if match:
         return _page_host_ready(request, match.group(1))
-    match = re.fullmatch(r"/projects/([0-9a-f-]{36})/(pause-all|auto-start)", request.path)
+    match = re.fullmatch(r"/projects/([0-9a-f-]{36})/(pause-all|auto-start|fix-without-asking)", request.path)
     if match:
         return _page_project_cases(request, match.group(1), match.group(2))
     match = re.fullmatch(r"/projects/([0-9a-f-]{36})/incidents/([0-9a-f-]{36})/images/([0-9a-f-]{32,36})", request.path)
@@ -4726,9 +4775,20 @@ def _cases_toolbar(project: dict, request) -> str:
             f"<input type='hidden' name='auto_start' value='{'off' if auto else 'on'}'>"
             f"<button class='button' type='submit'>{'Turn auto-start off' if auto else 'Turn auto-start on'}</button></form>"
             f"<span class='muted cases-note'>Auto-start is <b>{'on' if auto else 'off'}</b>: "
-            + ("problems the agent finds by itself are worked on right away." if auto else
+            + ("problems the agent finds by itself are diagnosed right away." if auto else
                "problems the agent finds by itself wait until you press Start. Your own reports always start.")
-            + "</span></div>")
+            + "</span>" + _autofix_toggle(project, csrf) + "</div>")
+
+
+def _autofix_toggle(project: dict, csrf: str) -> str:
+    """v6: by default the agent diagnoses and waits for "Yes, fix it". This switch lets it fix without asking."""
+    from fixengine import store as fx_store
+    pid = _escape(project["id"])
+    on = fx_store.get_flag(f"autofix:{project['id']}") == "1"
+    return (f"<form method='post' action='/projects/{pid}/fix-without-asking'><input type='hidden' name='csrf' value='{csrf}'>"
+            f"<input type='hidden' name='autofix' value='{'off' if on else 'on'}'>"
+            f"<button class='button' type='submit'>{'Ask me before fixing' if on else 'Fix without asking'}</button></form>"
+            f"<span class='muted cases-note'>{'Fixes without asking (every fix is still proven).' if on else 'Asks you before it fixes anything.'}</span>")
 
 
 def _timeline_html(incident_id: str) -> str:
