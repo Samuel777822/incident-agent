@@ -241,14 +241,24 @@ def test_haiku_fixes_it_and_no_stronger_model_is_paid(tmp_path, monkeypatch):
     assert [s["tool"] for s in store.gh_state(bug["id"])["agent_log"]][:3] == ["read_file", "edit_file", "run_checks"]
 
 
-def test_when_haiku_cannot_finish_sonnet_takes_over_with_what_haiku_found(tmp_path, monkeypatch):
+def test_when_haiku_cannot_finish_the_lead_engineer_guides_it_after_asking(tmp_path, monkeypatch):
+    # v6: the Lead engineer does not redo the work. The owner is asked first; then ONE Sonnet call writes exact instructions
+    # and the Engineer (Haiku) fixes it with them.
     engine, transports, prs, pid = _engine(tmp_path, monkeypatch, {
-        "haiku": [reply(call("give_up", reason="could not find it", findings="the discount maths in pricing.py looks wrong"))],
-        "sonnet": list(FIX)})
-    H.make_incident(pid)
+        "haiku": [reply(call("give_up", reason="could not find it", findings="the discount maths in pricing.py looks wrong"))] + list(FIX),
+        "sonnet": [reply(text="1. In pricing.py, apply_discount divides by 10: change it to / 100.\n2. Test: 10% off 200 is 180.")]})
+    inc = H.make_incident(pid)
+    assert engine.handle_incident(H.claim()) == "awaiting_approval" and not prs
+    offer = json.loads(store.get_flag(f"guide_offer:{inc}"))
+    assert offer["est_lead_pct"] == 16 and "sonnet" not in transports or not transports["sonnet"].calls
+    store.set_flag(f"guide_approved:{inc}", "1")
+    portal_db.reopen_incident_with_reply(inc, pid, "Let the Lead engineer guide it")
     assert engine.handle_incident(H.claim()) == "pr_opened" and "opus" not in transports
-    sonnet_brief = json.dumps(transports["sonnet"].calls[0]["messages"][1]["content"])
-    assert "AN EARLIER RUN ON THIS CASE" in sonnet_brief and "discount maths" in sonnet_brief
+    assert transports["sonnet"].calls[0]["tools"] is None                       # the Lead only writes instructions
+    guided_brief = json.dumps(transports["haiku"].calls[-len(FIX)]["messages"][1]["content"])
+    assert "THE LEAD ENGINEER'S INSTRUCTIONS" in guided_brief and "change it to / 100" in guided_brief
+    bug = store.get_bug_by_incident(inc)
+    assert [a["tier"] for a in store.list_attempts(bug["id"]) if a["result"] == "guide"] == ["sonnet"]
 
 
 def test_not_a_code_problem_ends_with_beginner_steps_and_no_more_models(tmp_path, monkeypatch):
@@ -282,12 +292,11 @@ def test_an_unsafe_fix_is_never_sent_even_if_the_model_insists(tmp_path, monkeyp
            reply(call("finish_fixed", tests_written=[], why_no_test="a static site with no test runner; checked in the browser", impact_checked="callers checked", understanding="explained in plain words", root_cause="explained in plain words", changes_summary="explained in plain words", client_message="explained in plain words", verification=[], owner_steps=[],
                       risk="low", project_notes="")),
            reply(call("give_up", reason="my only idea was a stub", findings=""))]
-    engine, transports, prs, pid = _engine(tmp_path, monkeypatch, {"haiku": bad, "sonnet": list(bad), "opus": [reply(call("give_up", reason="no", findings=""))]})
+    engine, transports, prs, pid = _engine(tmp_path, monkeypatch, {"haiku": bad, "sonnet": list(bad)})
     H.make_incident(pid)
-    assert engine.handle_incident(H.claim()) == "needs_human" and not prs
+    assert engine.handle_incident(H.claim()) == "awaiting_approval" and not prs      # v6: the Lead's help is offered, nothing is sent
 
 
-# ============================================================================================ pause / resume / auto-start / noise
 def test_pause_resume_and_auto_start(fx_db):
     uid, pid = H.make_user_and_project(mode="auto")
     a = H.make_incident(pid, ts="2020-01-01T10:00:00Z")
@@ -493,11 +502,13 @@ def test_the_case_cap_asks_keep_going_instead_of_stopping(tmp_path, monkeypatch)
 def test_an_unavailable_stronger_mode_is_explained_with_the_fix(tmp_path, monkeypatch):
     engine, transports, prs, pid = _engine(tmp_path, monkeypatch, {"haiku": [reply(call("give_up", reason="too big", findings="the forms overlap"))]})
     store.set_flag("pause_sonnet", "1")
-    store.set_flag("pause_opus", "1")
     inc = H.make_incident(pid)
+    assert engine.handle_incident(H.claim()) == "awaiting_approval"
+    store.set_flag(f"guide_approved:{inc}", "1")
+    portal_db.reopen_incident_with_reply(inc, pid, "Let the Lead engineer guide it")
     assert engine.handle_incident(H.claim()) == "needs_human"
     why = store.get_bug_by_incident(inc)["stop_reason"] + store.get_bug_by_incident(inc)["review_report"]
-    assert "Lead engineer mode was not used because an admin paused it" in why and "Mode switches" in why
+    assert "paused by an admin" in why and store.get_flag(f"founder_offer:{inc}") == "1"
 
 
 def test_the_report_box_teaches_how_to_write_a_request():

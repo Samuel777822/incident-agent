@@ -3708,6 +3708,41 @@ def _owned_case(request, project_id, incident_id):
     return (project, row), None
 
 
+def _page_build_request(request):
+    """v6: big jobs go to the founders. A short form that emails the admins (they reply by email with a quote)."""
+    gate = _require_session(request)
+    if gate:
+        return gate
+    sent = ""
+    if request.method == "POST":
+        if not _csrf_valid(request):
+            return _response("<div class='alert'>This form expired. Refresh and try again.</div>", request, "403 Forbidden")
+        what = " ".join(str(request.form.get("what", "")).split())[:2000]
+        kind = "app" if request.form.get("kind") == "app" else "feature"
+        if len(what) < 10:
+            sent = "<div class='alert'>Tell us a little more about what you want built (a sentence or two).</div>"
+        else:
+            email = portal_db.get_user_email(request.session["user_id"]) or ""
+            notifications.notify_admins("Founder build request (" + ("a whole app" if kind == "app" else "a feature or page") + ")",
+                                        f"From: {email}\n\n{what}\n\nPrices: plan members Rs 200 for a feature or page (tips welcome); "
+                                        "a whole app from scratch Rs 2,000 plus Rs 600 a month. Reply to them by email.",
+                                        "founder_request")
+            LOG.info("founder build request (%s, %d chars)", kind, len(what))
+            sent = "<div class='alert ok'>Sent. The founders will reply to you by email, usually within a day.</div>"
+    csrf = _escape(_csrf(request))
+    body = (f"<section class='card form-card'><div class='eyebrow'>Big jobs</div><h1>Ask the founders to build it</h1>{sent}"
+            "<p class='muted'>The agent fixes problems. For something bigger (a new feature, a new page, a whole app) the founders build "
+            "it for you with the same care: <b>Rs 200</b> for a feature or page if you are on a plan (tips welcome), or a <b>whole app "
+            "from scratch for Rs 2,000</b>, then Rs 600 a month and we look after it.</p>"
+            f"<form method='post' action='/build-request'><input type='hidden' name='csrf' value='{csrf}'>"
+            "<div class='field'><label>What should we build?</label><select name='kind'><option value='feature'>A feature or a page in my app"
+            "</option><option value='app'>A whole app from scratch</option></select></div>"
+            "<div class='field'><label>Describe it in your own words</label>"
+            "<textarea name='what' rows='6' maxlength='2000' required placeholder='What it should do, who uses it, any example you like'>"
+            "</textarea></div><button class='button primary' type='submit'>Send to the founders</button></form></section>")
+    return _response(body, request)
+
+
 def _page_case_action(request, project_id, incident_id, action):
     """Pause / Start one case, 'I merged it, check my site', and 'Undo this fix'."""
     owned, err = _owned_case(request, project_id, incident_id)
@@ -4629,6 +4664,8 @@ def _dispatch(request: Request) -> Response:
         return _page_admin_fix(request)
     if request.path in ("/usage", "/usage/mode", "/usage/choice", "/usage/more", "/usage/retry"):
         return _page_usage(request)
+    if request.path == "/build-request":
+        return _page_build_request(request)
     if request.path == "/admin":
         return _page_admin(request)
     if request.path == "/dashboard":
