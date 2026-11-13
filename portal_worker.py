@@ -252,15 +252,80 @@ def monitor_sweep() -> int:
     return sent
 
 
-def process_one() -> bool:
-    incident = portal_db.claim_next_incident(
+def _lease_seconds() -> int:
+    """How long a claimed case belongs to this worker before another thread may take it over. Short (20 minutes), so a case
+    whose worker died (a deploy, a crash) comes back quickly; while a case is really being worked on the lease is renewed
+    (the engine on every step, and _keep_lease every 5 minutes), so it is never taken twice."""
+    raw = os.getenv("WORKER_LEASE_SECONDS", "").strip()
+    return int(raw) if raw.isdigit() and int(raw) > 0 else 1200
+
+
+def _claim():
+    return portal_db.claim_next_incident(
         min_occurrences=int(os.getenv("WORKER_MIN_OCCURRENCES", "1")),
         min_age_seconds=int(os.getenv("WORKER_MIN_AGE_SECONDS", "30")),
-        lease_seconds=int(os.getenv("WORKER_LEASE_SECONDS", "600")),
+        lease_seconds=_lease_seconds(),
         max_attempts=int(os.getenv("WORKER_MAX_ATTEMPTS", "3")),
     )
+
+
+def case_threads() -> int:
+    raw = os.getenv("WORKER_CASE_THREADS", "4").strip()
+    return max(1, min(16, int(raw))) if raw.isdigit() else 4
+
+
+_POOL = None
+_ACTIVE: set = set()
+
+
+def dispatch_cases() -> bool:
+    """v6: work on up to WORKER_CASE_THREADS cases at the same time (a hackathon deadline no longer queues for hours). Cases are
+    claimed here, one by one with a lease, and worked on in threads; the engine keeps no per-case state, every DB call opens its
+    own connection."""
+    global _POOL, _ACTIVE
+    from concurrent.futures import ThreadPoolExecutor
+    n = case_threads()
+    if _POOL is None:
+        _engine()                                  # build the engine once, before any thread uses it
+        _POOL = ThreadPoolExecutor(max_workers=n, thread_name_prefix="case")
+    _ACTIVE = {f for f in _ACTIVE if not f.done()}
+    started = False
+    while len(_ACTIVE) < n:
+        incident = _claim()
+        if not incident:
+            break
+        _ACTIVE.add(_POOL.submit(_process_claimed_safely, incident))
+        started = True
+    return started
+
+
+def _process_claimed_safely(incident) -> None:
+    import threading
+    done = threading.Event()
+
+    def keep_lease():
+        while not done.wait(300):
+            try:
+                portal_db.extend_lease(incident["incident_id"], _lease_seconds())
+            except Exception:
+                LOG.debug("could not renew the lease of %s", incident.get("incident_id"))
+    threading.Thread(target=keep_lease, name="lease", daemon=True).start()
+    try:
+        _process_claimed(incident)
+    except Exception:
+        LOG.exception("Case %s crashed in its worker thread", incident.get("incident_id"))
+    finally:
+        done.set()
+
+
+def process_one() -> bool:
+    incident = _claim()
     if not incident:
         return False
+    return _process_claimed(incident)
+
+
+def _process_claimed(incident) -> bool:
     incident_id = incident["incident_id"]
     project_id = incident["project_id"]
     event = incident.get("first_event")
@@ -356,7 +421,7 @@ def main() -> None:
         except Exception:
             LOG.exception("Push check failed")
         try:
-            worked = process_one() or worked
+            worked = (dispatch_cases() if case_threads() > 1 else process_one()) or worked
         except Exception:
             LOG.exception("Worker loop failed")
         try:
