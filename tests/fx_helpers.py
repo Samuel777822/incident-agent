@@ -54,6 +54,9 @@ def make_user_and_project(email="dev@example.com", mode="pr"):
     conn = portal_db.get_connection()
     try:
         portal_db._execute(conn, "UPDATE projects SET active_until='2099-01-01T00:00:00+00:00' WHERE id=?", (project_id,))
+        # v6: the engine spends from the owner's usage bars, so the test owner is on Pro (Engineer + Lead engineer bars).
+        portal_db._execute(conn, """INSERT INTO subscriptions(user_id,active_until,grant_type,granted_by,updated_at,plan)
+            VALUES(?,?,?,?,?,?)""", (user_id, "2099-01-01T00:00:00+00:00", "paid", "test", "2026-01-01T00:00:00+00:00", "pro"))
         conn.commit()
     finally:
         conn.close()

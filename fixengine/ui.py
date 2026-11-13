@@ -22,7 +22,7 @@ MODE_HELP = {
 }
 STATUS_TEXT = {
     "open": "Working on it", "awaiting_choice": "Waiting for your decision", "pr_opened": "Fix proposed",
-    "needs_human": "Needs a human", "failed": "Stopped", "resolved": "Already fixed (no tries used)",
+    "needs_human": "Needs a human", "failed": "Stopped", "resolved": "Already fixed (nothing used)",
 }
 
 
@@ -138,18 +138,42 @@ def _choice_card(c: dict, csrf: str) -> str:
             f"{btn('higher', 'Use a higher mode')}{btn('review', 'Send to human review')}</div></article>")
 
 
+def _next_reset() -> str:
+    from datetime import datetime, timezone
+    now = datetime.now(timezone.utc)
+    year, month = (now.year + 1, 1) if now.month == 12 else (now.year, now.month + 1)
+    return datetime(year, month, 1).strftime("1 %b")
+
+
+def _bar_card(b: dict, plan: str) -> str:
+    """One usage bar (v6). Shown as a percentage and in plain units; rupees of AI are never shown to customers."""
+    lead = b["tier"] == "sonnet"
+    color = "#b06cff" if lead else "#62e6a4"
+    what = ("Reviews medium fixes and guides the Engineer when it gets stuck. It always asks you before it starts."
+            if lead else "Diagnoses every problem and writes the fixes. Most cases end here.")
+    if b["total"] <= 0:
+        return (f"<article class='u-tier u-locked' style='--tc:#8f84a3'><div class='top'><div><div class='tag'>Pro</div><h3>{E(b['name'])}</h3></div>"
+                f"<div class='u-ring' style='--p:0'><span>🔒<small>PRO</small></span></div></div><p>{E(what)}</p>"
+                f"<div class='count'>Part of Pro (₹{plans.PLAN_PRICES['pro']} a month).</div>"
+                f"<div class='row'><a class='button' href='/billing'>See Pro</a></div></article>")
+    unit = "review" if lead else "small fix"
+    left_n = int(b.get("small_fixes_left") or 0)
+    topup = "topup_lead" if lead else "topup_engineer"
+    return (f"<article class='u-tier' style='--tc:{color}'><div class='top'><div><div class='tag'>{'Lead' if lead else 'Engineer'}</div>"
+            f"<h3>{E(b['name'])}</h3></div><div class='u-ring' style='--p:{int(b['pct_left'])}'><span>{int(b['pct_left'])}%<small>LEFT</small></span></div></div>"
+            f"<p>{E(what)}</p><div class='count'><strong>≈ {left_n} {unit}{'' if left_n == 1 else ('s' if unit == 'review' else 'es')} left</strong>"
+            f" · refills on {_next_reset()}</div>"
+            f"<div class='row'><a class='button' href='/billing/pay?plan={topup}'>Top up · ₹{plans.TOPUP_PRICE}</a></div></article>")
+
+
 def usage_page(view: dict, csrf: str, msg: str = "") -> str:
+    """v6: the Usage page shows the plan's usage bars (Engineer; Lead engineer on Pro) instead of tries."""
     msg_html = f"<div class='u-msg'>{E(msg)}</div>" if msg else ""
-    panel = [q for q in view["panel"] if q.get("tier") != "groq"]       # the free model no longer fixes
-    cards = "".join(_tier_card(q) for q in panel)
-    monthly = [q for q in panel if not q.get("daily")]
-    total = sum(int(q.get("base") or q.get("total") or 0) for q in monthly)          # the plan: 30 + 6 + 3 = 39
-    extra_total = max(0, sum(int(q.get("total") or 0) for q in monthly) - total)       # bought packs and added tries
-    left = sum(int(q.get("left") or 0) for q in monthly)
-    ring_pct = 0 if total <= 0 else min(100, round(100 * left / total))
-    extra_note = (f"<p class='u-extra'>Your plan has <b>{total}</b> tries a month. You also have <b>+{extra_total}</b> extra "
-                  f"{'try' if extra_total == 1 else 'tries'} this month (bought or added by the team), so more can be left than {total}.</p>"
-                  ) if extra_total else ""
+    plan = view.get("plan") or "none"
+    bars = view.get("bars") or []
+    engineer = bars[0] if bars else {"pct_left": 0, "small_fixes_left": 0}
+    plan_name = {"pro": "Pro", "basic": "Basic", "trial": "Trial", "none": "No active plan"}.get(plan, plan)
+    cards = "".join(_bar_card(b, plan) for b in bars)
     choices = "".join(_choice_card(c, csrf) for c in view["choices"])
     mode = view["mode"]
     tiles = "".join(
@@ -165,43 +189,31 @@ def usage_page(view: dict, csrf: str, msg: str = "") -> str:
                       f"<input type='hidden' name='bug_id' value='{E(b['id'])}'><button class='button' type='submit'>Try again</button></form>")
             extra = f"<details><summary>Review report</summary><pre>{E(b['review_report'])}</pre></details>"
         color = CASE_COLOR.get(b["status"], "#8f84a3")
-        tries = b.get("tries") or 0
         rows.append(f"<div class='u-case' style='--sc:{color}'><span class='dot'></span><b>{E(b['project_name'])}</b>"
-                    f"<span class='st'>{E(STATUS_TEXT.get(b['status'], b['status']))}</span>"
-                    f"<span class='n'>{E(tries)} {'try' if str(tries) == '1' else 'tries'} {action}</span>{extra}</div>")
+                    f"<span class='st'>{E(STATUS_TEXT.get(b['status'], b['status']))}</span><span class='n'>{action}</span>{extra}</div>")
     cases = f"<div class='u-cases'>{''.join(rows)}</div>" if rows else \
-        "<div class='u-empty'>🌙 No bugs worked on yet. When something breaks, it shows up here.</div>"
-
-    def more(kind, text):
-        return (f"<form method='post' action='/usage/more' style='display:inline'><input type='hidden' name='csrf' value='{E(csrf)}'>"
-                f"<input type='hidden' name='kind' value='{kind}'><button class='button' type='submit'>{E(text)}</button></form>")
+        "<div class='u-empty'>🌙 No problems worked on yet. When something breaks, it shows up here.</div>"
+    upgrade = ("" if plan == "pro" else
+               f"<p class='muted'>Want the Lead engineer too? <a href='/billing'>Pro is ₹{plans.PLAN_PRICES['pro']} a month</a>.</p>")
     return (f"{USAGE_CSS}<section class='section use'><p><a href='/dashboard'>← Projects</a></p>{msg_html}"
-            f"<div class='u-hero'><div><div class='eyebrow'>Fix usage</div><h1>Your tries this month</h1>"
-            f"<p class='muted'>{E(plans.TRY_DEFINITION)} Tries reset on the 1st and buy attempts, not a guaranteed fix.</p>{extra_note}</div>"
-            f"<div class='u-total' style='--p:{ring_pct}'><div><b>{left}</b><small>{'tries left' if extra_total else f'of {total} tries left'}</small></div></div></div>"
+            f"<div class='u-hero'><div><div class='eyebrow'>Your plan · {E(plan_name)}</div><h1>Your AI this month</h1>"
+            f"<p class='muted'>{E(plans.BAR_DEFINITION)}</p>{upgrade}</div>"
+            f"<div class='u-total' style='--p:{int(engineer.get('pct_left') or 0)}'><div><b>{int(engineer.get('pct_left') or 0)}%</b>"
+            f"<small>Engineer left</small></div></div></div>"
             f"{choices}<div class='u-tiers'>{cards}</div>"
-            f"<div class='u-flow'><div><b>Normal first</b>Every case starts with Normal. Most end here.</div>"
-            f"<div><b>High if needed</b>Takes over with everything Normal found.</div>"
-            f"<div><b>Extra after asking</b>Only with your OK, for the hardest cases.</div>"
-            f"<div><b>Free checks</b>Checking a push never uses a try.</div></div>"
-            f"<details class='u-help'><summary>How the agent uses your tries</summary>"
+            f"<div class='u-flow'><div><b>1. Diagnose</b>The Engineer finds what broke and tells you why.</div>"
+            f"<div><b>2. You decide</b>Nothing is changed until you press Yes, fix it.</div>"
+            f"<div><b>3. Fix and prove</b>Tested before it reaches your branch.</div>"
+            f"<div><b>Free checks</b>Checking a push never uses your bars.</div></div>"
+            f"<details class='u-help'><summary>How the bars work</summary>"
             f"<p class='muted'>{E(plans.MODE_SUMMARY)}</p><p class='muted'>{E(plans.WHY_STRONGER)}</p>"
-            f"<p class='muted'>{E(plans.FAILED_FIX)}</p><p class='muted'>{E(plans.HUMAN_NEEDED)}</p>"
-            f"<p><a href='/how-it-works#router'>See how the agent chooses an AI →</a></p></details>"
+            f"<p class='muted'>{E(plans.FAILED_FIX)}</p><p class='muted'>{E(plans.HUMAN_NEEDED)}</p></details>"
             f"<h2 class='u-h2'><span>🎛</span>How should the agent behave?</h2>"
             f"<form method='post' action='/usage/mode'><input type='hidden' name='csrf' value='{E(csrf)}'>"
             f"<div class='u-modes'>{tiles}</div><button class='button primary' type='submit'>Save</button></form>"
-            f"<h2 class='u-h2'><span>➕</span>Need more tries?</h2><p class='muted'>Buy a pack (added to this month), or ask and we will review it.</p>"
-            f"<div class='u-packs'><article class='u-pack' style='--tc:#62e6a4'><div class='big'>{plans.PACK_NORMAL_TRIES}<small>Normal</small></div><div>"
-            f"<h3>{plans.PACK_NORMAL_TRIES} Normal tries · ₹{plans.PACK_NORMAL_PRICE}</h3><p>The everyday engineer that fixes most bugs.</p><div class='row'>"
-            f"<a class='button primary' href='/billing/pay?plan=pack_normal'>Buy {plans.PACK_NORMAL_TRIES} Normal tries · ₹{plans.PACK_NORMAL_PRICE}</a></div></div></article>"
-            f"<article class='u-pack' style='--tc:#b06cff'><div class='big'>5<small>High</small></div><div>"
-            f"<h3>5 High tries · ₹100</h3><p>For bugs that need deeper analysis.</p><div class='row'>"
-            f"<a class='button primary' href='/billing/pay?plan=pack_high'>Buy 5 High tries · ₹100</a>{more('high', 'Ask for more High tries')}</div></div></article>"
-            f"<article class='u-pack' style='--tc:#ff4f6a'><div class='big'>3<small>Extra</small></div><div>"
-            f"<h3>3 Extra tries · ₹100</h3><p>The strongest engineer, for the hardest cases.</p><div class='row'>"
-            f"<a class='button primary' href='/billing/pay?plan=pack_extra'>Buy 3 Extra tries · ₹100</a>{more('extra', 'Ask for more Extra tries')}</div></div></article></div>"
-            f"<h2 class='u-h2'><span>🧾</span>Recent bugs</h2>{cases}</section>")
+            f"<h2 class='u-h2'><span>➕</span>Need more?</h2><p class='muted'>{E(plans.topup_sentence())} "
+            f"Bigger jobs (a new feature, a whole page): <a href='/build-request'>ask the founders</a>.</p>"
+            f"<h2 class='u-h2'><span>🧾</span>Recent problems</h2>{cases}</section>")
 
 
 ADMIN_CSS = """<style>

@@ -33,8 +33,10 @@ A. Push guard (new, recommended): when you connect a repository we add a GitHub 
 B. Live error watch (classic): a tiny client in the running app reports crashes; the same fix pipeline takes over.
 The fix pipeline: an AI engineer (Claude) works on a real copy of the code with tools: it reads the whole code base, its git history
 and its memory of earlier cases on that project, writes a test that shows the problem, fixes it, runs the build and tests in the
-sandbox (it may not finish while anything is red) and reviews its own change. Normal mode works every case first (a few rupees);
-High takes over only if Normal cannot finish; Extra only after asking the owner. Safety rules reject harmful changes, and our own
+sandbox (it may not finish while anything is red) and reviews its own change. When it catches an error by itself it first only
+DIAGNOSES (what broke, why, the fix it would make) and asks the owner "Fix it?"; nothing changes until they say yes (they can also
+turn on "Fix without asking"). The Engineer (Claude Haiku) does the work; on Pro the Lead engineer (Claude Sonnet) checks medium
+fixes and guides the Engineer when it gets stuck, after asking. Safety rules reject harmful changes, and our own
 sandbox re-checks the final change. Before a fix goes live it is tested again on GitHub, and when it changes what people see, a real
 Chrome on GitHub opens the pages at phone and desktop size and the screenshots are checked against the problem.
 The owner's newer edits are never overwritten: the fix is merged line by line onto their latest code (if they changed the same
@@ -55,9 +57,10 @@ The dashboard shows live what the agent is doing (downloading, testing in the sa
 which mode is working and how many tries are left.
 
 HOW THE AGENT CHOOSES AN AI (explain it in plain words first):
-Every case starts with the Normal engineer (Claude Haiku), which costs a few rupees per run. If it fixes the problem, writes steps for
-the owner or asks a question, the case stops there. Only if it cannot finish does High (Claude Sonnet) take over, starting from what
-Normal found; Extra (Claude Opus) is used last and only after asking the owner. There is no free model in fixing. On a "needs you"
+Every case starts with the Engineer (Claude Haiku), which costs a few rupees per run. If it fixes the problem, writes steps for the
+owner or asks a question, the case stops there. On Pro, the Lead engineer (Claude Sonnet) checks medium fixes and, if the Engineer
+fails twice, writes it exact instructions; it always asks first and shows how much of the Lead bar it will use. Opus is not used.
+Very big jobs (a new feature, a whole page) are offered to the founders instead. There is no free model in fixing. On a "needs you"
 case the owner can press "Not right? Let a stronger AI look". A case that reaches its spending limit asks the owner "Keep going?".
 
 DEFINITIONS (use exactly these meanings):
@@ -69,12 +72,14 @@ DEFINITIONS (use exactly these meanings):
 
 PRICING & PLANS:
 - Free Trial: 1 day of full access upon admin approval.
-- Paid Monthly: @@MONTHLY@@ for 30 days. Paid Yearly: @@YEARLY@@ for 365 days (about @@YEARLY_PM@@ a month, saves @@SAVING@@).
-- Every plan includes, every month: 30 Normal tries, 6 High tries and 3 Extra tries (exact: @@QUOTAS@@).
-  Quotas reset monthly and do not roll over. Technical faults on our side never count as a try.
+- Basic: @@MONTHLY@@ for 30 days, or @@YEARLY@@ for 365 days (about @@YEARLY_PM@@ a month, saves @@SAVING@@).
+- Pro: @@PRO@@ for 30 days.
+- Usage bars instead of tries: @@QUOTAS@@. Bars are shown as a percentage and refill on the 1st; they do not roll over.
+  Technical faults on our side are never charged. Push checks are free.
 - Projects: @@PROJECTS@@.
-- Add-ons: @@PACK_NORMAL_PRICE@@ adds @@PACK_NORMAL@@ Normal tries; a @@PACK@@ pack adds @@PACK_HIGH@@ High or @@PACK_EXTRA@@ Extra tries (all for the current month); an extra project is @@SLOT@@ once.
-- We sell attempts to fix a bug, not guaranteed fixes.
+- Add-ons: @@TOPUP@@ An extra project is @@SLOT@@ once.
+- Big jobs: the founders build them (Rs 200 for plan members, tips welcome); a whole app from scratch is Rs 2,000 plus Rs 600 a month.
+- We sell the engineer's time on your problems, not guaranteed fixes.
 - Payment: UPI QR (Paytm, Google Pay, PhonePe) with the 12-digit UTR, confirmed by an admin within 1 to 2 hours.
 
 HELP:
@@ -92,11 +97,8 @@ DAEMON_KNOWLEDGE = (DAEMON_KNOWLEDGE
     .replace("@@YEARLY_PM@@", f"₹{plans.YEARLY_PER_MONTH:,}")
     .replace("@@SAVING@@", f"₹{plans.YEARLY_SAVING:,}")
     .replace("@@QUOTAS@@", plans.quota_sentence())
-    .replace("@@PACK_NORMAL_PRICE@@", f"₹{plans.PACK_NORMAL_PRICE}")
-    .replace("@@PACK_NORMAL@@", str(plans.PACK_NORMAL_TRIES))
-    .replace("@@PACK@@", f"₹{plans.PACK_PRICE}")
-    .replace("@@PACK_HIGH@@", str(plans.PACK_HIGH_TRIES))
-    .replace("@@PACK_EXTRA@@", str(plans.PACK_EXTRA_TRIES))
+    .replace("@@PRO@@", f"₹{plans.PLAN_PRICES['pro']:,}")
+    .replace("@@TOPUP@@", plans.topup_sentence())
     .replace("@@PROJECTS@@", plans.projects_sentence())
     .replace("@@TRY@@", plans.TRY_DEFINITION).replace("@@MODES@@", plans.MODE_SUMMARY).replace("@@WHY@@", plans.WHY_STRONGER)
     .replace("@@FAIL@@", plans.FAILED_FIX).replace("@@HUMAN@@", plans.HUMAN_NEEDED)

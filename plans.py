@@ -15,10 +15,55 @@ def _price(env_name: str, default: int) -> int:
     return int(raw) if raw.isdigit() and int(raw) > 0 else default
 
 
-PLAN_PRICES = {"monthly": _price("PLAN_PRICE_MONTHLY_INR", 200),     # plan 1 and 5.6: Rs 200 a month,
-               "yearly": _price("PLAN_PRICE_YEARLY_INR", 1500)}      # about Rs 1,500 a year
-PLAN_DAYS = {"monthly": 30, "yearly": 365}
-PLAN_LABELS = {"monthly": "Monthly", "yearly": "Yearly"}
+PLAN_PRICES = {"monthly": _price("PLAN_PRICE_MONTHLY_INR", 200),     # Basic: Rs 200 a month
+               "yearly": _price("PLAN_PRICE_YEARLY_INR", 1500),      # Basic for a year
+               "pro": _price("PLAN_PRICE_PRO_INR", 500)}             # v6: Pro, Rs 500 a month
+PLAN_DAYS = {"monthly": 30, "yearly": 365, "pro": 30}
+PLAN_LABELS = {"monthly": "Basic", "yearly": "Basic (yearly)", "pro": "Pro"}
+PLAN_OF_PRODUCT = {"monthly": "basic", "yearly": "basic", "pro": "pro"}
+
+# ---- v6 (13 Nov 2026): usage bars instead of tries -------------------------------------------------------------------------
+# A bar is rupees of AI per calendar month, shown to the customer as a percentage. The Engineer is Claude Haiku, the Lead engineer
+# Claude Sonnet. Bars are 59% of the price, so even a customer who empties every bar leaves about 40% after OpenRouter's fee and the
+# payment fee (see JOURNEY-AND-PLANS.md section 4). Nothing is ever paused automatically: an empty bar only stops new AI work for
+# that customer until a top-up or the next month.
+BARS = {"none": {"haiku": 0, "sonnet": 0},
+        "trial": {"haiku": 15, "sonnet": 0},
+        "basic": {"haiku": 118, "sonnet": 0},
+        "pro": {"haiku": 230, "sonnet": 64}}
+BAR_NAMES = {"haiku": "Engineer", "sonnet": "Lead engineer"}
+SMALL_FIX_INR = {"haiku": 8, "sonnet": 9}          # what one typical small fix (Engineer) or one review (Lead) costs
+TOPUP_PRICE = _price("TOPUP_PRICE_INR", 99)
+TOPUP_INR = 58                                     # rupees of AI a Rs 99 top-up adds to one bar
+TOPUP_TIERS = {"topup_engineer": "haiku", "topup_lead": "sonnet"}
+# Value of tries granted before v6 (packs, admin grants), counted as bar rupees so nobody loses what they paid for.
+LEGACY_TRY_INR = {"haiku": 0.9, "sonnet": 11.6, "opus": 19.3}
+
+
+def user_plan(user_id: str) -> str:
+    """'trial' | 'basic' | 'pro' | 'none' (no active access)."""
+    try:
+        import portal_db
+        row = portal_db.get_subscription(user_id)
+    except Exception:
+        return "none"
+    if not row:
+        return "none"
+    from datetime import datetime, timezone
+    try:
+        until = datetime.fromisoformat(str(row["active_until"]))
+        until = until if until.tzinfo else until.replace(tzinfo=timezone.utc)
+        if until <= datetime.now(timezone.utc):
+            return "none"
+    except (TypeError, ValueError):
+        return "none"
+    if row.get("grant_type") == "trial":
+        return "trial"
+    return "pro" if row.get("plan") == "pro" else "basic"
+
+
+def bar_sizes(plan: str) -> dict:
+    return dict(BARS.get(plan, BARS["none"]))
 PACK_PRICE = 100                                    # plan 5.7: Rs 100 = 5 High tries or 3 Extra tries
 PACK_HIGH_TRIES, PACK_EXTRA_TRIES = 5, 3
 PACK_NORMAL_PRICE = _price("PACK_NORMAL_PRICE_INR", 30)  # Rs 30 = 20 more Normal tries this month
@@ -34,20 +79,29 @@ PROJECT_SLOT_PRICE = _price("PROJECT_SLOT_PRICE_INR", 30)
 
 # Everything a customer can pay for with the manual UPI flow. "days" > 0 means it grants plan access.
 PRODUCTS = {
-    "monthly": {"label": "Monthly plan", "rupees": PLAN_PRICES["monthly"], "days": 30},
-    "yearly": {"label": "Yearly plan", "rupees": PLAN_PRICES["yearly"], "days": 365},
+    "monthly": {"label": "Basic plan", "rupees": PLAN_PRICES["monthly"], "days": 30},
+    "yearly": {"label": "Basic plan (yearly)", "rupees": PLAN_PRICES["yearly"], "days": 365},
+    "pro": {"label": "Pro plan", "rupees": PLAN_PRICES["pro"], "days": 30},
     "project_slot": {"label": "Extra project", "rupees": PROJECT_SLOT_PRICE, "days": 0},
-    "pack_normal": {"label": f"{PACK_NORMAL_TRIES} Normal tries", "rupees": PACK_NORMAL_PRICE, "days": 0},
-    "pack_high": {"label": f"{PACK_HIGH_TRIES} High tries", "rupees": PACK_PRICE, "days": 0},
-    "pack_extra": {"label": f"{PACK_EXTRA_TRIES} Extra tries", "rupees": PACK_PRICE, "days": 0},
+    "topup_engineer": {"label": "Engineer top-up", "rupees": TOPUP_PRICE, "days": 0},
+    "topup_lead": {"label": "Lead engineer top-up", "rupees": TOPUP_PRICE, "days": 0},
 }
-ADDON_PRODUCTS = ("project_slot", "pack_normal", "pack_high", "pack_extra")
+ADDON_PRODUCTS = ("project_slot", "topup_engineer", "topup_lead")
+# Packs sold before v6. Not for sale any more; a payment submitted for one before the change can still be approved.
+LEGACY_PRODUCTS = {
+    "pack_normal": {"label": f"{PACK_NORMAL_TRIES} Normal tries (old pack)", "rupees": PACK_NORMAL_PRICE, "days": 0},
+    "pack_high": {"label": f"{PACK_HIGH_TRIES} High tries (old pack)", "rupees": PACK_PRICE, "days": 0},
+    "pack_extra": {"label": f"{PACK_EXTRA_TRIES} Extra tries (old pack)", "rupees": PACK_PRICE, "days": 0},
+}
 
 
 def product_grant_text(product: str) -> str:
     """What the admin's 'I received' button grants, in words."""
-    return {"monthly": "grant 30 days", "yearly": "grant 365 days", "project_slot": "add 1 project slot",
-            "pack_normal": f"add {PACK_NORMAL_TRIES} Normal tries", "pack_high": f"add {PACK_HIGH_TRIES} High tries", "pack_extra": f"add {PACK_EXTRA_TRIES} Extra tries"}.get(product, "grant")
+    return {"monthly": "grant Basic for 30 days", "yearly": "grant Basic for 365 days", "pro": "grant Pro for 30 days",
+            "project_slot": "add 1 project slot", "topup_engineer": f"add Rs {TOPUP_INR} to the Engineer bar",
+            "topup_lead": f"add Rs {TOPUP_INR} to the Lead engineer bar",
+            "pack_normal": "old pack: add its value to the Engineer bar", "pack_high": "old pack: add its value to the Lead bar",
+            "pack_extra": "old pack: add its value to the Lead bar"}.get(product, "grant")
 
 # Prices before the plan-v2 change. Accepted ONLY when an admin approves a payment that the customer
 # submitted at the old price, so nobody who already paid is stranded. New payments never use these.
@@ -60,7 +114,7 @@ YEARLY_SAVING = PLAN_PRICES["monthly"] * 12 - PLAN_PRICES["yearly"]       # Rs 9
 def valid_amount(plan: str, amount) -> bool:
     """True when `amount` (whole rupees) is the current price of `plan` (a plan or an add-on product)."""
     try:
-        return (PRODUCTS.get(plan) or {}).get("rupees") == int(amount)
+        return (PRODUCTS.get(plan) or LEGACY_PRODUCTS.get(plan) or {}).get("rupees") == int(amount)
     except (TypeError, ValueError):
         return False
 
@@ -73,52 +127,61 @@ def valid_amount_or_legacy(plan: str, amount) -> bool:
 
 
 def quotas() -> dict:
-    """Monthly tries per mode, read from the engine configuration (plan 5.4) so the text follows the config."""
-    try:
-        from fixengine import config as fx_config
-        q = fx_config.load().get("quotas", {})
-        return {"normal": int(q.get("haiku", 30)), "high": int(q.get("sonnet", 6)), "extra": int(q.get("opus", 3))}
-    except Exception:
-        return {"normal": 30, "high": 6, "extra": 3}
+    """Kept for older pages: the plan's bars in 'typical small fixes' (v6)."""
+    return {"normal": BARS["basic"]["haiku"] // SMALL_FIX_INR["haiku"], "high": BARS["pro"]["sonnet"] // SMALL_FIX_INR["sonnet"],
+            "extra": 0}
+
+
+def plan_bar_lines(plan: str) -> list[tuple[str, str, str]]:
+    """[(bar, amount, what it is)] for a plan card."""
+    bars = BARS[plan]
+    lines = [("Engineer", f"≈ {bars['haiku'] // SMALL_FIX_INR['haiku']} small fixes a month",
+              "diagnoses every problem, then fixes it once you say yes")]
+    if bars["sonnet"]:
+        lines.append(("Lead engineer", f"≈ {bars['sonnet'] // SMALL_FIX_INR['sonnet']} reviews or rescues a month",
+                      "checks medium fixes and guides the Engineer when it gets stuck, after asking you"))
+    return lines
 
 
 def quota_sentence() -> str:
-    q = quotas()
-    return f"{q['normal']} Normal, {q['high']} High and {q['extra']} Extra fix attempts every month"
+    return (f"Basic: an Engineer bar of about {BARS['basic']['haiku'] // SMALL_FIX_INR['haiku']} small fixes a month. "
+            f"Pro: about {BARS['pro']['haiku'] // SMALL_FIX_INR['haiku']} small fixes plus a Lead engineer bar")
 
 
 def quota_lines() -> list[tuple[str, str, str]]:
-    """[(mode, amount, what it is)] for plan cards: one line per mode, so the pack reads '30 Normal / 6 High / 3 Extra'."""
-    q = quotas()
-    return [("Normal", f"{q['normal']} tries / month", "the first engineer on every case, where most problems get solved"),
-            ("High", f"{q['high']} tries / month", "a stronger engineer when Normal could not finish"),
-            ("Extra", f"{q['extra']} tries / month", "the strongest engineer, only after asking you")]
+    return plan_bar_lines("pro")
 
 
 def projects_sentence() -> str:
     return (f"{INCLUDED_PROJECTS} project included. Each extra project is a one-time ₹{PROJECT_SLOT_PRICE}; "
-            "the monthly tries are shared by all your projects")
+            "your bars are shared by all your projects")
+
+
+def topup_sentence() -> str:
+    return (f"A ₹{TOPUP_PRICE} top-up adds about {TOPUP_INR // SMALL_FIX_INR['haiku']} small fixes to your Engineer bar "
+            f"(or about {TOPUP_INR // SMALL_FIX_INR['sonnet']} reviews to the Lead engineer bar on Pro) for this month.")
 
 
 def quota_fine_print() -> str:
-    return ("Quotas reset every month and do not roll over. You are buying attempts to fix a bug, not a guaranteed fix. "
-            f"Need more? ₹{PACK_NORMAL_PRICE} adds {PACK_NORMAL_TRIES} Normal attempts, and a ₹{PACK_PRICE} pack adds {PACK_HIGH_TRIES} High "
-            f"or {PACK_EXTRA_TRIES} Extra attempts.")
+    return ("Bars refill on the 1st of every month and do not roll over. You are paying for the engineer's time on your problems, "
+            "not a guaranteed fix. " + topup_sentence())
 
 
 # ---- One wording for every page (architecture page, usage, FAQ, help, chatbot, emails). Change it here, not per page. ----
-TRY_DEFINITION = ("A try is one run of the AI engineer on your case: it reads your code, runs your build and tests in the sandbox, "
-                  "can open your live site, and ends with a fix that passed the checks, clear steps for you, one question, or an honest "
-                  "'I could not'. Checking your pushes is free and never uses a try, and a technical fault on our side never counts as one.")
-WHY_STRONGER = ("Every case starts with the Normal engineer, which costs a few rupees. Only if it cannot finish does a stronger "
-                "(more expensive) engineer take over, starting from what the first one found. Extra, the strongest, is used only after "
-                "asking you, and never beyond the tries you have.")
-FAILED_FIX = ("If a fix does not pass the checks, nothing is pushed to your repository. A stronger engineer takes over with the new "
-              "error, until the problem is fixed or a limit is reached.")
+BAR_DEFINITION = ("Your plan comes with usage bars, like a phone's data pack. The Engineer bar is used when the agent diagnoses and "
+                  "fixes your problems; on Pro, the Lead engineer bar is used when it reviews a fix or guides the Engineer. A small fix "
+                  "uses about 7% of the Basic Engineer bar. Checking your pushes is free and never uses a bar, and a technical fault "
+                  "on our side is never charged.")
+TRY_DEFINITION = BAR_DEFINITION
+WHY_STRONGER = ("Every problem starts with the Engineer, which is fast and low-cost. On Pro, the Lead engineer (a stronger AI) checks "
+                "medium fixes and, when the Engineer gets stuck, writes it exact instructions. It always asks you first and shows how "
+                "much of your Lead bar it will use.")
+FAILED_FIX = ("If a fix does not pass the checks, nothing is pushed to your repository. The Engineer tries again with the new error; "
+              "on Pro the Lead engineer can step in. Very big jobs (a new feature, a whole page) are offered to the founders instead.")
 HUMAN_NEEDED = ("When the cause is outside your code (a missing key on your host, a database or sign-in setting, a service that is "
                 "down) the agent says so right away and gives you simple step-by-step instructions. It stops and asks for a person when "
-                "it reaches the limit for one case or when more attempts are unlikely to help, and you get a report of everything it "
+                "it reaches the limit for one case or when more work is unlikely to help, and you get a report of everything it "
                 "tried. You can also send any case to human review yourself.")
-MODE_SUMMARY = ("Normal is the first engineer on every case; High is a stronger engineer for cases Normal could not finish; Extra is "
-                "the strongest, used only after asking you.")
-TRY_SHORT = "One try = one run of the AI engineer on a case. Push checks are free."
+MODE_SUMMARY = ("First the Engineer diagnoses the problem and tells you what broke and why. Nothing is changed until you press "
+                "Yes, fix it. Then it fixes, tests and proves the change before it reaches your branch.")
+TRY_SHORT = "Your bars refill every month. Push checks are free."

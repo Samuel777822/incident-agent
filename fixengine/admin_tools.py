@@ -88,8 +88,18 @@ def pause_tier(tier: str, paused: bool, admin_email: str) -> None:
     store.log_admin_action("pause" if paused else "resume", detail={"tier": tier, "by": admin_email})
 
 
+def sell_topup(user_id: str, tier: str, admin_email: str = "") -> dict:
+    """v6: credit a Rs 99 top-up after payment is confirmed: Rs 58 more AI in one bar (Engineer or Lead) this month."""
+    import plans
+    if tier not in plans.BAR_NAMES:
+        raise ValueError("unknown bar")
+    store.add_grant(user_id, tier, plans.TOPUP_INR, "topup", f"top-up confirmed by {admin_email or 'system'}")
+    store.log_admin_action("topup_sold", user_id, {"tier": tier, "inr": plans.TOPUP_INR})
+    return {"tier": tier, "inr": plans.TOPUP_INR}
+
+
 def sell_pack(user_id: str, kind: str, admin_email: str = "") -> dict:
-    """Credit a pack after payment is confirmed: Rs 30 = 20 Normal tries, Rs 100 = 5 High or 3 Extra tries."""
+    """Credit an OLD pack (sold before v6) after payment is confirmed. Its tries are counted as bar rupees by the guard."""
     import plans
     tier, tries = {k: (t, n) for k, t, n in plans.PACK_TIERS.values()}[kind]
     store.add_grant(user_id, tier, tries, "pack", f"pack confirmed by {admin_email or 'system'}")

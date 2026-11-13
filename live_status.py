@@ -11,7 +11,7 @@ from __future__ import annotations
 import html
 from datetime import datetime, timezone
 
-MODE_NAMES = {"groq": "Low effort", "haiku": "Normal", "sonnet": "High", "opus": "Extra"}
+MODE_NAMES = {"groq": "Low effort", "haiku": "Engineer", "sonnet": "Lead engineer", "opus": "Lead engineer"}   # v6
 
 # stage -> (headline template, tone, step index that is active, is the agent busy)
 INCIDENT_STAGES = {
@@ -22,7 +22,8 @@ INCIDENT_STAGES = {
     "investigating": ("Looking at your live site and code", "blue", 1, True),
     "working": ("The engineer is working on it", "blue", 2, True),
     "paused": ("Paused by you", "muted", None, False),
-    "thinking": ("{mode} mode is writing a fix", "blue", 2, True),
+    "thinking": ("The {mode} is writing a fix", "blue", 2, True),
+    "awaiting_approval": ("Diagnosed · waiting for your OK to fix it", "amber", 2, False),
     "testing_fix": ("Testing the fix in the sandbox", "blue", 3, True),
     "waiting_user": ("Waiting for your decision", "amber", 2, True),
     "waiting_retry": ("Paused for a moment, retrying by itself", "amber", None, True),
@@ -120,7 +121,7 @@ def incident_view(inc: dict, mode: str, quota: dict | None = None) -> dict:
     headline, tone, active_idx, busy = INCIDENT_STAGES.get(stage, (stage.replace("_", " ").title() or "Working", "muted", 1, True))
     tier = str(inc.get("stage_tier") or "")
     mode_name = MODE_NAMES.get(tier, "")
-    headline = headline.replace("{mode}", mode_name or "The AI")
+    headline = headline.replace("The {mode}", f"The {mode_name}" if mode_name else "The AI").replace("{mode}", mode_name or "The AI")
     labels = incident_steps(mode)
     if mode == "report":
         idx = {"merged": 3, "resolved": 3, "needs_human": None}.get(stage, 1)
@@ -149,7 +150,9 @@ def incident_view(inc: dict, mode: str, quota: dict | None = None) -> dict:
     left = ""
     if quota and tier in quota:
         q = quota[tier]
-        left = f"{q['left']} {mode_name} tries left" if tier != "groq" else f"{q['left']} free tries left today"
+        bar = q.get("bar") or {}
+        left = (f"{bar.get('pct_left', 0)}% of the {mode_name} bar left" if bar else f"{q['left']} {mode_name} runs left") \
+            if tier != "groq" else f"{q['left']} free tries left today"
     return {"stage": stage, "headline": headline, "tone": tone, "steps": steps, "active": busy, "mode_name": mode_name,
             "left_text": left, "detail": str(inc.get("stage_detail") or ""), "when": ago(inc.get("stage_at") or inc.get("last_seen"))}
 
@@ -192,22 +195,24 @@ def stack_chips(stacks_json: str | list) -> str:
 
 
 def quota_strip(panel: list[dict]) -> str:
-    """Three compact meters: Normal / High / Extra this month (the free model is no longer used for fixing)."""
-    order = {"haiku": 0, "sonnet": 1, "opus": 2}
+    """v6: the plan's usage bars as compact meters: Engineer, and Lead engineer (locked on Basic)."""
     cells = []
-    for q in sorted((r for r in panel if r.get("tier") in order), key=lambda r: order.get(r.get("tier"), 9)):
-        total = max(1, int(q.get("base") or q.get("total") or 0))        # the plan's own tries; extras are shown separately
-        left = max(0, int(q.get("left") if q.get("left") is not None else total - int(q.get("used") or 0)))
-        pct = min(100, round(100 * left / total))
+    for q in panel:
+        if q.get("tier") not in ("haiku", "sonnet"):
+            continue
+        bar = q.get("bar") or {}
+        name = bar.get("name") or q.get("label") or ""
+        if bar and bar.get("total", 0) <= 0:
+            cells.append(f"<div class='meter muted'><div class='meter-top'><b>{e(name)}</b><span>Part of Pro</span></div>"
+                         f"<div class='meter-bar'><i style='width:0%'></i></div><small><a href='/billing'>See Pro</a></small></div>")
+            continue
+        pct = int(bar.get("pct_left", 0)) if bar else 0
         tone = "ok" if pct > 40 else ("warn" if pct > 10 else "bad")
-        period = "today" if q.get("daily") else "this month"
-        paused = " · paused" if q.get("paused") else ""
-        extra_left = max(0, left - total)
-        extra = f" (+{extra_left} extra)" if extra_left else ""
-        left = min(left, total)
-        cells.append(f"<div class='meter {tone}'><div class='meter-top'><b>{e(q.get('label'))}</b>"
-                     f"<span>{left} of {total} left{e(extra)}</span></div><div class='meter-bar'><i style='width:{pct}%'></i></div>"
-                     f"<small>{period}{e(paused)}</small></div>")
+        unit = "reviews" if q.get("tier") == "sonnet" else "small fixes"
+        paused = " · paused by an admin" if q.get("paused") else ""
+        cells.append(f"<div class='meter {tone}'><div class='meter-top'><b>{e(name)}</b><span>{pct}% left</span></div>"
+                     f"<div class='meter-bar'><i style='width:{pct}%'></i></div>"
+                     f"<small>≈ {int(bar.get('small_fixes_left', 0))} {unit} left this month{e(paused)}</small></div>")
     return f"<div class='meters'>{''.join(cells)}</div>"
 
 

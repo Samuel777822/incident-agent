@@ -238,7 +238,7 @@ def gateway(monkeypatch):
 def test_gateway_mode_shows_instant_pay_buttons_and_hides_manual_page(web_env, gateway):
     _, _, cookie = make_session("c@example.com")
     _, _, bill = _request("/billing", cookie=cookie)
-    assert bill.count("action='/billing/order'") == 2 and "Access starts instantly" in bill
+    assert bill.count("action='/billing/order'") == 3 and "Access starts instantly" in bill        # Basic, Pro, Basic yearly
     status, headers, _ = _request("/billing/pay?plan=monthly", cookie=cookie)
     assert status == "303 See Other" and location(headers) == "/billing"
 
@@ -574,7 +574,7 @@ def test_admin_sees_customers_needing_action_first_with_their_plan_state(web_env
     _, _, body = _request("/admin", cookie=admin_cookie)
     assert body.index("z-payer@example.com") < body.index("a-active@example.com") < body.index("b-idle@example.com")
     assert "Payment to confirm" in body and "Paid · " in body and "No access" in body
-    assert "I received ₹1500 · grant 365 days" in body
+    assert "I received ₹1500 · grant Basic for 365 days" in body
 
 
 # --- the install bug from the field: form said "main", the repository uses "master" ----------------------
@@ -724,7 +724,7 @@ def test_billing_page_shows_plan_v2_prices_quotas_and_the_fine_print(web_env):
     _, _, cookie = make_session("c@example.com")
     _, _, body = _request("/billing", cookie=cookie)
     assert "₹200" in body and "₹1,500" in body and "about ₹125 a month" in body
-    assert "30 Normal, 6 High and 3 Extra" in body
+    assert "about 14 small fixes a month" in body and "Lead engineer" in body and "₹500" in body
     assert "do not roll over" in body and "not a guaranteed fix" in body and "href='/usage'" in body
     assert "₹1,000" not in body
 

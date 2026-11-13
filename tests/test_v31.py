@@ -451,8 +451,9 @@ def test_unproven_live_fix_is_held_for_review_when_the_reviewer_says_no(tmp_path
     bug = store.create_bug(project_id=pid, user_id=store.get_project_row(pid)["user_id"], incident_id=claimed["incident_id"],
                            fingerprint_json={"hash": "h"}, bug_class="medium", category="user_report")
     reason = engine._push_policy(claimed, store.get_project_row(pid), bug, win, {"kind": "user_report", "live_text": "", "reports": []})
-    assert "reviewer did not approve" in reason and "not grounded" in reason
-    assert any(a["result"] == "review" for a in store.list_attempts(bug["id"]))
+    # v6: Opus is never used; a Lead engineer (Sonnet) fix is reviewed by the other model, the Engineer (Haiku).
+    assert "reviewer did not approve" in reason
+    assert [a["tier"] for a in store.list_attempts(bug["id"]) if a["result"] == "review"] == ["haiku"]
     assert engine._push_policy(claimed, store.get_project_row(pid), bug, {**win, "level": "journey_fixed"}, {"kind": "user_report"}) == ""
     assert engine._push_policy(claimed, store.get_project_row(pid), bug, win, {"kind": ""}) == ""     # server crashes: unchanged
 

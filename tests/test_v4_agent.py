@@ -595,7 +595,9 @@ def test_fast_spending_emails_the_admins_and_pauses_nothing(fx_db, cfg, monkeypa
     g = fx_guard.Guard(cfg)
     assert g.project_paused(pid) == "" and any("spending fast" in s for s in sent)
     assert g.user_ceiling_reached(uid) is False and any("monthly AI spending level" in s for s in sent)
-    assert g.check(uid, "sonnet").ok
+    # v6: nothing is paused. Rs 500 of Lead engineer work used up this owner's own Lead bar, so that bar says so (it is the
+    # customer's budget, not a pause), and the Engineer keeps working.
+    assert g.check(uid, "sonnet").code == "exhausted" and g.check(uid, "haiku").ok
 
 
 def test_a_provider_key_problem_emails_but_never_pauses_the_mode(fx_db, cfg, monkeypatch):

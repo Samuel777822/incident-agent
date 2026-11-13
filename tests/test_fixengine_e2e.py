@@ -196,60 +196,25 @@ def test_bad_api_key_alerts_admins_and_never_pauses_the_model(world, monkeypatch
     assert any("nothing was paused" in s for s in sent)
 
 
-def test_warning_waits_for_the_user_then_continues(world):
-    w = world(scripts={"groq": ["garbage"], "haiku": [reply(H.GOOD_EDIT)]})
-    w.fill_haiku(15)                                                 # the plan's Normal-mode warning point
-    incident_id, outcome = w.run_once()
-    assert outcome == "awaiting_choice"
-    choice = store.list_user_choices(w.user_id)[0]
-    assert w.incident(incident_id)["status"] == "awaiting_choice" and choice["expires_at"]
-    assert not w.prs
-    assert api.answer_choice(choice["id"], "auto", w.user_id)
-    claimed = H.claim()
-    assert claimed and w.engine.handle_incident(claimed) == "pr_opened"
-
-
-def test_ask_mode_never_times_out_but_auto_mode_does(world):
-    w = world(scripts={"groq": ["garbage"], "haiku": [reply(H.GOOD_EDIT)]})
-    w.fill_haiku(15)
-    store.set_mode(w.user_id, "ask")
-    incident_id, outcome = w.run_once()
-    assert outcome == "awaiting_choice" and store.list_user_choices(w.user_id)[0]["expires_at"] is None
-    assert w.engine.resume_expired_choices() == 0
-
-
-def test_auto_mode_timeout_resumes_the_bug(world):
+def test_no_warning_point_stops_the_engineer_any_more(world):
+    # v6: used tries no longer trigger a "continue?" question; the usage bar shows what is left instead.
     w = world(scripts={"groq": ["garbage"], "haiku": [reply(H.GOOD_EDIT)]})
     w.fill_haiku(15)
     incident_id, outcome = w.run_once()
-    choice = store.list_user_choices(w.user_id)[0]
-    store._run("UPDATE fx_pending_choices SET expires_at='2020-01-01T00:00:00+00:00' WHERE id=?", (choice["id"],))
-    assert w.engine.resume_expired_choices() == 1
-    assert w.engine.handle_incident(H.claim()) == "pr_opened"
+    assert outcome == "pr_opened" and not store.list_user_choices(w.user_id)
 
 
-def test_user_can_send_a_bug_to_human_review(world):
-    w = world(scripts={"groq": ["garbage"], "haiku": [reply(H.GOOD_EDIT)]})
-    w.fill_haiku(15)
-    incident_id, outcome = w.run_once()
-    choice = store.list_user_choices(w.user_id)[0]
-    assert not api.answer_choice(choice["id"], "auto", "someone-else")      # not your choice
-    assert api.answer_choice(choice["id"], "review", w.user_id)
-    assert not api.answer_choice(choice["id"], "auto", w.user_id)           # a choice can only be answered once
-    assert w.engine.handle_incident(H.claim()) == "needs_human"
-    assert "you chose human review" in w.bug(incident_id)["stop_reason"]
-
-
-def test_quota_exhaustion_ends_in_review_with_an_admin_check(world, monkeypatch):
+def test_empty_bars_end_in_review_with_an_admin_check(world, monkeypatch):
     monkeypatch.setattr("fixengine.notify._to_admins", lambda *a, **k: None)
-    w = world(scripts={"groq": ["garbage"], "haiku": [reply(H.WRONG_EDIT)], "sonnet": [reply(H.WRONG_EDIT)], "opus": [reply(H.WRONG_EDIT)]})
-    w.cfg["quotas"].update({"sonnet": 1, "opus": 0, "haiku": 3})
-    w.silence_warnings()
-    w.cfg["router"]["give_up_penalty_inr"] = 500
+    w = world(scripts={"groq": ["garbage"], "haiku": [reply(H.WRONG_EDIT)], "sonnet": [reply(H.WRONG_EDIT)]})
+    filler = store.create_bug(project_id=w.project_id, user_id=w.user_id, incident_id="spent", fingerprint_json={"hash": "s"},
+                              bug_class="easy", category="")
+    for tier, cost in (("haiku", 230.0), ("sonnet", 64.0)):                  # both Pro bars used up this month
+        aid = store.add_attempt(bug=filler, tier=tier, model="m", used_strong_diag=False, info_hash=store.new_id())
+        store.finish_attempt(aid, result="fail", cost_inr=cost)
+    store._run("UPDATE fx_attempts SET created_at=? WHERE bug_id=?", ("2026-11-02T01:00:00+00:00", filler["id"]))
     incident_id, outcome = w.run_once()
-    bug = w.bug(incident_id)
-    assert outcome == "needs_human" and "used up" in bug["stop_reason"]
-    assert store.list_admin_actions()[0]["kind"] in ("auto_grant", "hold")
+    assert outcome == "needs_human" and not w.prs
 
 
 def test_engine_is_off_unless_enabled(monkeypatch):
@@ -287,10 +252,9 @@ def test_reopen_after_review_requeues_the_incident(world):
 def test_a_crashed_worker_does_not_burn_a_try(world):
     w = world(scripts={"groq": ["garbage"], "haiku": [reply(H.GOOD_EDIT)]})
     filler = store.create_bug(project_id=w.project_id, user_id=w.user_id, incident_id="old", fingerprint_json={"hash": "q"}, bug_class="easy", category="")
-    aid = store.add_attempt(bug=filler, tier="sonnet", model="m", used_strong_diag=False, info_hash="z")      # never finished
-    assert Guard(w.cfg).quota(w.user_id, "sonnet")["used"] == 1
+    store.add_attempt(bug=filler, tier="sonnet", model="m", used_strong_diag=False, info_hash="z")      # never finished
     assert store.recover_pending(filler["id"]) == 1
-    assert Guard(w.cfg).quota(w.user_id, "sonnet")["used"] == 0
+    assert Guard(w.cfg).bar(w.user_id, "sonnet")["spent"] == 0                # nothing was charged to the owner's bar
 
 
 def test_a_dead_sandbox_waits_once_then_the_case_goes_on_and_the_admins_are_told(world, monkeypatch):

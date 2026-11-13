@@ -870,9 +870,9 @@ def _form(title: str, intro: str, fields: str, action: str, submit: str, csrf: s
     return f"<section class='card form-card'><h1>{title}</h1><p class='muted'>{intro}</p><form method='post' action='{action}'><input type='hidden' name='csrf' value='{_escape(csrf)}'>{fields}{submit}</form></section>"
 
 
-# Prices, days and labels come from plans.py (architecture plan v2: Rs 200 a month, about Rs 1,500 a year).
+# Prices, days and labels come from plans.py (v6: Basic Rs 200 a month or Rs 1,500 a year, Pro Rs 500 a month).
 PLANS = {key: {"label": plans.PLAN_LABELS[key], "rupees": plans.PLAN_PRICES[key], "days": plans.PLAN_DAYS[key]}
-         for key in ("monthly", "yearly")}
+         for key in ("monthly", "pro", "yearly")}
 
 _INCIDENT_LABELS = {
     "diagnosing": "Diagnosing", "queued": "Diagnosing", "processing": "Diagnosing",
@@ -2027,8 +2027,9 @@ def _admin_action(request):
         product = payment.get("product") or payment.get("plan")
         if product == "project_slot":
             text = f"We confirmed your ₹{payment['amount']} payment. You can now connect one more project: {_base_url()}/projects/new"
-        elif product in plans.PACK_TIERS:
-            text = (f"We confirmed your ₹{payment['amount']} payment and added {plans.PRODUCTS[product]['label']} for this month.\n"
+        elif product in plans.TOPUP_TIERS or product in plans.PACK_TIERS:
+            label = (plans.PRODUCTS.get(product) or plans.LEGACY_PRODUCTS.get(product) or {}).get("label", "your top-up")
+            text = (f"We confirmed your ₹{payment['amount']} payment and added {label} to your bars for this month.\n"
                     f"{_base_url()}/usage")
         else:
             text = (f"We confirmed your payment. Your paid access is active until {_fmt_time(payment['active_until'])}.\n"
@@ -2183,7 +2184,7 @@ def _admin_view(request):
         info_cell = "<br>".join(info_parts) if info_parts else "<span class='muted'>—</span>"
         payment_rows.append(
             f"<tr><td>{cust_cell}</td><td>{phone_cell}</td><td>{info_cell}</td>"
-            f"<td>₹{_escape(p['amount'])} · {_escape(plans.PRODUCTS.get(p['plan'], {}).get('label', p['plan']))}</td>"
+            f"<td>₹{_escape(p['amount'])} · {_escape((plans.PRODUCTS.get(p['plan']) or plans.LEGACY_PRODUCTS.get(p['plan']) or {}).get('label', p['plan']))}</td>"
             f"<td><code>{_escape(p['transaction_ref'])}</code><br><small class='muted'>{_escape(_fmt_time(p['created_at']))}</small></td><td>"
             f"<form method='post' action='/admin' class='actions'><input type='hidden' name='csrf' value='{csrf}'>"
             f"<input type='hidden' name='payment_id' value='{_escape(p['id'])}'>"
@@ -2683,7 +2684,7 @@ def _page_dashboard(request):
     if access["active"]:
         quota = _quota_by_tier(user_id)
         if quota:
-            meters = ("<section class='section-tight'><div class='row'><h2>Tries left</h2><a href='/usage'>Usage &amp; settings →</a></div>"
+            meters = ("<section class='section-tight'><div class='row'><h2>Your AI this month</h2><a href='/usage'>Usage &amp; settings →</a></div>"
                       f"<p class='muted'>{_escape(plans.TRY_SHORT)} Every case starts with the low-cost Normal engineer; High takes over only "
                       "if Normal cannot finish, and Extra only after asking you. <a href='/how-it-works#router'>How it works</a></p>"
                       + live_status.quota_strip(list(quota.values())) + "</section>")
@@ -4087,18 +4088,19 @@ def _page_billing(request):
         else:
             action = (f"<a class='button primary' href='/billing/pay?plan={key}'>Pay ₹{plan['rupees']:,} by UPI</a>"
                       "<p class='muted'>After you pay, wait 1 to 2 hours. We check our Paytm account and switch your access on.</p>")
-        period = "month" if key == "monthly" else "year"
+        period = "year" if key == "yearly" else "month"
         per_month = (f" (about ₹{plans.YEARLY_PER_MONTH:,} a month, you save ₹{plans.YEARLY_SAVING:,} against twelve monthly payments)"
                      if key == "yearly" else "")
-        quota_rows = "".join(f"<li><b>{_escape(m)}</b> · {_escape(amt)}</li>" for m, amt, _what in plans.quota_lines())
-        plan_cards.append(f"<article class='card price-card{' featured' if key == 'monthly' else ''}'><div class='eyebrow'>{plan['label']}</div><h2 class='price'>₹{plan['rupees']:,} <small class='muted'>/ {period}</small></h2>"
+        quota_rows = "".join(f"<li><b>{_escape(m)}</b> · {_escape(amt)}</li>"
+                             for m, amt, _what in plans.plan_bar_lines(plans.PLAN_OF_PRODUCT[key]))
+        plan_cards.append(f"<article class='card price-card{' featured' if key == 'pro' else ''}'><div class='eyebrow'>{plan['label']}</div><h2 class='price'>₹{plan['rupees']:,} <small class='muted'>/ {period}</small></h2>"
                           f"<p class='muted'>{plan['days']} days of access{per_month}. Every month you get:</p>"
                           f"<ul class='quota-list'>{quota_rows}<li><b>Push checks</b> · on every commit</li>"
                           f"<li><b>Projects</b> · {plans.INCLUDED_PROJECTS} included, ₹{plans.PROJECT_SLOT_PRICE} per extra</li></ul>{action}</article>")
     payments = portal_db.user_manual_payments(user_id)
     history = ""
     if payments:
-        rows = [f"<tr><td>{_escape(_fmt_time(p['created_at']))}</td><td>₹{_escape(p['amount'])} · {_escape(plans.PRODUCTS.get(p['plan'], {}).get('label', p['plan']))}</td><td>{_escape(p['transaction_ref'])}</td><td>{_escape(p['status'].title())}</td></tr>" for p in payments]
+        rows = [f"<tr><td>{_escape(_fmt_time(p['created_at']))}</td><td>₹{_escape(p['amount'])} · {_escape((plans.PRODUCTS.get(p['plan']) or plans.LEGACY_PRODUCTS.get(p['plan']) or {}).get('label', p['plan']))}</td><td>{_escape(p['transaction_ref'])}</td><td>{_escape(p['status'].title())}</td></tr>" for p in payments]
         history = "<h2>Your UPI submissions</h2>" + _table(["Submitted", "For", "Reference", "Status"], rows)
     addons = ""
     if access["active"]:
@@ -4109,13 +4111,13 @@ def _page_billing(request):
                     f"<a class='button' href='/billing/pay?plan={key}'>Pay ₹{item['rupees']} by UPI</a></article>")
         addons = ("<h2>Add-ons</h2><div class='grid'>"
                   + addon("project_slot", "One more project", f"One-time. You use {slots['used']} of {slots['limit']} project slot(s). The slot stays on your account.")
-                  + addon("pack_normal", f"{plans.PACK_NORMAL_TRIES} Normal tries", "Added to this month, on top of your plan. The everyday engineer.")
-                  + addon("pack_high", f"{plans.PACK_HIGH_TRIES} High tries", "Added to this month, on top of your plan.")
-                  + addon("pack_extra", f"{plans.PACK_EXTRA_TRIES} Extra tries", "Added to this month, on top of your plan.")
+                  + addon("topup_engineer", "Engineer top-up", f"Adds about {plans.TOPUP_INR // plans.SMALL_FIX_INR['haiku']} small fixes to your Engineer bar this month.")
+                  + (addon("topup_lead", "Lead engineer top-up", f"Adds about {plans.TOPUP_INR // plans.SMALL_FIX_INR['sonnet']} reviews to your Lead engineer bar this month.")
+                     if plans.user_plan(user_id) == "pro" else "")
                   + "</div>")
     body = (f"<section class='section'><div class='eyebrow'>Account</div><h1>Plan &amp; billing</h1>{banner}"
             f"<div class='grid'>{current}{trial_card}</div><h2>Plans</h2><div class='price-grid'>{''.join(plan_cards)}</div>"
-            f"<p class='muted fineprint'>Every plan includes {_escape(plans.quota_sentence())}. {_escape(plans.TRY_DEFINITION)} {_escape(plans.quota_fine_print())} "
+            f"<p class='muted fineprint'>{_escape(plans.quota_sentence())}. {_escape(plans.BAR_DEFINITION)} {_escape(plans.quota_fine_print())} "
             f"See your usage on the <a href='/usage'>Usage</a> page.</p>{addons}{history}</section>")
     return _response(body, request)
 
@@ -4132,6 +4134,8 @@ def _page_manual_payment(request):
         plan = str(request.form.get("plan", ""))
         if plan not in plans.PRODUCTS:
             return _response("<div class='alert'>Choose a valid plan.</div>", request, "400 Bad Request")
+        if plan == "topup_lead" and plans.user_plan(request.session["user_id"]) != "pro":
+            return _response("<div class='alert'>A Lead engineer top-up only works on the Pro plan.</div>", request, "400 Bad Request")
         product = plans.PRODUCTS[plan]
         ref = str(request.form.get("transaction_ref", "")).strip()
         name = str(request.form.get("name", "")).strip()
@@ -4183,6 +4187,10 @@ def _page_manual_payment(request):
         plan = "monthly"
     if plan in plans.ADDON_PRODUCTS and not portal_db.user_has_active_access(request.session["user_id"]):
         return _response("<section class='card form-card'><h1>Pick a plan first</h1><p class='muted'>Add-ons work on top of an active plan or trial.</p>"
+                         "<a class='button primary' href='/billing'>See plans</a></section>", request, "402 Payment Required")
+    if plan == "topup_lead" and plans.user_plan(request.session["user_id"]) != "pro":
+        return _response("<section class='card form-card'><h1>The Lead engineer is part of Pro</h1><p class='muted'>A Lead engineer "
+                         "top-up only works on the Pro plan. Upgrade to Pro, or top up your Engineer bar instead.</p>"
                          "<a class='button primary' href='/billing'>See plans</a></section>", request, "402 Payment Required")
     product = plans.PRODUCTS[plan]
     rupees = product["rupees"]

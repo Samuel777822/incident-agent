@@ -12,8 +12,10 @@ CHOICES = {"auto", "lower", "higher", "review", "haiku", "sonnet", "opus"}
 
 def usage_view(user_id: str, guard: Guard | None = None) -> dict:
     guard = guard or Guard()
+    import plans
     return {"panel": guard.usage_panel(user_id), "mode": store.get_mode(user_id), "choices": store.list_user_choices(user_id),
-            "bugs": store.user_bugs(user_id), "period": store.current_period(), "level_name": guard.level_name()}
+            "bugs": store.user_bugs(user_id), "period": store.current_period(), "level_name": guard.level_name(),
+            "plan": plans.user_plan(user_id), "bars": [guard.bar(user_id, "haiku"), guard.bar(user_id, "sonnet")]}
 
 
 def answer_choice(choice_id: str, choice: str, user_id: str) -> bool:

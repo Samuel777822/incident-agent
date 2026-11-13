@@ -433,6 +433,7 @@ def init_db() -> None:
             ("projects", "ingest_key_ciphertext", "TEXT NOT NULL DEFAULT ''"),
             ("subscriptions", "grant_type", "TEXT NOT NULL DEFAULT 'paid'"),
             ("subscriptions", "granted_by", "TEXT NOT NULL DEFAULT ''"),
+            ("subscriptions", "plan", "TEXT NOT NULL DEFAULT 'basic'"),          # v6: basic | pro (trials use grant_type='trial')
             ("payment_orders", "plan", "TEXT NOT NULL DEFAULT 'yearly'"),
             ("manual_payments", "ref_norm", "TEXT NOT NULL DEFAULT ''"),
             ("incidents", "no_automerge", "INTEGER NOT NULL DEFAULT 0"),
@@ -1322,15 +1323,15 @@ def complete_payment_order(order_id: str, payment_id: str, amount: int) -> bool:
         existing_until = datetime.fromisoformat(subscription["active_until"]) if subscription else now
         if existing_until.tzinfo is None:
             existing_until = existing_until.replace(tzinfo=timezone.utc)
-        until = (max(now, existing_until) + timedelta(days=30 if order["plan"] == "monthly" else 365)).isoformat(timespec="seconds")
+        until = (max(now, existing_until) + timedelta(days=plans.PLAN_DAYS.get(order["plan"], 365))).isoformat(timespec="seconds")
         cur = _execute(conn, "INSERT INTO payments(id,user_id,razorpay_payment_id,amount,status,created_at) VALUES(?,?,?,?,?,?) ON CONFLICT(razorpay_payment_id) DO NOTHING",
                        (_id(),order["user_id"],payment_id,int(amount),"captured",now.isoformat(timespec="seconds")))
         if cur.rowcount == 0:
             conn.commit()
             return False
         _execute(conn, "UPDATE payment_orders SET status='paid' WHERE razorpay_order_id=?", (order_id,))
-        _execute(conn, "INSERT INTO subscriptions(user_id,active_until,grant_type,granted_by,updated_at) VALUES(?,?,?,?,?) ON CONFLICT(user_id) DO UPDATE SET active_until=excluded.active_until,grant_type='paid',granted_by='',updated_at=excluded.updated_at",
-                 (order["user_id"],until,"paid","",now.isoformat(timespec="seconds")))
+        _execute(conn, "INSERT INTO subscriptions(user_id,active_until,grant_type,granted_by,updated_at,plan) VALUES(?,?,?,?,?,?) ON CONFLICT(user_id) DO UPDATE SET active_until=excluded.active_until,grant_type='paid',granted_by='',updated_at=excluded.updated_at,plan=excluded.plan",
+                 (order["user_id"],until,"paid","",now.isoformat(timespec="seconds"),plans.PLAN_OF_PRODUCT.get(order["plan"], "basic")))
         _execute(conn, "UPDATE projects SET active_until=? WHERE user_id=?", (until,order["user_id"]))
         _execute(conn, "UPDATE projects SET paused=0 WHERE user_id=? AND paused=2", (order["user_id"],))
         project_rows = _execute(conn, "SELECT id FROM projects WHERE user_id=?", (order["user_id"],)).fetchall()
@@ -1343,6 +1344,16 @@ def complete_payment_order(order_id: str, payment_id: str, amount: int) -> bool:
     except Exception:
         conn.rollback()
         raise
+    finally:
+        conn.close()
+
+
+def get_subscription(user_id: str) -> dict | None:
+    """{active_until, grant_type, plan} or None. v6: the plan decides the size of the usage bars."""
+    conn = get_connection()
+    try:
+        row = _execute(conn, "SELECT active_until,grant_type,plan FROM subscriptions WHERE user_id=?", (user_id,)).fetchone()
+        return dict(row) if row else None
     finally:
         conn.close()
 
@@ -1378,7 +1389,7 @@ def _parse_ts(value: str) -> datetime:
     return parsed if parsed.tzinfo else parsed.replace(tzinfo=timezone.utc)
 
 
-def _grant_in_conn(conn, user_id: str, days: int, grant_type: str, granted_by: str) -> str:
+def _grant_in_conn(conn, user_id: str, days: int, grant_type: str, granted_by: str, plan: str | None = None) -> str:
     """Extend (never replace) access inside the caller's transaction.
 
     A paid plan is never downgraded to "trial" by a later trial grant.
@@ -1396,17 +1407,21 @@ def _grant_in_conn(conn, user_id: str, days: int, grant_type: str, granted_by: s
         active_until=excluded.active_until,grant_type=excluded.grant_type,
         granted_by=excluded.granted_by,updated_at=excluded.updated_at""",
         (user_id, until, final_type, granted_by, stamp))
+    if plan in ("basic", "pro") and grant_type == "paid":
+        _execute(conn, "UPDATE subscriptions SET plan=? WHERE user_id=?", (plan, user_id))
     _execute(conn, "UPDATE projects SET active_until=? WHERE user_id=?", (until, user_id))
     _execute(conn, "UPDATE projects SET paused=0 WHERE user_id=? AND paused=2", (user_id,))
     return until
 
 
-def admin_grant_access(user_id: str, days: int, grant_type: str, granted_by: str) -> str:
+def admin_grant_access(user_id: str, days: int, grant_type: str, granted_by: str, plan: str | None = None) -> str:
     if not 1 <= int(days) <= 3650 or grant_type not in ("trial", "paid"):
         raise ValueError("Access grant must be 1-3650 days and trial or paid")
+    if plan not in (None, "basic", "pro"):
+        raise ValueError("Plan must be basic or pro")
     conn = get_connection()
     try:
-        until = _grant_in_conn(conn, user_id, days, grant_type, granted_by)
+        until = _grant_in_conn(conn, user_id, days, grant_type, granted_by, plan)
         conn.commit()
         return until
     except Exception:
@@ -1547,15 +1562,18 @@ def approve_manual_payment(payment_id: str, reviewed_by: str):
             conn.commit()
             result.update(status="approved", product="project_slot", days=0, active_until="")
             return result
-        if row["plan"] in plans.PACK_TIERS:
+        if row["plan"] in plans.TOPUP_TIERS or row["plan"] in plans.PACK_TIERS:
             conn.commit()
-            # The tries ledger lives in the fix engine's tables (same database).
+            # The bar ledger lives in the fix engine's tables (same database).
             from fixengine import admin_tools
-            credited = admin_tools.sell_pack(row["user_id"], plans.PACK_TIERS[row["plan"]][0], reviewed_by)
+            if row["plan"] in plans.TOPUP_TIERS:
+                credited = admin_tools.sell_topup(row["user_id"], plans.TOPUP_TIERS[row["plan"]], reviewed_by)
+            else:
+                credited = admin_tools.sell_pack(row["user_id"], plans.PACK_TIERS[row["plan"]][0], reviewed_by)
             result.update(status="approved", product=row["plan"], days=0, active_until="", credited=credited)
             return result
-        days = 30 if row["plan"] == "monthly" else 365
-        until = _grant_in_conn(conn, row["user_id"], days, "paid", reviewed_by)
+        days = plans.PLAN_DAYS.get(row["plan"], 365)
+        until = _grant_in_conn(conn, row["user_id"], days, "paid", reviewed_by, plans.PLAN_OF_PRODUCT.get(row["plan"], "basic"))
         conn.commit()
         result.update(status="approved", product=row["plan"], days=days, active_until=until)
         return result

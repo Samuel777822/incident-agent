@@ -14,7 +14,7 @@ from pathlib import Path
 TIERS = ("groq", "haiku", "sonnet", "opus")
 PAID_TIERS = ("haiku", "sonnet", "opus")
 STRONG_TIERS = ("sonnet", "opus")
-USER_MODE_NAMES = {"groq": "Low effort", "haiku": "Normal", "sonnet": "High", "opus": "Extra"}
+USER_MODE_NAMES = {"groq": "Low effort", "haiku": "Engineer", "sonnet": "Lead engineer", "opus": "Lead engineer"}   # v6
 
 DEFAULTS: dict = {
     "usd_inr": 90.0,

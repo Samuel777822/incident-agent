@@ -201,7 +201,7 @@ class Engine:
                 # pass and let the router pick the next model (normally Haiku) straight away.
                 blocked.add(tier)
                 failed_models.append(result[1][:160])
-                _stage(incident_id, "thinking", f"{live_status.MODE_NAMES.get(tier, tier)} mode did not answer, switching to the next AI model")
+                _stage(incident_id, "thinking", f"The {live_status.MODE_NAMES.get(tier, tier)} did not answer, switching to the next AI model")
                 continue
             if result[0] == "fault":
                 return self._fault_wait(claimed, bug, result[1], 300)
@@ -447,7 +447,8 @@ class Engine:
         if bar_left is None:
             return cap
         try:
-            return max(0.5, min(cap, float(bar_left(project["user_id"], tier))))
+            left = float(bar_left(project["user_id"], tier))
+            return min(cap, left) if left > 0 else cap          # an empty bar is stopped by the guard before the run starts
         except Exception:
             return cap
 

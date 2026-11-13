@@ -344,11 +344,11 @@ def test_dashboard_shows_mode_stage_and_tries_left(web_env):
     portal_db.enqueue_push_check(project_id, user_id, "1" * 40, "main", source="webhook", commit_message="add cart")
     status, _, body = _request("/dashboard", cookie=cookie)
     assert status == "200 OK"
-    assert "High mode is writing a fix" in body and "High mode</span>" in body and "6 High tries left" in body
-    assert "commit abcdef1" in body and "Agent right now" in body and "Normal" in body and "Tries left" in body
+    assert "The Lead engineer is writing a fix" in body and "Lead engineer bar left" in body
+    assert "commit abcdef1" in body and "Agent right now" in body and "Engineer" in body and "Your AI this month" in body
     assert "add cart" in body and "Waiting in line" in body
     st, _, frag = _request("/dashboard/live", cookie=cookie)
-    assert st == "200 OK" and "High mode is writing a fix" in frag and "<html" not in frag
+    assert st == "200 OK" and "The Lead engineer is writing a fix" in frag and "<html" not in frag
     for stage, text in (("testing_fix", "Testing the fix in the sandbox"), ("pushing", "Pushing the fix to GitHub"),
                         ("merging", "merging into your branch"), ("merged", "the fixed version is on GitHub")):
         portal_db.set_incident_stage(inc, stage, "", "sonnet")
@@ -404,19 +404,23 @@ def test_addon_prices_are_fixed_and_need_an_active_plan(web_env):
     portal_db.admin_grant_access(user_id, 30, "paid", "admin1@example.com")
     with pytest.raises(ValueError):
         portal_db.create_manual_payment_request(user_id, 10, "project_slot", "123456789013")        # wrong amount
-    pay = portal_db.create_manual_payment_request(user_id, 100, "pack_high", "123456789014")
+    pay = portal_db.create_manual_payment_request(user_id, 99, "topup_engineer", "123456789014")
     result = portal_db.approve_manual_payment(pay["id"], "admin1@example.com")
-    assert result["credited"] == {"tier": "sonnet", "tries": 5}
+    assert result["credited"] == {"tier": "haiku", "inr": 58}
     _, _, page = _request("/billing", cookie=cookie)
-    assert "Add-ons" in page and "plan=project_slot" in page and "plan=pack_extra" in page
-    _, _, upi = _request("/billing/pay?plan=pack_extra", cookie=cookie)
-    assert "am=100.00" in upi and "3 Extra tries" in upi
+    assert "Add-ons" in page and "plan=project_slot" in page and "plan=topup_engineer" in page
+    assert "plan=topup_lead" not in page and "pack_" not in page            # Basic: no Lead top-up; old packs are not sold
+    _, _, upi = _request("/billing/pay?plan=topup_engineer", cookie=cookie)
+    assert "am=99.00" in upi and "Engineer top-up" in upi
+    status, _, lead = _request("/billing/pay?plan=topup_lead", cookie=cookie)
+    assert status == "402 Payment Required" and "part of Pro" in lead
 
 
 def test_plan_cards_list_each_monthly_quota(web_env):
     _, _, cookie = make_session("dev@example.com")
     _, _, page = _request("/billing", cookie=cookie)
-    for line in ("<b>Normal</b> · 30 tries / month", "<b>High</b> · 6 tries / month", "<b>Extra</b> · 3 tries / month"):
+    for line in ("<b>Engineer</b> · ≈ 14 small fixes a month", "<b>Engineer</b> · ≈ 28 small fixes a month",
+                 "<b>Lead engineer</b> · ≈ 7 reviews or rescues a month"):
         assert line in page
     assert plans.product_grant_text("project_slot") == "add 1 project slot"
 

@@ -28,8 +28,11 @@ def test_usage_page_uses_plain_mode_names_and_never_model_names(web_env):
     user_id, cookie = _login()
     status, _, body = _request("/usage", cookie=cookie)
     assert status == "200 OK"
-    for text in ("Your tries this month", "Normal", "High", "Extra", "0 of 30", "0 of 6", "0 of 3"):
+    # v6: usage bars in percent and plain units, Engineer and Lead engineer (locked on Basic), never rupees of AI or tries.
+    for text in ("Your AI this month", "Engineer", "Lead engineer", "100%", "small fixes left", "Part of Pro"):
         assert text in body
+    for gone in ("tries left", "tries used", "Extra mode", "Extra tries", "High mode", "₹118"):
+        assert gone not in body, gone
     assert "Low effort" not in body          # v4.1: the free model no longer fixes anything, so it is not shown
     for hidden in ("claude-", "haiku", "sonnet", "opus", "gpt-oss"):
         assert hidden not in body.lower()

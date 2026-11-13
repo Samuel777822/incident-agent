@@ -15,16 +15,17 @@ def portal_database(tmp_path, monkeypatch):
     portal_db.init_db()
 
 
-def test_prices_follow_architecture_plan_v2():
-    assert plans.PLAN_PRICES == {"monthly": 200, "yearly": 1500}
-    assert plans.PLAN_DAYS == {"monthly": 30, "yearly": 365}
+def test_prices_follow_plan_v6():
+    assert plans.PLAN_PRICES == {"monthly": 200, "yearly": 1500, "pro": 500}
+    assert plans.PLAN_DAYS == {"monthly": 30, "yearly": 365, "pro": 30}
     assert plans.YEARLY_PER_MONTH == 125 and plans.YEARLY_SAVING == 900
-    assert (plans.PACK_PRICE, plans.PACK_HIGH_TRIES, plans.PACK_EXTRA_TRIES) == (100, 5, 3)
+    assert (plans.TOPUP_PRICE, plans.TOPUP_INR) == (99, 58)
+    assert plans.BARS["basic"] == {"haiku": 118, "sonnet": 0} and plans.BARS["pro"] == {"haiku": 230, "sonnet": 64}
 
 
-def test_quotas_come_from_the_engine_config():
-    assert plans.quotas() == {"normal": 30, "high": 6, "extra": 3}
-    assert "30 Normal, 6 High and 3 Extra" in plans.quota_sentence()
+def test_bars_are_described_in_small_fixes_never_in_rupees_of_ai():
+    sentence = plans.quota_sentence()
+    assert "about 14 small fixes" in sentence and "Lead engineer" in sentence and "₹118" not in sentence
 
 
 def test_old_prices_are_refused_for_new_payments(portal_database):
@@ -67,21 +68,21 @@ def test_an_unknown_amount_is_never_approved(portal_database):
         portal_db.approve_manual_payment("odd1", "admin1@example.com")
 
 
-def test_pricing_page_shows_plan_v2_prices_quotas_and_honest_wording():
+def test_pricing_page_shows_basic_pro_bars_and_honest_wording():
     page = footer_pages.pricing_page_html()
-    assert "&#8377;200" in page and "&#8377;1,500" in page and "Save &#8377;900" in page
+    assert "&#8377;200" in page and "&#8377;1,500" in page and "Save &#8377;900" in page and "&#8377;500" in page
     assert "about &#8377;125 a month" in page
-    assert "30 Normal, 6 High and 3 Extra" in page
+    assert "Basic" in page and "Pro" in page and "Lead engineer" in page and "small fixes" in page
     assert "not a guaranteed fix" in page and "do not roll over" in page
-    assert "&#8377;100 pack" in page
-    for claim in ("Unlimited", "Priority worker", "WhatsApp", "&#8377;1,000", "Groq"):
+    assert "founders" in page and "&#8377;2,000" in page
+    for claim in ("Unlimited", "Priority worker", "WhatsApp", "Groq", "Extra tries", "Extra mode", "tries"):
         assert claim not in page, claim
 
 
-def test_terms_state_prices_quotas_and_no_guarantee():
+def test_terms_state_prices_bars_and_no_guarantee():
     terms = footer_pages.terms_of_service_page_html()
     assert "&#8377;200 (30 days)" in terms and "&#8377;1,500 (365 days)" in terms
-    assert "30 Normal, 6 High and 3 Extra" in terms
+    assert "small fixes" in terms and "Lead engineer" in terms
     assert "do not roll over" in terms and "not a guaranteed fix" in terms
     assert "{plans" not in terms
 
@@ -92,12 +93,12 @@ def test_privacy_policy_names_third_party_ai_and_no_longer_claims_code_is_never_
     assert "never clone or execute" not in privacy
 
 
-def test_chatbot_knowledge_and_fallback_use_plan_v2_prices():
+def test_chatbot_knowledge_uses_plan_v6_prices():
     knowledge = chatbot.DAEMON_KNOWLEDGE
     assert "@@" not in knowledge
-    assert "₹200 for 30 days" in knowledge and "₹1,500 for 365 days" in knowledge
+    assert "₹200 for 30 days" in knowledge and "₹1,500 for 365 days" in knowledge and "₹500 for 30 days" in knowledge
     assert "₹100 for 30 days" not in knowledge and "₹1,000" not in knowledge
-    assert "30 Normal, 6 High and 3 Extra" in knowledge
+    assert "small fixes" in knowledge and "DIAGNOSES" in knowledge and "Opus is not used" in knowledge
 
 
 def test_prices_can_be_changed_by_environment_without_a_code_change(monkeypatch):
@@ -106,9 +107,11 @@ def test_prices_can_be_changed_by_environment_without_a_code_change(monkeypatch)
     monkeypatch.setenv("PLAN_PRICE_YEARLY_INR", "not-a-number")
     try:
         importlib.reload(plans)
-        assert plans.PLAN_PRICES == {"monthly": 250, "yearly": 1500}      # a bad value falls back to the plan default
+        assert plans.PLAN_PRICES == {"monthly": 250, "yearly": 1500, "pro": 500}      # a bad value falls back to the default
     finally:
         monkeypatch.delenv("PLAN_PRICE_MONTHLY_INR", raising=False)
         monkeypatch.delenv("PLAN_PRICE_YEARLY_INR", raising=False)
         importlib.reload(plans)
-    assert plans.PLAN_PRICES == {"monthly": 200, "yearly": 1500}
+    assert plans.PLAN_PRICES == {"monthly": 200, "yearly": 1500, "pro": 500}
+
+

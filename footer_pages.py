@@ -200,20 +200,19 @@ def features_page_html() -> str:
 </section>"""
 
 
-def _plan_quota_list() -> str:
-    rows = "".join(f"<li><b>{m}</b> &middot; {amt} <span class='muted'>&middot; {what}</span></li>" for m, amt, what in plans.quota_lines())
+def _plan_quota_list(plan: str = "pro") -> str:
+    rows = "".join(f"<li><b>{m}</b> &middot; {amt} <span class='muted'>&middot; {what}</span></li>" for m, amt, what in plans.plan_bar_lines(plan))
     return f"<ul class='quota-list'>{rows}</ul>"
 
 
 def pricing_page_html(signed_in: bool = False) -> str:
     cta_href = "/billing" if signed_in else "/login"
     cta_text = "Go to plan &amp; billing" if signed_in else "Sign in to subscribe"
-    q = plans.quotas()
-    quota_list = _plan_quota_list()
+    small = plans.SMALL_FIX_INR["haiku"]
     return f"""<section class="about-hero">
 <div class="eyebrow">Simple, honest plans</div>
-<h1>One price. {q["normal"]} Normal, {q["high"]} High and {q["extra"]} Extra fixes every month.</h1>
-<p>Start with a free 1-day trial. Every plan includes push checks on every commit, all languages, and one project. Add more projects for &#8377;{plans.PROJECT_SLOT_PRICE} each.</p>
+<h1>An AI engineer on call for your app, from &#8377;{plans.PLAN_PRICES["monthly"]:,} a month.</h1>
+<p>It watches every push and your live site, tells you what broke and why, and fixes it after you say yes. Start with a free 1-day trial. Every plan includes push checks on every commit, all languages, and one project.</p>
 </section>
 
 <div class="price-grid">
@@ -221,27 +220,28 @@ def pricing_page_html(signed_in: bool = False) -> str:
     <span class="badge-tag setup">Try it</span>
     <h3>1-day free trial</h3>
     <div class="price">&#8377;0</div>
-    <p class="muted">The whole product on your own repository for one day. Approved by the team, usually within 1 to 2 hours.</p>
-    <ul class="quota-list"><li>Push checks on every commit</li><li>The full fix pipeline</li><li>1 project</li></ul>
+    <p class="muted">The whole product on your own repository for one day, with a small Engineer bar (about {plans.BARS["trial"]["haiku"] // small} small fixes). Approved by the team, usually within 1 to 2 hours.</p>
+    <ul class="quota-list"><li>Push checks on every commit</li><li>Diagnose, then fix after you say yes</li><li>1 project</li></ul>
     <a class="button" href="{cta_href}">Request free trial</a>
   </article>
 
-  <article class="price-card featured">
-    <span class="badge-tag bug">Most popular</span>
-    <h3>Monthly</h3>
+  <article class="price-card">
+    <h3>Basic</h3>
     <div class="price">&#8377;{plans.PLAN_PRICES["monthly"]:,}<small> / 30 days</small></div>
+    <p class="muted">Or &#8377;{plans.PLAN_PRICES["yearly"]:,} a year: about &#8377;{plans.YEARLY_PER_MONTH:,} a month. Save &#8377;{plans.YEARLY_SAVING:,}.</p>
     <p class="muted">Every month you get:</p>
-    {quota_list}
+    {_plan_quota_list("basic")}
     <ul class="quota-list"><li>Push checks on every commit (fair use: up to 12 an hour per project)</li><li>{plans.INCLUDED_PROJECTS} project included &middot; extra projects &#8377;{plans.PROJECT_SLOT_PRICE} each</li></ul>
     <a class="button primary" href="{cta_href}">{cta_text}</a>
   </article>
 
-  <article class="price-card">
-    <span class="badge-tag git">Best value &middot; Save &#8377;{plans.YEARLY_SAVING:,}</span>
-    <h3>Yearly</h3>
-    <div class="price">&#8377;{plans.PLAN_PRICES["yearly"]:,}<small> / 365 days &middot; about &#8377;{plans.YEARLY_PER_MONTH:,} a month</small></div>
-    <p class="muted">Everything in Monthly for a year. The same monthly tries, renewed every month:</p>
-    {quota_list}
+  <article class="price-card featured">
+    <span class="badge-tag bug">Most help</span>
+    <h3>Pro</h3>
+    <div class="price">&#8377;{plans.PLAN_PRICES["pro"]:,}<small> / 30 days</small></div>
+    <p class="muted">Everything in Basic, a bigger Engineer bar, and the Lead engineer:</p>
+    {_plan_quota_list("pro")}
+    <ul class="quota-list"><li>The Lead engineer checks medium fixes before they go live</li><li>When the Engineer gets stuck, the Lead engineer guides it (it asks you first)</li></ul>
     <a class="button primary" href="{cta_href}">{cta_text}</a>
   </article>
 </div>
@@ -249,18 +249,17 @@ def pricing_page_html(signed_in: bool = False) -> str:
 <section class="card" style="margin-top:28px">
   <h3>Add-ons</h3>
   <div class="addon-row">
+    <div><b>Top-up</b><span class="muted">{plans.topup_sentence()}</span></div>
     <div><b>Extra project</b><span class="muted">One-time &#8377;{plans.PROJECT_SLOT_PRICE}. Connect one more repository. The slot stays on your account.</span></div>
-    <div><b>Normal pack</b><span class="muted">&#8377;{plans.PACK_NORMAL_PRICE} adds {plans.PACK_NORMAL_TRIES} more Normal tries this month.</span></div>
-    <div><b>High pack</b><span class="muted">A &#8377;{plans.PACK_PRICE} pack adds {plans.PACK_HIGH_TRIES} more High tries this month.</span></div>
-    <div><b>Extra pack</b><span class="muted">A &#8377;{plans.PACK_PRICE} pack adds {plans.PACK_EXTRA_TRIES} more Extra tries this month.</span></div>
+    <div><b>Big jobs by the founders</b><span class="muted">A new feature or a whole page? The founders build it for you: &#8377;200 for plan members (tips welcome). A whole app from scratch: &#8377;2,000, then &#8377;600 a month and we look after it.</span></div>
   </div>
 </section>
 
 <section class="card" style="margin-top:28px">
-  <h3>What a "try" is</h3>
-  <p class="muted">{plans.TRY_DEFINITION} {plans.MODE_SUMMARY}</p>
-  <p class="muted">{plans.WHY_STRONGER} You can also pick a mode yourself or send a bug to human review.</p>
-  <p class="muted">You are buying attempts, not a guaranteed fix: no automated system fixes every bug. {plans.HUMAN_NEEDED} Quotas reset on the 1st and do not roll over.</p>
+  <h3>How the bars work</h3>
+  <p class="muted">{plans.BAR_DEFINITION}</p>
+  <p class="muted">{plans.MODE_SUMMARY} {plans.WHY_STRONGER}</p>
+  <p class="muted">You are paying for the engineer's time, not a guaranteed fix: no automated system fixes every bug. {plans.HUMAN_NEEDED} Bars refill on the 1st and do not roll over.</p>
 </section>
 
 <section class="card" style="margin-top:28px">
@@ -557,7 +556,7 @@ def terms_of_service_page_html() -> str:
   <ul>
     <li><b>Free Trial:</b> Limited to one 1-day free trial per customer, subject to approval by the Agent Daemon team of engineers.</li>
     <li><b>Paid Plans:</b> Paid access is available for &#8377;{plans.PLAN_PRICES["monthly"]:,} (30 days) and &#8377;{plans.PLAN_PRICES["yearly"]:,} (365 days). Payments made via Paytm UPI QR are activated upon administrative verification of the provided UTR reference.</li>
-    <li><b>Monthly Fix Attempts:</b> Each paid plan includes {plans.quota_sentence()}. Quotas reset every month and do not roll over, including on the yearly plan. Extra attempts can be bought for the current month: &#8377;{plans.PACK_NORMAL_PRICE} for {plans.PACK_NORMAL_TRIES} Normal attempts, or a &#8377;{plans.PACK_PRICE} pack ({plans.PACK_HIGH_TRIES} High or {plans.PACK_EXTRA_TRIES} Extra attempts).</li>
+    <li><b>Monthly usage bars:</b> {plans.quota_sentence()}. Bars refill every month and do not roll over, including on the yearly plan. {plans.topup_sentence()}</li>
     <li><b>Projects:</b> Every plan includes {plans.INCLUDED_PROJECTS} connected project. Each additional project is a one-time payment of &#8377;{plans.PROJECT_SLOT_PRICE} and the slot stays on your account.</li>
     <li><b>Attempts, Not Guarantees:</b> We sell attempts to fix a bug, not a guaranteed fix. Every fix is proposed as a pull request for your review.</li>
     <li><b>Renewal &amp; Expiry:</b> If a plan expires, project monitoring is safely paused without data loss until renewal.</li>

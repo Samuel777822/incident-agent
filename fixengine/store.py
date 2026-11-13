@@ -301,7 +301,7 @@ def list_decisions(bug_id) -> list[dict]:
 
 
 def add_grant(user_id, tier, tries, source, note="", period=None) -> str:
-    if source not in ("plan", "pack", "bonus", "admin"):
+    if source not in ("plan", "pack", "bonus", "admin", "topup"):          # v6: "topup" = rupees added to a bar
         raise ValueError("bad grant source")
     grant_id = new_id()
     _run("INSERT INTO fx_grants(id,user_id,period,tier,tries,source,note,created_at) VALUES(?,?,?,?,?,?,?,?)",

@@ -26,7 +26,7 @@ def _bug_with_tries(user_id, project_id, incident_id):
 
 
 def test_mode_path_groups_runs_and_uses_plain_names():
-    assert ui.mode_path(["groq", "groq", "groq", "haiku", "sonnet"]) == "Low effort ×3 → Normal ×1 → High ×1"
+    assert ui.mode_path(["groq", "groq", "groq", "haiku", "sonnet"]) == "Low effort ×3 → Engineer ×1 → Lead engineer ×1"
     assert ui.mode_path([]) == ""
 
 
@@ -38,8 +38,8 @@ def test_incident_page_shows_each_try_the_switches_and_no_model_names(web_env):
     status, _, body = _request(f"/projects/{project_id}/incidents/{incident_id}", cookie=cookie)
     assert status == "200 OK"
     assert "How the agent worked on this" in body
-    assert "Path so far: <strong>Low effort ×2 → Normal ×1 → High ×1</strong>" in body
-    assert "Switched from Low effort to Normal" in body and "Switched from Normal to High" in body
+    assert "Path so far: <strong>Low effort ×2 → Engineer ×1 → Lead engineer ×1</strong>" in body
+    assert "Switched from Low effort to Engineer" in body and "Switched from Engineer to Lead engineer" in body
     assert "Fix passed the tests" in body and "Fix did not pass the tests" in body
     assert "not counted as a try" in body                       # the technical fault is shown but not numbered
     assert "Failing tests: 3 before, 0 after" in body
@@ -53,7 +53,7 @@ def test_board_card_shows_the_path_summary(web_env):
     incident_id = _incident(project_id)
     _bug_with_tries(user_id, project_id, incident_id)
     status, _, body = _request(f"/projects/{project_id}/incidents/live", cookie=cookie)
-    assert status == "200 OK" and "tries: Low effort ×2 → Normal ×1 → High ×1" in body
+    assert status == "200 OK" and "tries: Low effort ×2 → Engineer ×1 → Lead engineer ×1" in body
 
 
 def test_another_customer_never_sees_the_trail(web_env):

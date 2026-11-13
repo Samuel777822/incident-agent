@@ -136,30 +136,51 @@ class Guard:
         """Always False: budget levels only email the admins (check_alerts). A mode stops only when an admin pauses it."""
         return False
 
-    # ---- quotas ------------------------------------------------------------------------------------
-    def quota(self, user_id: str, tier: str, period: str | None = None) -> dict:
+    # ---- usage bars (v6, 13 Nov 2026) ------------------------------------------------------------------------------
+    # A bar is rupees of AI per month for one model: the Engineer (Haiku) and, on Pro, the Lead engineer (Sonnet). Size from the
+    # plan (plans.BARS) + top-ups this month + the value of tries granted before v6, minus what that model really cost this month
+    # (every attempt row with a cost, reviews and guidance included). The old "tries" numbers below are derived from the bars so
+    # older pages and the router keep working.
+    @staticmethod
+    def _bar_tier(tier: str) -> str:
+        return "sonnet" if tier in ("sonnet", "opus") else "haiku"
+
+    def bar(self, user_id: str, tier: str, period: str | None = None) -> dict:
+        import plans
+        key = self._bar_tier(tier)
         period = period or store.current_period()
-        base = int(self.cfg["quotas"].get(tier, 0))
-        free_extra = sum(store.grants_total(user_id, tier, s, period) for s in FREE_SOURCES)
-        pack_total = store.grants_total(user_id, tier, "pack", period) + store.grants_total(user_id, tier, "plan", period)
-        used = store.tier_used(user_id, tier, period)
-        pack_used = store.pack_tries_used(user_id, tier, period)
-        free_pool = base + free_extra
-        free_used = max(0, used - pack_used)
-        level = self.level()
-        free_left = max(0, free_pool - free_used)
-        if self.tier_paused_by_budget(tier, pack=False, level=level):
-            free_left_effective = 0
-        else:
-            free_left_effective = free_left
-        pack_left = max(0, pack_total - pack_used)
-        if self.tier_paused_by_budget(tier, pack=True, level=level):
-            pack_left = 0
-        return {"tier": tier, "label": fx_config.USER_MODE_NAMES[tier], "base": base, "free_extra": free_extra,
-                "free_pool": free_pool, "used": used, "free_left": free_left, "free_left_effective": free_left_effective,
-                "pack_total": pack_total, "pack_used": pack_used, "pack_left": pack_left,
-                "left": free_left_effective + pack_left, "total": free_pool + pack_total,
-                "warn_at": int(self.cfg["warn_at"].get(tier, 0)), "every_use": bool(self.cfg["warn_every_use"].get(tier))}
+        plan = plans.user_plan(user_id)
+        size = float(plans.bar_sizes(plan).get(key, 0))
+        spent = store.spend_inr(period=period, user_id=user_id, tier=key)
+        if key == "sonnet":
+            spent += store.spend_inr(period=period, user_id=user_id, tier="opus")
+        topup = float(store.grants_total(user_id, key, "topup", period))
+        legacy = sum(store.grants_total(user_id, t, src, period) * plans.LEGACY_TRY_INR[t]
+                     for t in ((key, "opus") if key == "sonnet" else (key,)) for src in ("pack", "plan", "bonus", "admin"))
+        total = size + topup + legacy
+        left = max(0.0, total - spent)
+        return {"tier": key, "name": plans.BAR_NAMES[key], "plan": plan, "size": round(size, 2), "topup": round(topup + legacy, 2),
+                "total": round(total, 2), "spent": round(spent, 2), "left": round(left, 2),
+                "pct_left": int(round(100 * left / total)) if total > 0 else 0,
+                "small_fixes_left": int(left // plans.SMALL_FIX_INR[key]) if total > 0 else 0}
+
+    def bar_left_inr(self, user_id: str, tier: str) -> float:
+        return float(self.bar(user_id, tier)["left"])
+
+    def quota(self, user_id: str, tier: str, period: str | None = None) -> dict:
+        """The old tries view, derived from the bar (one "try" = one typical small fix of that model)."""
+        import plans
+        b = self.bar(user_id, tier, period)
+        unit = float(plans.SMALL_FIX_INR[b["tier"]])
+        base = int(b["size"] // unit)
+        extra = int(b["topup"] // unit)
+        used = int(round(b["spent"] / unit))
+        left = int(b["left"] // unit)
+        total = max(base + extra, used + left)
+        return {"tier": tier, "label": fx_config.USER_MODE_NAMES[tier], "base": base, "free_extra": extra,
+                "free_pool": base + extra, "used": used, "free_left": left, "free_left_effective": left,
+                "pack_total": 0, "pack_used": 0, "pack_left": 0, "left": left, "total": total,
+                "warn_at": 0, "every_use": False, "bar": b}
 
     def user_ceiling_reached(self, user_id: str) -> bool:
         """Always False: a customer above the monthly level keeps being served. The admins get one email per customer per month."""
@@ -218,25 +239,20 @@ class Guard:
                 return GuardResult(False, "exhausted", message="Daily fair-use cap for Low effort reached.")
             return GuardResult(True)
         if tier in store.paused_tiers():
-            return GuardResult(False, "paused", message=f"{fx_config.USER_MODE_NAMES[tier]} mode is paused.")
-        rate = self.rate_check(user_id)
-        if rate:
-            return rate
-        if self.user_ceiling_reached(user_id):
-            return GuardResult(False, "ceiling", message=notify_text_busy())
-        q = self.quota(user_id, tier)
-        level = self.level()
-        if q["free_left_effective"] > 0:
+            return GuardResult(False, "paused", message=f"The {fx_config.USER_MODE_NAMES[tier]} is paused by an admin.")
+        self.rate_check(user_id)                       # never blocks: only emails the admins
+        self.user_ceiling_reached(user_id)             # never blocks: only emails the admins
+        b = self.bar(user_id, tier)
+        if b["total"] <= 0 and b["tier"] == "sonnet":
+            return GuardResult(False, "not_in_plan", message="The Lead engineer is part of Pro (Rs 500 a month).")
+        if b["left"] > 0.5:
             return GuardResult(True, pack_try=False)
-        if q["pack_left"] > 0:
-            return GuardResult(True, pack_try=True)
-        if q["free_left"] > 0 and self.tier_paused_by_budget(tier, pack=False, level=level):
-            return GuardResult(False, "busy", message=notify_text_busy())
-        return GuardResult(False, "exhausted", message=f"All {q['label']} tries for this month are used.")
+        return GuardResult(False, "exhausted", message=f"Your {b['name']} bar is used up for this month. Add a top-up (Rs 99) on "
+                                                       f"the Usage page, or it refills on the 1st.")
 
     def needs_warning(self, user_id: str, tier: str) -> tuple[bool, int, int]:
-        """Warn before a try at the plan's warning points (plan 8.2). Returns (warn, used, total)."""
-        if tier in ("groq",):
+        """v6: no per-try warnings. The bar shows what is left, and Lead engineer work is offered with its cost before it runs."""
+        if True:
             return False, 0, 0
         q = self.quota(user_id, tier)
         used = q["used"]

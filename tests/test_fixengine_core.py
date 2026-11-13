@@ -168,29 +168,32 @@ def _attempt(user_id, project_id, tier, result="fail", cost=1.0, pack=False):
     return aid
 
 
-def test_quota_counts_used_tries_and_restores_system_faults(fx_db, cfg):
+def test_the_bar_counts_what_each_model_really_cost(fx_db, cfg):
+    # v6: a bar is rupees of AI per month. The test owner is on Pro: Engineer Rs 230, Lead engineer Rs 64.
     uid, pid = make_user_and_project()
     g = fx_guard.Guard(cfg)
     for _ in range(2):
-        _attempt(uid, pid, "sonnet")
-    _attempt(uid, pid, "sonnet", result="system_fault")
-    q = g.quota(uid, "sonnet")
-    assert q["used"] == 2 and q["left"] == 4 and q["total"] == 6
+        _attempt(uid, pid, "sonnet", cost=9.0)
+    _attempt(uid, pid, "sonnet", result="system_fault", cost=0.0)       # a fault with no cost costs the owner nothing
+    _attempt(uid, pid, "sonnet", result="review", cost=5.0)             # Lead reviews draw from the Lead bar
+    b = g.bar(uid, "sonnet")
+    assert b["size"] == 64 and b["spent"] == 23.0 and b["left"] == 41.0 and b["pct_left"] == 64
+    assert g.bar(uid, "haiku")["left"] == 230 and g.bar_left_inr(uid, "haiku") == 230.0
+    q = g.quota(uid, "sonnet")                                            # the old tries view, derived from the bar
+    assert q["left"] == 4 and q["pack_left"] == 0
 
-
-def test_exhausted_then_pack_then_grant(fx_db, cfg):
+def test_an_empty_bar_is_refilled_by_a_top_up_and_old_packs_keep_their_value(fx_db, cfg):
     uid, pid = make_user_and_project()
     g = fx_guard.Guard(cfg)
-    for _ in range(6):
-        _attempt(uid, pid, "sonnet")
-    assert g.check(uid, "sonnet").code == "exhausted"
-    admin_tools.sell_pack(uid, "high")
+    _attempt(uid, pid, "sonnet", cost=64.0)
     res = g.check(uid, "sonnet")
-    assert res.ok and res.pack_try
-    assert g.quota(uid, "sonnet")["pack_left"] == 5
-    store.add_grant(uid, "opus", 2, "admin")
-    assert g.quota(uid, "opus")["total"] == 5
-
+    assert res.code == "exhausted" and "top-up" in res.message
+    admin_tools.sell_topup(uid, "sonnet")
+    assert g.check(uid, "sonnet").ok and g.bar(uid, "sonnet")["left"] == 58.0
+    admin_tools.sell_pack(uid, "high")                                    # an old High pack (5 tries) = Rs 58 of Lead bar
+    assert round(g.bar(uid, "sonnet")["left"], 1) == 116.0
+    store.add_grant(uid, "opus", 2, "admin")                              # old Extra tries count on the Lead bar too
+    assert round(g.bar(uid, "sonnet")["left"], 1) == 154.6
 
 def test_budget_levels_are_counted_but_never_pause_a_mode(fx_db, cfg):
     uid, pid = make_user_and_project()
@@ -209,23 +212,19 @@ def test_even_past_the_budget_every_mode_still_works_and_admins_are_told(fx_db, 
     _attempt(other_uid, other_pid, "haiku", cost=490.0)        # past the reserve floor (level 5)
     g = fx_guard.Guard(cfg)
     g.check_alerts()
-    for tier in ("haiku", "sonnet", "opus"):
+    for tier in ("haiku", "sonnet", "opus"):                       # opus = the Lead bar (never routed to since v6)
         assert g.check(uid, tier).ok, tier
     assert not ({"haiku", "sonnet", "opus"} & store.paused_tiers())
     assert any("budget alert" in s.lower() for s in sent)
 
 
-def test_warning_points(fx_db, cfg):
+def test_no_per_try_warnings_any_more(fx_db, cfg):
+    # v6: the bar shows what is left; Lead engineer work is offered with its cost before it runs, so no warning points.
     uid, pid = make_user_and_project()
     g = fx_guard.Guard(cfg)
-    assert g.needs_warning(uid, "opus")[0]                       # Extra: every use
     for _ in range(3):
         _attempt(uid, pid, "sonnet")
-    warn, used, total = g.needs_warning(uid, "sonnet")
-    assert warn and used == 3 and total == 6
-    g.mark_warned(uid, "sonnet")
-    assert not g.needs_warning(uid, "sonnet")[0]
-
+    assert g.needs_warning(uid, "sonnet") == (False, 0, 0) and g.needs_warning(uid, "opus")[0] is False
 
 def test_customer_over_the_monthly_level_keeps_working_and_admins_get_one_email(fx_db, cfg, monkeypatch):
     sent = []
@@ -308,17 +307,18 @@ def test_request_more_auto_grants_when_cheap_and_holds_when_not(fx_db, cfg, monk
     monkeypatch.setattr("fixengine.notify._to_admins", lambda *a, **k: None)
     uid, pid = make_user_and_project()
     g = fx_guard.Guard(cfg)
+    before = g.bar(uid, "sonnet")["total"]
     out = admin_tools.request_more_tries(uid, "sonnet", g)
-    assert out["decision"] == "granted" and g.quota(uid, "sonnet")["total"] == 8
+    assert out["decision"] == "granted" and g.bar(uid, "sonnet")["total"] > before
     other, opid = make_user_and_project("o@example.com")
     _attempt(other, opid, "haiku", cost=330.0)                    # level 2: free bonus grants stopped
     store.set_flag("spike_paused", "1")
     out = admin_tools.request_more_tries(uid, "opus", g)
     assert out["decision"] == "held"
     hold = store.open_hold(uid, "opus")
-    assert admin_tools.approve_hold(hold["id"], "admin@example.com") and g.quota(uid, "opus")["total"] >= 5
+    mid = g.bar(uid, "sonnet")["total"]
+    assert admin_tools.approve_hold(hold["id"], "admin@example.com") and g.bar(uid, "sonnet")["total"] > mid
     assert not admin_tools.approve_hold(hold["id"], "admin@example.com")      # only once
-
 
 def test_pause_and_resume_controls(fx_db):
     admin_tools.pause_tier("opus", True, "a@example.com")
