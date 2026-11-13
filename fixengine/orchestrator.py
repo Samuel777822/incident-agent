@@ -438,6 +438,19 @@ class Engine:
                              f"The agent reached the spending limit for this case (about Rs {spent:.0f}). Keep going?")
         return "awaiting_client"
 
+    def _run_cap(self, project, tier: str) -> float | None:
+        """v6: one run may spend at most the lower of its own cap and what is left in the owner's bar for this model."""
+        acfg = self.cfg.get("agent") or {}
+        caps = acfg.get("max_inr_per_run", 90.0)
+        cap = float(caps.get(tier, 90.0) if isinstance(caps, dict) else caps)
+        bar_left = getattr(self.guard, "bar_left_inr", None)
+        if bar_left is None:
+            return cap
+        try:
+            return max(0.5, min(cap, float(bar_left(project["user_id"], tier))))
+        except Exception:
+            return cap
+
     def _agent_try(self, claimed, project, bug, tier, pack_try, files, root, profile, message, traceback_text, commits, ctx, info):
         incident_id, project_id = claimed["incident_id"], claimed["project_id"]
         transport = self._transport(tier)
@@ -502,7 +515,7 @@ class Engine:
                 commits=(lambda path, n: self.gh.commits_list(project, path, n)) if hasattr(self.gh, "commits_list") else None,
                 commit_show=(lambda sha: self.gh.commit_show(project, sha)) if hasattr(self.gh, "commit_show") else None,
                 web_model=(self.cfg.get("openrouter_models") or {}).get("haiku", ""), should_stop=should_stop, on_step=on_step,
-                usd_inr=usd_inr)
+                usd_inr=usd_inr, max_inr=self._run_cap(project, tier))
             res = eng.run(brief)
         except fx_agent.AgentFault as exc:
             # 11 Nov 2026: a run that failed half way (credit ran out at step 20, an outage, a rejected request) was saved with NO cost,

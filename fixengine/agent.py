@@ -37,6 +37,11 @@ log = logging.getLogger("fixengine.agent")
 OPENROUTER_URL = "https://openrouter.ai/api/v1/chat/completions"
 FULL_CODE_CHARS = 450_000            # about 110K tokens: below this the whole code base goes into the first message (cached)
 MAX_TOOL_OUTPUT = 14_000
+# v6: how much one tool result may add, and how big the conversation may grow before old tool output is cut, per model.
+# Haiku's price is 5x higher once a request passes 100K tokens, so its conversation stays under ~90K (chars / 3.5).
+TOOL_OUTPUT_CAP = {"haiku": 6_000, "sonnet": 14_000, "opus": 14_000}
+CONTEXT_BUDGET_CHARS = {"haiku": 315_000, "sonnet": 630_000, "opus": 630_000}
+KEEP_RECENT_TOOL_RESULTS = 4
 REWRITE_LINE_LIMIT = 60               # existing files longer than this are changed with edit_file only
 TERMINAL = {"finish_fixed", "needs_owner", "ask_owner", "give_up"}
 
@@ -279,6 +284,11 @@ class OpenRouterTransport:
         if not self.key():
             raise AgentFault("not_configured", "OPENROUTER_API_KEY is not set")
         body = {"model": model or self.model, "messages": messages, "max_tokens": int(max_tokens), "usage": {"include": True}}
+        if str(model or self.model).startswith("anthropic/"):
+            # v6: automatic prompt caching. OpenRouter puts a cache breakpoint on the last cacheable block and moves it forward as the
+            # conversation grows, so every step pays the cheap cached price (0.1x) for everything before it. Before this, only the
+            # first message was cached and each step paid full price for the whole growing conversation.
+            body["cache_control"] = {"type": "ephemeral"}
         if tools:
             body["tools"], body["tool_choice"] = tools, "auto"
         if self.effort and not extra:
@@ -359,6 +369,9 @@ class Engineer:
         self.on_step = on_step or (lambda what: None)
         self.usd_inr = float(usd_inr or 85.0)
         self.result = AgentResult(outcome="gave_up", model=transport.model)
+        self.tool_cap = TOOL_OUTPUT_CAP.get(_tier_of(transport.model), MAX_TOOL_OUTPUT)
+        self.context_budget = CONTEXT_BUDGET_CHARS.get(_tier_of(transport.model), 630_000)
+        self.trims = 0
         self.checks_left, self.pages_left, self.searches_left = self.max_checks, self.max_pages, self.max_searches
         self.checked_version = -1
         self.last_checks_passed: bool | None = None
@@ -409,6 +422,7 @@ class Engineer:
                     hinted = True
                     messages.append({"role": "user", "content": "About 70% of this run's budget is used. Wrap up: make the most important "
                                      "fix now (edit, then run_checks), then finish. List what is left in client_message."})
+                self._trim(messages)
                 reply = self.t.complete(messages, tools)
                 self._add_usage(reply["usage"])
                 msg = reply["message"]
@@ -462,9 +476,36 @@ class Engineer:
         notes = [str(m.get("content") or "").strip() for m in messages if m.get("role") == "assistant" and str(m.get("content") or "").strip()]
         return "\n".join(notes[-6:])[-3000:]
 
+    def _tool_msg(self, call: dict, text: str) -> dict:
+        text = str(text)
+        if len(text) > self.tool_cap:
+            text = text[:self.tool_cap] + f"\n... (cut at {self.tool_cap} characters; read a smaller range or search for the exact part)"
+        return {"role": "tool", "tool_call_id": call.get("id"), "content": text}
+
     @staticmethod
-    def _tool_msg(call: dict, text: str) -> dict:
-        return {"role": "tool", "tool_call_id": call.get("id"), "content": str(text)[:MAX_TOOL_OUTPUT]}
+    def _size(messages: list[dict]) -> int:
+        total = 0
+        for m in messages:
+            c = m.get("content")
+            if isinstance(c, list):
+                total += sum(len(str(b.get("text") or "")) + (1500 if b.get("type") == "image_url" else 0) for b in c if isinstance(b, dict))
+            else:
+                total += len(str(c or ""))
+        return total
+
+    def _trim(self, messages: list[dict]) -> None:
+        """Keep the conversation under the model's budget. Old tool output (files read, test logs) becomes a one-line note; the model
+        reads it again if it still needs it. Done in ONE go only when the budget is passed, never every step: changing old messages
+        changes the cached prefix, so trimming a little each step would throw the cache away every time."""
+        if self._size(messages) <= self.context_budget:
+            return
+        tool_idx = [i for i, m in enumerate(messages) if m.get("role") == "tool"]
+        for i in tool_idx[:-KEEP_RECENT_TOOL_RESULTS]:
+            old = str(messages[i].get("content") or "")
+            if not old.startswith("[older tool output removed"):
+                first = " ".join(old.split())[:140]
+                messages[i] = {**messages[i], "content": f"[older tool output removed to save memory; it began: {first} ... run the tool again if you need it]"}
+        self.trims += 1
 
     def _finish(self) -> AgentResult:
         r = self.result

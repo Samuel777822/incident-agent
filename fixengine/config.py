@@ -104,7 +104,7 @@ DEFAULTS: dict = {
         # Spending on one case before the owner is asked "Keep going?" (never a silent stop). Each "Keep going" adds this again.
         "max_inr_per_case": 250.0,
         # Whole code base in the first message up to this many characters (Haiku's price rises above 100K prompt tokens).
-        "full_code_chars": {"haiku": 240000, "sonnet": 450000, "opus": 450000},
+        "full_code_chars": {"haiku": 120000, "sonnet": 450000, "opus": 450000},     # v6: Haiku starts small (map + tools)
         "max_check_runs": 5,
         "max_page_visits": 5,
         "max_web_searches": 6,
