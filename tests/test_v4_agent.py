@@ -496,7 +496,7 @@ def test_an_unavailable_stronger_mode_is_explained_with_the_fix(tmp_path, monkey
     inc = H.make_incident(pid)
     assert engine.handle_incident(H.claim()) == "needs_human"
     why = store.get_bug_by_incident(inc)["stop_reason"] + store.get_bug_by_incident(inc)["review_report"]
-    assert "High mode was not used because an admin paused it" in why and "Mode switches" in why
+    assert "Lead engineer mode was not used because an admin paused it" in why and "Mode switches" in why
 
 
 def test_the_report_box_teaches_how_to_write_a_request():

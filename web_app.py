@@ -3812,11 +3812,11 @@ def _page_project_cases(request, project_id, action):
 
 
 def _next_tier(bug) -> str:
-    """The next stronger engineer after the last one that worked on this case ('' after Extra mode)."""
+    """The next stronger engineer after the last one that worked on this case ('' after the Lead engineer). Never Opus (v6)."""
     if not bug:
         return ""
     from fixengine import store as fx_store
-    order = ("haiku", "sonnet", "opus")
+    order = ("haiku", "sonnet")
     used = [a["tier"] for a in fx_store.list_attempts(bug["id"]) if a["tier"] in order and a["result"] != "system_fault"]
     if not used:
         return "sonnet"

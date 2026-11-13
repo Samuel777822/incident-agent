@@ -51,14 +51,16 @@ def test_a_review_never_uses_the_customers_tries_even_when_they_have_none(fx_db,
 
 
 def test_the_reviewer_is_a_different_model_and_skips_a_mode_an_admin_paused(fx_db, cfg):
+    # v6: Opus is never used. A Haiku fix is reviewed by Sonnet only; with Sonnet paused there is no reviewer, so the fix is not
+    # approved (it goes as a pull request) rather than being reviewed by the same model or by Opus.
     uid, pid, bug = _bug()
     store.set_flag("pause_sonnet", "1")
     reviewers = {"sonnet": Reviewer("sonnet", '{"approve": true, "reason": "x"}'),
-                 "opus": Reviewer("opus", '{"approve": false, "reason": "it hides the error"}')}
+                 "opus": Reviewer("opus", '{"approve": true, "reason": "never asked"}')}
     verdict = _engine(cfg, reviewers)._independent_review(CLAIMED, {"user_id": uid}, bug, WIN, {})
-    assert verdict["reason"] == "it hides the error" and reviewers["sonnet"].calls == []
-    rows = [a for a in store.list_attempts(bug["id"]) if a["result"] == "review"]
-    assert len(rows) == 1 and rows[0]["tier"] == "opus" and rows[0]["diagnosis"].startswith("rejected:")
+    assert verdict["approve"] is False and "paused" in verdict["reason"]
+    assert reviewers["sonnet"].calls == [] and reviewers["opus"].calls == []
+    assert not [a for a in store.list_attempts(bug["id"]) if a["result"] == "review"]
 
 
 def test_when_no_reviewer_answers_the_reason_is_specific_and_admins_hear_once(fx_db, cfg, monkeypatch):

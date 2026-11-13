@@ -314,10 +314,10 @@ class Engine:
         return "needs_owner"
 
     # ---- v4: the engineer (Claude with tools on the real repository) ---------------------------------------------------------
-    AGENT_TIERS = ("haiku", "sonnet", "opus")      # cheapest first; the next model starts with what the previous one found
-    STAGE_TEXT = {"haiku": "The engineer (Normal mode) is reading your code and the evidence",
-                  "sonnet": "A stronger engineer (High mode) is taking over, with what the first one found",
-                  "opus": "The strongest engineer (Extra mode) is taking over, with everything found so far"}
+    # v6 (13 Nov 2026): two engineers only. Haiku is the Engineer, Sonnet the Lead engineer. Opus is never used (cost).
+    AGENT_TIERS = ("haiku", "sonnet")              # cheapest first; the next model starts with what the previous one found
+    STAGE_TEXT = {"haiku": "The engineer is reading your code and the evidence",
+                  "sonnet": "The lead engineer is taking over, with what the engineer found"}
 
     def _agent_ready(self) -> bool:
         if os.getenv("FIX_AGENT_MODE", "1").strip().lower() in ("0", "false", "no", "off"):
@@ -409,7 +409,7 @@ class Engine:
     @staticmethod
     def _why_unavailable(tier: str, gate) -> str:
         """Why a stronger mode was not used, in plain words, with what to do about it. Never just 'paused'."""
-        name = {"haiku": "Normal", "sonnet": "High", "opus": "Extra"}.get(tier, tier)
+        name = {"haiku": "Engineer", "sonnet": "Lead engineer", "opus": "Lead engineer"}.get(tier, tier)
         if gate.code == "paused":
             return (f"{name} mode was not used because an admin paused it (Admin, AI spending, Mode switches). When it is "
                     "resumed, reply on this case (for example: try again).")
@@ -657,7 +657,7 @@ class Engine:
             return ""
         return "the fix could not be proven by a test or a browser check, and the reviewer did not approve it: " + str(verdict.get("reason") or "no reason given")[:300]
 
-    REVIEW_ORDER = {"haiku": ("sonnet", "opus"), "sonnet": ("opus", "haiku"), "opus": ("sonnet", "haiku")}
+    REVIEW_ORDER = {"haiku": ("sonnet",), "sonnet": ("haiku",), "opus": ("sonnet",)}     # never Opus (v6)
 
     def _independent_review(self, claimed, project, bug, win: dict, ctx: dict) -> dict:
         """A DIFFERENT model reads the diff against the evidence and never fixes anything.
@@ -672,7 +672,7 @@ class Engine:
                 + "=== UNTRUSTED: THE DIFF ===\n" + prompts.redact(str(win.get("diff", "")))[:12000])
         paused = store.paused_tiers()
         problems = []
-        for tier in self.REVIEW_ORDER.get(win.get("tier"), ("sonnet", "opus", "haiku")):
+        for tier in self.REVIEW_ORDER.get(win.get("tier"), ("sonnet", "haiku")):
             if tier in paused:
                 problems.append(f"{tier} is paused by an admin")
                 continue
@@ -1668,7 +1668,7 @@ class Engine:
         portal_db.mark_remediation_needs_human(claimed["incident_id"], claimed["project_id"], reason)
         notify.user_review_ready(project["user_id"], project["name"], claimed["incident_id"], reason)
         user_id = project["user_id"]
-        for tier in ("sonnet", "opus"):
+        for tier in ("sonnet",):
             if attempts and self.guard.quota(user_id, tier)["left"] == 0 and "used up" in reason:
                 notify.user_exhausted(user_id, tier)
                 admin_tools.request_more_tries(user_id, tier, self.guard)
