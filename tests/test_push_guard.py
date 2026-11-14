@@ -430,7 +430,7 @@ def test_admin_confirm_button_says_what_it_grants(web_env, monkeypatch):
     portal_db.admin_grant_access(user_id, 30, "paid", "admin1@example.com")
     portal_db.create_manual_payment_request(user_id, 30, "project_slot", "999988887777")
     admin_id, _, admin_cookie = make_session("admin1@example.com")
-    _, _, page = _request("/admin", cookie=admin_cookie)
+    _, _, page = _request("/admin?view=payments", cookie=admin_cookie)
     assert "I received ₹30 · add 1 project slot" in page and "Java Integration Launch" not in page and "waitlist" not in page.lower()
 
 

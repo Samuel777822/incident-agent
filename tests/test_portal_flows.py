@@ -357,7 +357,9 @@ def test_admin_page_shows_real_numbers_and_email_status(web_env):
     _, _, cookie = make_session("admin1@example.com")
     status, _, body = _request("/admin", cookie=cookie)
     assert status == "200 OK"
-    for text in ("Operations", "Email status", "Send test email to both admins", "Applications", "Recent incidents and fixes",
+    for view in ("system", "apps", "incidents"):                     # v6: the admin page is split into sections
+        body += _request(f"/admin?view={view}", cookie=cookie)[2]
+    for text in ("Operations", "Email status", "Send test email to both admins", "Apps", "Incidents &amp; fixes",
                  "1 paid, 0 trial", "Email not configured", "Instant payments off"):
         assert text in body
 
@@ -374,13 +376,13 @@ def test_admin_test_email_button(web_env, monkeypatch):
 def test_admin_grant_and_revoke_show_the_right_button_for_the_state(web_env):
     user_id, *_ = make_session("c@example.com")
     _, csrf, cookie = make_session("admin1@example.com")
-    _, _, before = _request("/admin", cookie=cookie)
+    _, _, before = _request("/admin?view=customers", cookie=cookie)
     assert "value='grant'" in before and "value='revoke'" not in before
     post("/admin", cookie, csrf, action="grant", user_id=user_id, grant="paid:30")
-    _, _, after = _request("/admin", cookie=cookie)
+    _, _, after = _request("/admin?view=customers", cookie=cookie)
     assert "value='revoke'" in after and "value='grant'" not in after and "Paid · " in after
     post("/admin", cookie, csrf, action="revoke", user_id=user_id)
-    _, _, final = _request("/admin", cookie=cookie)
+    _, _, final = _request("/admin?view=customers", cookie=cookie)
     assert "value='grant'" in final and "value='revoke'" not in final and "Expired" not in final
 
 
@@ -571,7 +573,8 @@ def test_admin_sees_customers_needing_action_first_with_their_plan_state(web_env
     portal_db.admin_grant_access(active, 30, "paid", "admin1@example.com")
     post("/billing/pay", cookie, csrf, plan="yearly", transaction_ref="412345678902")
     _, _, admin_cookie = (lambda r: (r[0], r[1], r[2]))(make_session("admin1@example.com"))
-    _, _, body = _request("/admin", cookie=admin_cookie)
+    _, _, body = _request("/admin?view=customers", cookie=admin_cookie)
+    body += _request("/admin?view=payments", cookie=admin_cookie)[2]
     assert body.index("z-payer@example.com") < body.index("a-active@example.com") < body.index("b-idle@example.com")
     assert "Payment to confirm" in body and "Paid · " in body and "No access" in body
     assert "I received ₹1500 · grant Basic for 365 days" in body
@@ -773,7 +776,7 @@ def test_trial_intake_details_saved_and_emailed_to_admins(web_env):
 
     # 5. Verify details show on admin dashboard
     _, _, admin_cookie = make_session("admin1@example.com")
-    st, _, admin_page = _request("/admin", cookie=admin_cookie)
+    st, _, admin_page = _request("/admin?view=requests", cookie=admin_cookie)
     assert st == "200 OK"
     assert "Alice Smith" in admin_page
     assert "+91 9988776655" in admin_page
@@ -825,7 +828,7 @@ def test_payment_intake_details_saved_and_emailed_to_admins(web_env):
 
     # 5. Verify details show on admin dashboard
     _, _, admin_cookie = make_session("admin1@example.com")
-    st, _, admin_page = _request("/admin", cookie=admin_cookie)
+    st, _, admin_page = _request("/admin?view=payments", cookie=admin_cookie)
     assert st == "200 OK"
     assert "Bob Jones" in admin_page
     assert "+91 9123456789" in admin_page
@@ -838,7 +841,7 @@ def test_admins_can_give_basic_or_pro_for_a_hackathon_pilot(web_env):
     import plans
     user_id, *_ = make_session("team@example.com")
     _, csrf, cookie = make_session("admin1@example.com")
-    _, _, page = _request("/admin", cookie=cookie)
+    _, _, page = _request("/admin?view=customers", cookie=cookie)
     assert "value='basic:30'" in page and "value='pro:30'" in page and "value='trial:1'" in page
     assert location(post("/admin", cookie, csrf, action="grant", user_id=user_id, grant="pro:30")[1]).endswith("access_granted")
     assert plans.user_plan(user_id) == "pro"

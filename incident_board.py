@@ -299,7 +299,8 @@ def still_broken_html(inc: dict, project_id: str, csrf: str) -> str:
             "screenshot and at what it already tried, and does not repeat it.</p>"
             "<textarea name='text' rows='3' maxlength='1000' placeholder='What do you still see? (optional with a screenshot)'></textarea>"
             + media_input.inputs_html() +
-            "<button class='button primary' type='submit'>Send to the agent</button></form></details>")
+            "<button class='button primary' type='submit'>Send to the agent</button></form></details>"
+            f"<a class='inc-rate' href='/review?case={_e(iid)}&amp;project={_e(project_id)}'>&#9733; Rate this fix</a>")
 
 
 def render_board(project_id: str, incidents: list, mode: str, csrf: str = "") -> str:

@@ -255,6 +255,19 @@ CREATE TABLE IF NOT EXISTS support_messages (
 );
 CREATE INDEX IF NOT EXISTS idx_support_messages_time ON support_messages(created_at DESC);
 CREATE INDEX IF NOT EXISTS idx_support_messages_status ON support_messages(status, created_at DESC);
+CREATE TABLE IF NOT EXISTS reviews (
+  id TEXT PRIMARY KEY,
+  user_id TEXT NOT NULL,
+  email TEXT NOT NULL,
+  name TEXT NOT NULL DEFAULT '',
+  rating INTEGER NOT NULL,
+  text TEXT NOT NULL DEFAULT '',
+  can_publish INTEGER NOT NULL DEFAULT 0,
+  project_id TEXT NOT NULL DEFAULT '',
+  incident_id TEXT NOT NULL DEFAULT '',
+  created_at TEXT NOT NULL
+);
+CREATE INDEX IF NOT EXISTS idx_reviews_time ON reviews(created_at DESC);
 
 CREATE TABLE IF NOT EXISTS push_checks (
   id TEXT PRIMARY KEY,
@@ -2001,6 +2014,44 @@ def create_support_ticket(name: str, email: str, subject: str, message: str, ass
         return d
     finally:
         conn.close()
+
+
+def add_review(user_id: str, email: str, name: str, rating: int, text: str, can_publish: bool,
+               project_id: str = "", incident_id: str = "") -> dict:
+    """v6: a customer's review (1-5 stars, words, and whether we may show it on the website). Collected during the launch
+    pilots as proof for the next organizer."""
+    rating = int(rating)
+    if not 1 <= rating <= 5:
+        raise ValueError("Rating must be 1 to 5")
+    conn = get_connection()
+    try:
+        rid = _id()
+        _execute(conn, """INSERT INTO reviews(id, user_id, email, name, rating, text, can_publish, project_id, incident_id, created_at)
+                       VALUES(?,?,?,?,?,?,?,?,?,?)""",
+                 (rid, user_id, email.strip().lower(), name.strip()[:120], rating, text.strip()[:2000], 1 if can_publish else 0,
+                  project_id[:64], incident_id[:64], _now()))
+        conn.commit()
+        return dict(_execute(conn, "SELECT * FROM reviews WHERE id=?", (rid,)).fetchone())
+    finally:
+        conn.close()
+
+
+def list_reviews(limit: int = 100) -> list[dict]:
+    conn = get_connection()
+    try:
+        return [dict(r) for r in _execute(conn, "SELECT * FROM reviews ORDER BY created_at DESC LIMIT ?", (limit,)).fetchall()]
+    finally:
+        conn.close()
+
+
+def review_stats() -> dict:
+    """{count, average (one decimal, 0 when none), publishable}."""
+    conn = get_connection()
+    try:
+        row = dict(_execute(conn, "SELECT COUNT(*) AS n, AVG(rating) AS avg, SUM(can_publish) AS pub FROM reviews").fetchone())
+    finally:
+        conn.close()
+    return {"count": int(row.get("n") or 0), "average": round(float(row.get("avg") or 0), 1), "publishable": int(row.get("pub") or 0)}
 
 
 def create_support_message(name: str, email: str, subject: str, message: str) -> dict:

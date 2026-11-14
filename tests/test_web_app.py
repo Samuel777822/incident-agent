@@ -581,7 +581,7 @@ def test_support_ticketing_lifecycle(web_env, monkeypatch):
     session_id = web_app.portal_db.create_session(user_id, admin_csrf, (web_app._now() + timedelta(days=1)).isoformat())
     admin_cookie = f"{web_app.SESSION_COOKIE}={web_app._signed_cookie(session_id)}"
 
-    st, _, admin_html = _request("/admin", cookie=admin_cookie)
+    st, _, admin_html = _request("/admin?view=tickets", cookie=admin_cookie)
     assert st == "200 OK"
     assert "Support Tickets" in admin_html
     assert ticket["ticket_ref"] in admin_html

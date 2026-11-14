@@ -2000,7 +2000,9 @@ def _admin_action(request):
     actor = request.session["email"]
     admins = _admin_emails()
     action = form.get("action", "")
-    done = lambda key: _redirect("/admin?msg=" + key)
+    back_view = str((request.query.get("view") or [""])[0])
+    back_view = back_view if re.fullmatch(r"[a-z]{2,20}", back_view) else ""
+    done = lambda key: _redirect("/admin?" + (f"view={back_view}&" if back_view else "") + "msg=" + key)   # back to the same section
     if action == "approve_trial":
         trial = portal_db.approve_trial_request(form.get("request_id", ""), actor)
         if not trial:
@@ -2298,8 +2300,8 @@ def _admin_view(request):
     chat_section = f"<h2 id='live-chats'>Live visitor conversations &amp; inquiries</h2>{chat_table}"
 
     # Support Tickets & Issue Tracking
-    support_msgs = portal_db.admin_list_support_messages(50)
-    support_rows = []
+    support_msgs = portal_db.admin_list_support_messages(200)
+    support_rows, founder_rows = [], []
     for s in support_msgs:
         t_ref = s.get("ticket_ref") or f"TICK-{s['id'][:8].upper()}"
         st = (s.get("status") or "open").lower()
@@ -2366,7 +2368,7 @@ def _admin_view(request):
             f"</form>"
         )
 
-        support_rows.append(f"<tr><td>{ticket_cell}</td><td>{from_cell}</td><td>{inquiry_cell}</td><td>{time_cell}</td><td>{action_form}</td></tr>")
+        (founder_rows if str(s.get("subject", "")).startswith("Custom job:") else support_rows).append(f"<tr><td>{ticket_cell}</td><td>{from_cell}</td><td>{inquiry_cell}</td><td>{time_cell}</td><td>{action_form}</td></tr>")
 
     support_table = _table(["Ticket", "Requester", "Inquiry & Resolution", "Timeline & Assigned", "Manage Ticket"], support_rows, "No support tickets submitted yet.")
     support_section = (
@@ -2447,17 +2449,75 @@ setInterval(() => {
 </script>
 """
 
-    body = (f"<section class='section'><div class='eyebrow'>Administrator</div><h1>Operations</h1>"
-            f"<p class='muted'>Signed in as {_escape(request.session['email'])}</p>"
-            f"<nav class='subnav' aria-label='On this page'><a href='#customers'>Customers</a><a href='#applications'>Applications</a><a href='#incidents'>Incidents</a>"
-            f"<a href='#live-chats'>Chats</a><a href='#support-tickets'>Support</a><a href='#system'>System &amp; email</a><a href='/admin/fix'>AI spending →</a></nav>"
-            f"{flash}{_email_health_card()}<div class='statgrid'>{cards}</div>{attention}"
-            f"<h2 id='customers'>Customers</h2>{_table(['Customer', 'Contact & Referral', 'Access', 'Action'], customer_rows, 'No customer accounts yet.')}"
-            f"<h2 id='applications'>Applications</h2>{_table(['App', 'Owner', 'State', 'Last check-in', 'Open incidents'], project_rows, 'No applications connected yet.')}"
-            f"<h2 id='incidents'>Recent incidents and fixes</h2>{_table(['When', 'App', 'Error', 'Agent status', 'Fix'], incident_rows, 'No incidents yet.')}"
-            f"{chat_section}"
-            f"{support_section}"
-            f"{system}</section>" + admin_chat_modal)
+    # v6: the admin page is a set of sections ("doorways") instead of one endless page. /admin shows the numbers and a box per
+    # section; /admin?view=<key> opens one section. Forms post back to the same section.
+    founder_table = _table(["Request", "From", "Details", "Timeline & Assigned", "Manage"], founder_rows,
+                           "No custom job requests yet. They come from the form at /build-request.")
+    rstats = portal_db.review_stats()
+    review_rows = [f"<tr><td>{'&#9733;' * int(r['rating'])}{'&#9734;' * (5 - int(r['rating']))}</td>"
+                   f"<td><b>{_escape(r.get('name') or '')}</b><br><small class='muted'>{_escape(r['email'])}</small></td>"
+                   f"<td style='white-space:pre-wrap'>{_escape(r.get('text') or '') or '<span class=muted>(no words)</span>'}</td>"
+                   f"<td>{_pill('May publish', 'green') if r.get('can_publish') else _pill('Private')}</td>"
+                   f"<td>{_escape(_fmt_time(r['created_at']))}</td></tr>" for r in portal_db.list_reviews(200)]
+    reviews_section = (f"<div class='stats'>{_pill(str(rstats['count']) + ' reviews')}"
+                       f"{_pill('Average ' + str(rstats['average']) + ' / 5', 'green' if rstats['average'] >= 4 else 'amber')}"
+                       f"{_pill(str(rstats['publishable']) + ' may be shown on the website')}</div>"
+                       + _table(["Rating", "Customer", "Review", "Website", "When"], review_rows,
+                                "No reviews yet. Customers leave them from the dashboard and from every fixed case."))
+    open_founders = sum(1 for s in support_msgs if str(s.get("subject", "")).startswith("Custom job:") and s.get("status") != "closed")
+    open_tickets = sum(1 for s in support_msgs if not str(s.get("subject", "")).startswith("Custom job:") and s.get("status") != "closed")
+    sections = [
+        ("requests", "Trial requests", "🎟", stats["pending_trials"], "to review",
+         _table(["Customer", "Mobile / WhatsApp", "Found Via / Org", "Requested", "Decision"], trial_rows, "No trial requests waiting.")),
+        ("payments", "UPI payments", "💳", stats["pending_payments"], "to confirm",
+         "<p class='muted'>Open your Paytm app, find this exact reference and amount, then confirm. Confirm only money you can see.</p>"
+         + _table(["Customer", "Mobile / WhatsApp", "Found Via / Org", "Claimed", "Reference", "Decision"], payment_rows, "No payments waiting.")),
+        ("customers", "Customers & access", "👥", stats["customers"], f"customers · {stats['active']} active",
+         _table(['Customer', 'Contact & Referral', 'Access', 'Action'], customer_rows, 'No customer accounts yet.')),
+        ("founders", "Custom job requests", "🛠", open_founders, "open",
+         "<p class='muted'>From the form at <a href='/build-request'>/build-request</a>. The page promises a reply within 1 to 2 hours "
+         "on WhatsApp or email.</p>" + founder_table),
+        ("tickets", "Support tickets", "🎫", open_tickets, f"open · {ticket_stats['total']} total", support_section),
+        ("reviews", "Reviews", "⭐", rstats["count"], f"reviews · average {rstats['average']}", reviews_section),
+        ("chats", "Live chats", "💬", len(chat_rows), "conversations", chat_section),
+        ("apps", "Apps", "📦", f"{live}/{stats['projects']}", "live / connected",
+         _table(['App', 'Owner', 'State', 'Last check-in', 'Open incidents'], project_rows, 'No applications connected yet.')),
+        ("incidents", "Incidents & fixes", "🚨", stats["open_incidents"], f"open · {stats['needs_human']} need a human",
+         _table(['When', 'App', 'Error', 'Agent status', 'Fix'], incident_rows, 'No incidents yet.')),
+        ("system", "System & email", "⚙", "", "worker, email, payments, database", _email_health_card() + system),
+    ]
+    links = [("/admin/fix", "AI spending & usage", "📊", "money spent on AI, per customer and per model"),
+             ("/admin/architecture", "Architecture", "🗺", "how the system works inside")]
+    view = str((request.query.get("view") or [""])[0])
+    chosen = next((s for s in sections if s[0] == view), None)
+    hub_css = ("<style>.adm-grid{display:grid;grid-template-columns:repeat(auto-fill,minmax(210px,1fr));gap:14px;margin:18px 0 26px}"
+               ".adm-tile{display:flex;flex-direction:column;gap:4px;padding:16px 18px;border:1px solid #3a2338;border-radius:14px;"
+               "background:#120a1bcc;color:inherit;text-decoration:none}.adm-tile:hover{border-color:#ff665588;text-decoration:none}"
+               ".adm-tile b{font-size:15px}.adm-tile .n{font-size:26px;font-weight:700;color:#fff}.adm-tile.hot{border-color:#ffb347}"
+               ".adm-tile small{color:#a99dbb}.adm-tabs{display:flex;flex-wrap:wrap;gap:6px;margin:10px 0 18px}"
+               ".adm-tabs a{padding:6px 12px;border:1px solid #3a2338;border-radius:999px;font-size:13px;text-decoration:none}"
+               ".adm-tabs a.on{background:#2d1830;border-color:#ff665588;color:#fff}</style>")
+
+    def tile(key, title, icon, n, sub, hot):
+        cls = "adm-tile hot" if hot else "adm-tile"
+        num = f"<span class='n'>{_escape(n)}</span>" if n != "" else ""
+        return f"<a class='{cls}' href='/admin?view={key}'><b>{icon} {_escape(title)}</b>{num}<small>{_escape(sub)}</small></a>"
+
+    head = (f"<section class='section'><div class='eyebrow'>Administrator</div><h1>Operations</h1>"
+            f"<p class='muted'>Signed in as {_escape(request.session['email'])}</p>{hub_css}{flash}")
+    if chosen:
+        key, title, icon = chosen[0], chosen[1], chosen[2]
+        tabs = "".join(f"<a class='{'on' if s[0] == key else ''}' href='/admin?view={s[0]}'>{s[2]} {_escape(s[1])}</a>" for s in sections)
+        content = chosen[5].replace("action='/admin'", f"action='/admin?view={key}'").replace(
+            'action="/admin"', f'action="/admin?view={key}"')
+        body = (head + f"<nav class='adm-tabs' aria-label='Admin sections'><a href='/admin'>← All sections</a>{tabs}</nav>"
+                f"<h2>{icon} {_escape(title)}</h2>{content}</section>" + (admin_chat_modal if key == "chats" else ""))
+        return _response(body, request)
+    hot = {"requests", "payments", "founders"}
+    tiles = "".join(tile(k, t, i, n, sub, k in hot and str(n) not in ("0", "")) for k, t, i, n, sub, _c in sections)
+    tiles += "".join(f"<a class='adm-tile' href='{href}'><b>{icon} {_escape(t)}</b><small>{_escape(sub)}</small></a>"
+                     for href, t, icon, sub in links)
+    body = (head + f"<div class='statgrid'>{cards}</div><div class='adm-grid'>{tiles}</div></section>")
     return _response(body, request)
 
 
@@ -2688,7 +2748,7 @@ def _page_dashboard(request):
     if access["active"]:
         quota = _quota_by_tier(user_id)
         if quota:
-            meters = ("<section class='section-tight'><div class='row'><h2>Your AI this month</h2><a href='/usage'>Usage &amp; settings →</a></div>"
+            meters = ("<section class='section-tight'><div class='row'><h2>Your AI this month</h2><span><a href='/review'>&#9733; Leave a review</a> &middot; <a href='/usage'>Usage &amp; settings →</a></span></div>"
                       f"<p class='muted'>{_escape(plans.TRY_SHORT)} Every case starts with the low-cost Normal engineer; High takes over only "
                       "if Normal cannot finish, and Extra only after asking you. <a href='/how-it-works#router'>How it works</a></p>"
                       + live_status.quota_strip(list(quota.values())) + "</section>")
@@ -3863,6 +3923,63 @@ def _page_build_request(request):
                      "<a class='button primary' href='/'>Back to home</a></div></section>", request)
 
 
+def _page_review(request):
+    """v6: customers rate the agent (1-5 stars, words, and whether we may show it on the website). The launch pilots collect these
+    as proof for the next hackathon organizer. Linked from the dashboard and from every fixed case."""
+    gate = _require_session(request)
+    if gate:
+        return gate
+    user_id = request.session["user_id"]
+    q = lambda k: str((request.query.get(k) or [""])[0])
+    form = request.form if request.method == "POST" else {}
+    case = str(form.get("case", "") if form else q("case"))
+    project = str(form.get("project", "") if form else q("project"))
+    case = case if re.fullmatch(r"[0-9a-f-]{36}", case) else ""
+    project = project if re.fullmatch(r"[0-9a-f-]{36}", project) else ""
+    flash = ""
+    if request.method == "POST":
+        if not _csrf_valid(request):
+            return _response("<div class='alert'>This form expired. Refresh and try again.</div>", request, "403 Forbidden")
+        rating = str(form.get("rating", ""))
+        text = str(form.get("text", "")).strip()[:2000]
+        if rating not in ("1", "2", "3", "4", "5"):
+            flash = "<div class='alert'>Please pick 1 to 5 stars.</div>"
+        else:
+            email = portal_db.get_user_email(user_id) or ""
+            name = str(request.session.get("name", "") or "")
+            portal_db.add_review(user_id, email, name, int(rating), text, form.get("can_publish") == "1", project, case)
+            try:
+                notifications.notify_admins(f"New review: {'★' * int(rating)}{'☆' * (5 - int(rating))} from {name or email}",
+                                            f"{name} ({email}) rated Agent Daemon {rating}/5.\n\n{text or '(no words)'}\n\n"
+                                            f"May we show it on the website: {'yes' if form.get('can_publish') == '1' else 'no'}\n"
+                                            f"All reviews: {_base_url()}/admin?view=reviews", "review")
+            except Exception:
+                LOG.debug("review email skipped")
+            return _response("<section class='card form-card' style='text-align:center'><div class='eyebrow'>Thank you</div>"
+                             "<h1>Thanks for your review</h1><p class='muted'>It helps us a lot while we are launching.</p>"
+                             "<div class='actions' style='justify-content:center'><a class='button primary' href='/dashboard'>"
+                             "Back to the dashboard</a></div></section>", request)
+    csrf = _escape(_csrf(request))
+    stars = "".join(f"<input type='radio' id='star{n}' name='rating' value='{n}'><label for='star{n}' title='{n} of 5'>&#9733;</label>"
+                    for n in (5, 4, 3, 2, 1))
+    body = ("<style>.rv-stars{display:inline-flex;flex-direction:row-reverse;gap:4px;font-size:34px}"
+            ".rv-stars input{position:absolute;opacity:0;width:1px;height:1px}.rv-stars label{cursor:pointer;color:#5a4b66}"
+            ".rv-stars input:checked~label,.rv-stars label:hover,.rv-stars label:hover~label{color:#ffc857}"
+            ".rv-stars input:focus-visible+label{outline:2px solid #ffc857;border-radius:4px}</style>"
+            "<section class='card form-card'><div class='eyebrow'>Your review</div><h1>How is Agent Daemon doing?</h1>"
+            f"{flash}<p class='muted'>We are launching and every review helps: what worked, what did not, what you would change.</p>"
+            f"<form method='post' action='/review'><input type='hidden' name='csrf' value='{csrf}'>"
+            f"<input type='hidden' name='case' value='{_escape(case)}'><input type='hidden' name='project' value='{_escape(project)}'>"
+            f"<fieldset class='field' style='border:0;padding:0'><legend>Your rating</legend><div class='rv-stars'>{stars}</div></fieldset>"
+            "<div class='field'><label for='rv-text'>Tell us more (optional)</label>"
+            "<textarea id='rv-text' name='text' rows='5' maxlength='2000' placeholder='Did it find the problem? Was the fix right? "
+            "How fast was it?'></textarea></div>"
+            "<label style='display:flex;gap:8px;align-items:flex-start;margin:10px 0 18px'><input type='checkbox' name='can_publish' "
+            "value='1'> <span>You may show this review on the Agent Daemon website with my first name.</span></label>"
+            "<button class='button primary' type='submit'>Send review</button></form></section>")
+    return _response(body, request)
+
+
 def _page_case_action(request, project_id, incident_id, action):
     """Pause / Start one case, 'I merged it, check my site', and 'Undo this fix'."""
     owned, err = _owned_case(request, project_id, incident_id)
@@ -4772,6 +4889,8 @@ def _dispatch(request: Request) -> Response:
         return _page_usage(request)
     if request.path == "/build-request":
         return _page_build_request(request)
+    if request.path == "/review":
+        return _page_review(request)
     if request.path == "/admin":
         return _page_admin(request)
     if request.path == "/dashboard":
