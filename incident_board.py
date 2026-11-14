@@ -222,7 +222,8 @@ def question_box_html(inc: dict, project_id: str, csrf: str) -> str:
 
 def diagnosis_box_html(inc: dict, project_id: str, csrf: str) -> str:
     """v6 diagnose first: what the engineer found, the fix it proposes and what it will use of the bars, with the owner's buttons.
-    Reads the flags the engine writes (diagnosis:, guide_offer:, founder_offer:). Nothing shows when there is no diagnosis waiting."""
+    Reads the flags the engine writes (diagnosis:, guide_offer:, founder_offer:). Nothing shows when there is no diagnosis waiting.
+    founder_offer is set only in the worst case (a very big job that failed after everything was tried): a link to the custom-job form."""
     if not csrf:
         return ""
     import json
@@ -240,11 +241,15 @@ def diagnosis_box_html(inc: dict, project_id: str, csrf: str) -> str:
         d = json.loads(raw) if raw else {}
     except ValueError:
         d = {}
+    if str(inc.get("stage") or "awaiting_approval") != "awaiting_approval":
+        d = {}                     # the owner already answered (or the case moved on): no "Yes, fix it" on a finished case
+    if not d and not guide_offer and not founder_offer:
+        return ""
     base = f"/projects/{_e(project_id)}/incidents/{_e(iid)}"
     hidden = (f"<input type='hidden' name='csrf' value='{_e(csrf)}'>"
               f"<input type='hidden' name='next' value='/projects/{_e(project_id)}#case-{_e(iid)}'>")
-    parts = ["<div class='inc-diagnosis' id='diagnosis-" + _e(iid) + "'><div class='q-head'><span class='q-badge'>Diagnosis</span>"
-             "<small class='muted'>Nothing is changed until you say yes.</small></div>"]
+    parts = ["<div class='inc-diagnosis' id='diagnosis-" + _e(iid) + "'>" + ("<div class='q-head'><span class='q-badge'>Diagnosis</span>"
+             "<small class='muted'>Nothing is changed until you say yes.</small></div>" if d or guide_offer else "")]
     if d:
         where = ", ".join(str(w) for w in (d.get("where") or [])[:6])
         sure = {"high": "The engineer is sure.", "medium": "The engineer is fairly sure.", "low": "The engineer is not sure yet."}.get(
@@ -255,11 +260,10 @@ def diagnosis_box_html(inc: dict, project_id: str, csrf: str) -> str:
         parts.append(f"<p><b>What broke:</b> {_e(d.get('what_broke', ''))}</p><p><b>Why:</b> {_e(d.get('why', ''))}</p>"
                      + (f"<p><b>Where:</b> <code>{_e(where)}</code></p>" if where else "")
                      + f"<p><b>The fix:</b> {_e(d.get('proposed_fix', ''))}</p><p class='muted'>{_e(sure)}</p>")
-        if str(d.get("size")) != "big":
-            parts.append(f"<form method='post' action='{base}/approve' class='diag-yes'>{hidden}"
-                         "<label><input type='radio' name='style' value='proper' checked> <b>Proper fix</b> · with a test that proves it</label>"
-                         "<label><input type='radio' name='style' value='quick'> <b>Quick fix</b> · faster, no new test</label>"
-                         f"<button class='button primary' type='submit'>Yes, fix it</button><small class='muted'>{_e(use)}.</small></form>")
+        parts.append(f"<form method='post' action='{base}/approve' class='diag-yes'>{hidden}"
+                     "<label><input type='radio' name='style' value='proper' checked> <b>Proper fix</b> · with a test that proves it</label>"
+                     "<label><input type='radio' name='style' value='quick'> <b>Quick fix</b> · faster, no new test</label>"
+                     f"<button class='button primary' type='submit'>Yes, fix it</button><small class='muted'>{_e(use)}.</small></form>")
         parts.append(f"<details class='diag-no'><summary>That's not it</summary>"
                      f"<form method='post' action='{base}/reply' data-media>{hidden}<input type='hidden' name='rejects_diagnosis' value='1'>"
                      "<p class='muted'>Tell the agent what you see or what you think is wrong. Add a screenshot or just speak. "
@@ -274,10 +278,10 @@ def diagnosis_box_html(inc: dict, project_id: str, csrf: str) -> str:
         parts.append(f"<form method='post' action='{base}/guide'>{hidden}<p>The engineer tried twice and could not finish. The Lead "
                      f"engineer can look at both tries and tell it exactly what to change.</p><button class='button primary' type='submit'>"
                      f"Let the Lead engineer guide it</button><small class='muted'>About {pct}% of your Lead engineer bar.</small></form>")
-    if founder_offer or str(d.get("size")) == "big":
-        parts.append(f"<form method='post' action='{base}/founders'>{hidden}<p>This is a bigger job than an automatic fix. The founders "
-                     "can build it for you (Rs 200 for plan members, tips welcome).</p><button class='button' type='submit'>"
-                     "Send it to the founders</button></form>")
+    if founder_offer:
+        # Only the worst case (a very big job that failed after everything was tried): a link to the paid custom-job form.
+        parts.append(f"<p class='muted'>This one is too big for an automatic fix. If you want, the founders can take it on as a paid "
+                     f"custom job: <a href='/build-request?kind=fix&amp;case={_e(iid)}'>send them the details</a>.</p>")
     return "".join(parts) + "</div>"
 
 

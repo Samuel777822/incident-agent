@@ -212,7 +212,8 @@ def usage_page(view: dict, csrf: str, msg: str = "") -> str:
             f"<form method='post' action='/usage/mode'><input type='hidden' name='csrf' value='{E(csrf)}'>"
             f"<div class='u-modes'>{tiles}</div><button class='button primary' type='submit'>Save</button></form>"
             f"<h2 class='u-h2'><span>➕</span>Need more?</h2><p class='muted'>{E(plans.topup_sentence())} "
-            f"Bigger jobs (a new feature, a whole page): <a href='/build-request'>ask the founders</a>.</p>"
+            f"Want a whole app built, or a big custom change? That is a separate paid job: "
+            f"<a href='/build-request'>send your idea to the founders</a>.</p>"
             f"<h2 class='u-h2'><span>🧾</span>Recent problems</h2>{cases}</section>")
 
 

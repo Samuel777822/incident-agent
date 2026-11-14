@@ -508,7 +508,7 @@ def test_an_unavailable_stronger_mode_is_explained_with_the_fix(tmp_path, monkey
     portal_db.reopen_incident_with_reply(inc, pid, "Let the Lead engineer guide it")
     assert engine.handle_incident(H.claim()) == "needs_human"
     why = store.get_bug_by_incident(inc)["stop_reason"] + store.get_bug_by_incident(inc)["review_report"]
-    assert "paused by an admin" in why and store.get_flag(f"founder_offer:{inc}") == "1"
+    assert "paused by an admin" in why and not store.get_flag(f"founder_offer:{inc}")       # not a worst case: no founders
 
 
 def test_the_report_box_teaches_how_to_write_a_request():

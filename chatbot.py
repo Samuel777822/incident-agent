@@ -60,7 +60,7 @@ HOW THE AGENT CHOOSES AN AI (explain it in plain words first):
 Every case starts with the Engineer (Claude Haiku), which costs a few rupees per run. If it fixes the problem, writes steps for the
 owner or asks a question, the case stops there. On Pro, the Lead engineer (Claude Sonnet) checks medium fixes and, if the Engineer
 fails twice, writes it exact instructions; it always asks first and shows how much of the Lead bar it will use. Opus is not used.
-Very big jobs (a new feature, a whole page) are offered to the founders instead. There is no free model in fixing. On a "needs you"
+Normal cases never go to the founders. There is no free model in fixing. On a "needs you"
 case the owner can press "Not right? Let a stronger AI look". A case that reaches its spending limit asks the owner "Keep going?".
 
 DEFINITIONS (use exactly these meanings):
@@ -78,7 +78,9 @@ PRICING & PLANS:
   Technical faults on our side are never charged. Push checks are free.
 - Projects: @@PROJECTS@@.
 - Add-ons: @@TOPUP@@ An extra project is @@SLOT@@ once.
-- Big jobs: the founders build them (Rs 200 for plan members, tips welcome); a whole app from scratch is Rs 2,000 plus Rs 600 a month.
+- Custom jobs (separate from the plans): a whole app built for you is Rs 2,000 plus Rs 600 a month; a fix or new feature in an
+  existing app from Rs 200 (price agreed first); hosting and domain are paid by the customer. Request form: /build-request. The
+  founders reply within 1 to 2 hours on WhatsApp or email.
 - We sell the engineer's time on your problems, not guaranteed fixes.
 - Payment: UPI QR (Paytm, Google Pay, PhonePe) with the 12-digit UTR, confirmed by an admin within 1 to 2 hours.
 
@@ -165,6 +167,13 @@ def sanitize_chat_text(text: str) -> str:
 def answer_visitor_query(user_text: str, history: list[dict] | None = None) -> str:
     """Answers visitor questions using Groq or falls back to built-in knowledge matching."""
     text_lower = user_text.lower().strip()
+
+    # Custom jobs ("can you build my app?", "hire the founders"): point to the request form. Before the privacy intercept below,
+    # which would otherwise answer every question containing "founder" with the team sentence.
+    if (any(k in text_lower for k in ("build my", "build an app", "build me", "make my app", "make an app", "custom job", "custom app",
+                                      "hire", "develop my", "build a website", "make a website"))
+            or ("founder" in text_lower and any(k in text_lower for k in ("build", "fix my", "custom", "job", "app", "website")))):
+        return ('Custom jobs are separate from the plans: a whole app built for you is Rs 2,000, then Rs 600 a month and we keep it running; a fix or new feature in your app starts at Rs 200, with the exact price agreed before work starts. Hosting and domain are paid by you to the provider. Send your idea at /build-request and the founders get back to you within 1 to 2 hours on WhatsApp or email.')
 
     # Immediate deterministic intercept for founder/team/creator inquiries to guarantee privacy
     if any(k in text_lower for k in ("founder", "founders", "team", "who built", "who made", "who created", "who is the creator", "creator", "creators", "author", "authors", "who are you", "abhay", "pranav")):

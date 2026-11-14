@@ -408,7 +408,7 @@ cases, the project map, and the whole code base when it fits (cached, so every l
 <article class='card'><h3>2 · Engineer → Lead engineer</h3><p class='muted'>Claude Haiku (the Engineer) runs first, at full strength.
 A problem it caught by itself is diagnosed first and waits for the owner's "Yes, fix it". A run that reaches its rupee or step limit is
 continued by the same model with its edits kept. Only when the Engineer cannot finish, on Pro and after asking, Sonnet (the Lead
-engineer) writes exact instructions in one call and the Engineer fixes with them. Basic owners are offered the founders instead.
+engineer) writes exact instructions in one call and the Engineer fixes with them. Basic owners are asked to tell the agent more.
 Opus is not used.</p></article>
 <article class='card'><h3>3 · Tools, not guesses</h3><p class='muted'>list / read / search / edit / write files on a copy of the repo,
 run_checks (install, build, tests, start-up in the sandbox), open_live_page (real browser, public pages), recent_commits / show_commit,

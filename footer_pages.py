@@ -251,7 +251,7 @@ def pricing_page_html(signed_in: bool = False) -> str:
   <div class="addon-row">
     <div><b>Top-up</b><span class="muted">{plans.topup_sentence()}</span></div>
     <div><b>Extra project</b><span class="muted">One-time &#8377;{plans.PROJECT_SLOT_PRICE}. Connect one more repository. The slot stays on your account.</span></div>
-    <div><b>Big jobs by the founders</b><span class="muted">A new feature or a whole page? The founders build it for you: &#8377;200 for plan members (tips welcome). A whole app from scratch: &#8377;2,000, then &#8377;600 a month and we look after it.</span></div>
+    <div><b>Custom jobs by the founders</b><span class="muted">Separate from the plans. A whole app built for you: &#8377;2,000, then &#8377;600 a month and we keep it running. A fix or new feature in your app: from &#8377;200, price agreed before we start. You pay hosting and domain. <a href="/build-request">Send your idea</a>; the founders get back to you within 1 to 2 hours.</span></div>
   </div>
 </section>
 
@@ -288,7 +288,7 @@ def changelog_page_html() -> str:
       <li><b>New plans:</b> Basic &#8377;200 and Pro &#8377;500 a month, with usage bars that show what is left and &#8377;99 top-ups.</li>
       <li><b>Tested on GitHub:</b> fixes and pushes are installed, built and tested on GitHub&rsquo;s own machines in about a minute.</li>
       <li><b>Faster at deadlines:</b> several cases are worked on at the same time.</li>
-      <li><b>Ask the founders:</b> too big for the AI? <a href="/build-request">Send it to the founders</a>.</li>
+      <li><b>Custom jobs:</b> want a whole app built, or a big change? <a href="/build-request">Send your idea to the founders</a>.</li>
     </ul>
   </article>
 

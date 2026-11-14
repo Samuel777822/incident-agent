@@ -309,7 +309,7 @@ def _model_desktop(cfg: dict) -> str:
     body.append(f"<rect x='330' y='742' width='610' height='36' rx='18' fill='#0d1f17' stroke='{C['green']}' stroke-width='2' filter='url(#{p}-glow)'/>"
                 "<text class='t' x='635' y='766' text-anchor='middle' style='font-size:14px'>✅ Sure → GitHub tests → push → live check · Not sure → pull request</text>")
     factors = [("🧠", "Engineer", om.get("haiku", "Claude Haiku") + f" · {cap('haiku')}"), ("🧠", "Lead engineer", om.get("sonnet", "Claude Sonnet") + f" · {cap('sonnet')}"),
-               ("🧑", "The founders", "big jobs · ₹200 a feature"), ("🧾", "Not a code problem", "step-by-step for you"),
+               ("🔁", "Still stuck", "tell the agent more"), ("🧾", "Not a code problem", "step-by-step for you"),
                ("❓", "Missing info", "one question to you"), ("↩", "Went live", "Undo this fix")]
     body.append(f"<rect x='20' y='800' width='1234' height='70' rx='16' fill='#120a1b' stroke='{C['magenta']}' stroke-opacity='.6'/>")
     for i, (ico, t, sub) in enumerate(factors):

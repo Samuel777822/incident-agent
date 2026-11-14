@@ -12,7 +12,7 @@ OLD = re.compile(r"Normal → High|High or Extra|Extra tries|\bNormal mode\b|\(E
 
 def test_how_it_works_and_the_engineer_ladder_use_the_v6_names():
     section = engineer_visual.section({}, plans.quotas(), plans.TRY_DEFINITION, plans.HUMAN_NEEDED)
-    assert "Engineer → Lead engineer → founders" in section and "/build-request" in section
+    assert "Engineer → Lead engineer" in section and "The founders" not in section and "/build-request" in section
     assert not OLD.search(section) and "Opus" not in section
     page = architecture.user_page_html()
     assert "Engineer → Lead engineer" in page and not OLD.search(page)

@@ -3708,39 +3708,155 @@ def _owned_case(request, project_id, incident_id):
     return (project, row), None
 
 
-def _page_build_request(request):
-    """v6: big jobs go to the founders. A short form that emails the admins (they reply by email with a quote)."""
-    gate = _require_session(request)
-    if gate:
-        return gate
-    sent = ""
-    if request.method == "POST":
-        if not _csrf_valid(request):
-            return _response("<div class='alert'>This form expired. Refresh and try again.</div>", request, "403 Forbidden")
-        what = " ".join(str(request.form.get("what", "")).split())[:2000]
-        kind = "app" if request.form.get("kind") == "app" else "feature"
-        if len(what) < 10:
-            sent = "<div class='alert'>Tell us a little more about what you want built (a sentence or two).</div>"
-        else:
-            email = portal_db.get_user_email(request.session["user_id"]) or ""
-            notifications.notify_admins("Founder build request (" + ("a whole app" if kind == "app" else "a feature or page") + ")",
-                                        f"From: {email}\n\n{what}\n\nPrices: plan members Rs 200 for a feature or page (tips welcome); "
-                                        "a whole app from scratch Rs 2,000 plus Rs 600 a month. Reply to them by email.",
-                                        "founder_request")
-            LOG.info("founder build request (%s, %d chars)", kind, len(what))
-            sent = "<div class='alert ok'>Sent. The founders will reply to you by email, usually within a day.</div>"
+BUILD_REQUEST_SELECTS = {
+    "pages": [("", "Choose"), ("1-3", "1 to 3 pages"), ("4-10", "4 to 10 pages"), ("10+", "More than 10"), ("unsure", "Not sure yet")],
+    "accounts": [("", "Choose"), ("yes", "Yes, people sign in"), ("no", "No sign-in"), ("unsure", "Not sure")],
+    "database": [("", "Choose"), ("yes", "Yes, it saves data"), ("no", "No"), ("unsure", "Not sure")],
+    "timeline": [("", "Choose"), ("week", "Within a week"), ("2-4weeks", "2 to 4 weeks"), ("1-2months", "1 to 2 months"),
+                 ("flexible", "No rush")],
+    "hosting": [("", "Choose"), ("have", "I already host it (say where below)"), ("suggest", "Please suggest and set it up"),
+                ("unsure", "Not sure")],
+    "domain": [("", "Choose"), ("have", "I have a domain"), ("need", "I need one"), ("none", "Not needed for now")],
+}
+BUILD_REQUEST_TEXT = {"purpose": 600, "idea": 3000, "design": 1500, "app_link": 300, "fix_what": 3000, "deadline": 100,
+                      "hosting_where": 200, "domain_name": 200, "extra": 2000}
+BUILD_REQUEST_LABELS = [
+    ("kind", "Request"), ("purpose", "What it is for / who uses it"), ("idea", "The idea"), ("design", "How it should look"),
+    ("pages", "Pages"), ("accounts", "Sign-in"), ("database", "Database"), ("app_link", "Existing app / repo"),
+    ("fix_what", "What to fix or change"), ("timeline", "Timeline"), ("deadline", "Deadline"), ("hosting", "Hosting"),
+    ("hosting_where", "Hosted on"), ("domain", "Domain"), ("domain_name", "Domain name"), ("extra", "Anything else")]
+WHATSAPP_RE = re.compile(r"^\+?[0-9][0-9 -]{8,18}[0-9]$")
+
+
+def _build_request_form(request, values: dict, flash: str = "") -> Response:
+    v = lambda k: _escape(values.get(k, ""))
     csrf = _escape(_csrf(request))
-    body = (f"<section class='card form-card'><div class='eyebrow'>Big jobs</div><h1>Ask the founders to build it</h1>{sent}"
-            "<p class='muted'>The agent fixes problems. For something bigger (a new feature, a new page, a whole app) the founders build "
-            "it for you with the same care: <b>Rs 200</b> for a feature or page if you are on a plan (tips welcome), or a <b>whole app "
-            "from scratch for Rs 2,000</b>, then Rs 600 a month and we look after it.</p>"
-            f"<form method='post' action='/build-request'><input type='hidden' name='csrf' value='{csrf}'>"
-            "<div class='field'><label>What should we build?</label><select name='kind'><option value='feature'>A feature or a page in my app"
-            "</option><option value='app'>A whole app from scratch</option></select></div>"
-            "<div class='field'><label>Describe it in your own words</label>"
-            "<textarea name='what' rows='6' maxlength='2000' required placeholder='What it should do, who uses it, any example you like'>"
-            "</textarea></div><button class='button primary' type='submit'>Send to the founders</button></form></section>")
+
+    def select(name):
+        return (f"<select name='{name}' id='br-{name}'>" + "".join(
+            f"<option value='{_escape(val)}'{' selected' if values.get(name, '') == val else ''}>{_escape(label)}</option>"
+            for val, label in BUILD_REQUEST_SELECTS[name]) + "</select>")
+
+    def text(name, label, placeholder="", rows=0, required=False):
+        req = " required" if required else ""
+        box = (f"<textarea id='br-{name}' name='{name}' rows='{rows}' maxlength='{BUILD_REQUEST_TEXT.get(name, 200)}' "
+               f"placeholder='{_escape(placeholder)}'{req}>{v(name)}</textarea>" if rows else
+               f"<input id='br-{name}' name='{name}' maxlength='{BUILD_REQUEST_TEXT.get(name, 200)}' value='{v(name)}' "
+               f"placeholder='{_escape(placeholder)}'{req}>")
+        return f"<div class='field'><label for='br-{name}'>{_escape(label)}</label>{box}</div>"
+
+    kind = values.get("kind") if values.get("kind") in ("build", "fix") else "build"
+    radios = "".join(f"<label class='br-kind'><input type='radio' name='kind' value='{val}'{' checked' if kind == val else ''}> {label}</label>"
+                     for val, label in (("build", "<b>Build a new app</b> for me"), ("fix", "<b>Fix or change an app</b> I already have")))
+    case = values.get("case", "")
+    body = (
+        "<style>.br-wrap{max-width:760px;margin:0 auto}.br-wrap fieldset{border:1px solid #3a2338;border-radius:12px;padding:16px 18px;"
+        "margin:0 0 18px}.br-wrap legend{padding:0 8px;color:var(--silver);font-weight:600}.br-kind{display:block;margin:6px 0}"
+        ".br-grid{display:grid;grid-template-columns:repeat(auto-fit,minmax(200px,1fr));gap:0 16px}.br-price li{margin:4px 0}"
+        ".br-wrap select,.br-wrap input:not([type=radio]),.br-wrap textarea{width:100%;box-sizing:border-box}"
+        ".br-hp{position:absolute;left:-9999px;width:1px;height:1px;overflow:hidden}</style>"
+        "<section class='card form-card br-wrap'><div class='eyebrow'>Custom jobs</div><h1>Ask the founders to build or fix your app</h1>"
+        f"{flash}"
+        "<p class='muted'>The agent fixes everyday problems by itself. For a whole new app, or a big change the agent cannot do, the "
+        "two founders can do it by hand. We take only a few custom jobs, so tell us as much as you can.</p>"
+        "<ul class='br-price muted'><li><b>A whole app built for you:</b> &#8377;2,000, then &#8377;600 a month and we keep it running "
+        "and fix it.</li><li><b>A fix or a new feature in your app:</b> from &#8377;200. We tell you the exact price before we start.</li>"
+        "<li><b>Hosting and domain:</b> you pay these to the provider at their price. The founders take care of everything else.</li></ul>"
+        "<p><b>The founders will get back to you within 1 to 2 hours on WhatsApp or email.</b></p>"
+        f"<form method='post' action='/build-request'><input type='hidden' name='csrf' value='{csrf}'>"
+        f"<input type='hidden' name='case' value='{_escape(case)}'>"
+        "<div class='br-hp' aria-hidden='true'><label>Leave this empty<input name='website' tabindex='-1' autocomplete='off'></label></div>"
+        "<fieldset><legend>How we reach you</legend><div class='br-grid'>"
+        + text("name", "Your name", "", 0, True) + text("email", "Email", "you@example.com", 0, True)
+        + text("whatsapp", "WhatsApp number", "+91 98765 43210", 0, True) + "</div></fieldset>"
+        f"<fieldset><legend>What do you need?</legend>{radios}</fieldset>"
+        "<fieldset><legend>A new app</legend><p class='muted'>Fill this in if we are building something new.</p>"
+        + text("purpose", "What is it for, and who will use it?", "e.g. a booking site for my college fest, used by students", 2)
+        + text("idea", "Describe the app in your own words", "What it should do, the main screens, anything you have seen and liked", 5)
+        + text("design", "How should it look?", "Colours, style, a website you like, or a logo you have", 2)
+        + "<div class='br-grid'>"
+        + f"<div class='field'><label for='br-pages'>How many pages?</label>{select('pages')}</div>"
+        + f"<div class='field'><label for='br-accounts'>Do people sign in?</label>{select('accounts')}</div>"
+        + f"<div class='field'><label for='br-database'>Does it save data (a database)?</label>{select('database')}</div>"
+        + "</div></fieldset>"
+        "<fieldset><legend>An app you already have</legend><p class='muted'>Fill this in if we are fixing or changing your app.</p>"
+        + text("app_link", "Link to the app or its GitHub repository", "https://...")
+        + text("fix_what", "What should be fixed or changed?", "What is wrong, what you expected, what you want added", 5)
+        + "</fieldset>"
+        "<fieldset><legend>Timeline, hosting and domain</legend><div class='br-grid'>"
+        + f"<div class='field'><label for='br-timeline'>When do you need it?</label>{select('timeline')}</div>"
+        + text("deadline", "A fixed deadline? (optional)", "e.g. hackathon on 28 Nov")
+        + f"<div class='field'><label for='br-hosting'>Where should it be hosted?</label>{select('hosting')}</div>"
+        + text("hosting_where", "If you host it already: where?", "Render, Vercel, Netlify, ...")
+        + f"<div class='field'><label for='br-domain'>Domain name</label>{select('domain')}</div>"
+        + text("domain_name", "Your domain or the one you want", "myapp.in")
+        + "</div>" + text("extra", "Anything else we should know?", "", 3) + "</fieldset>"
+        "<button class='button primary' type='submit'>Send to the founders</button>"
+        "<p class='muted' style='margin-top:10px'>Sending this does not cost anything. We agree on the price with you before any work starts.</p>"
+        "</form></section>")
     return _response(body, request)
+
+
+def _page_build_request(request):
+    """v6: custom jobs by the founders (a whole app, or a big change the agent cannot do). Public. Each request becomes a support
+    ticket, the admins get an email with every answer and a WhatsApp link, and the customer gets a confirmation."""
+    session = request.session or {}
+    if request.method != "POST":
+        q = lambda k: str((request.query.get(k) or [""])[0])
+        case = q("case") if re.fullmatch(r"[0-9a-f-]{36}", q("case")) and session else ""
+        return _build_request_form(request, {"kind": q("kind"), "case": case, "name": session.get("name", ""),
+                                             "email": session.get("email", "")})
+    if not _csrf_valid(request):
+        return _response("<div class='alert'>This form expired. Refresh and try again.</div>", request, "403 Forbidden")
+    form = request.form
+    one_line = lambda k, n: " ".join(str(form.get(k, "")).split())[:n]
+    values = {k: str(form.get(k, "")).strip()[:n] for k, n in BUILD_REQUEST_TEXT.items()}
+    values.update({k: (str(form.get(k, "")) if str(form.get(k, "")) in {val for val, _ in opts} else "")
+                   for k, opts in BUILD_REQUEST_SELECTS.items()})
+    values.update(name=one_line("name", 120), email=one_line("email", 200).lower(), whatsapp=one_line("whatsapp", 24),
+                  kind="fix" if form.get("kind") == "fix" else "build",
+                  case=str(form.get("case", "")) if re.fullmatch(r"[0-9a-f-]{36}", str(form.get("case", ""))) and session else "")
+    if str(form.get("website", "")).strip():
+        LOG.info("build request honeypot filled: ignored")
+        return _response("<section class='card form-card'><h1>Thanks!</h1><p class='muted'>We got your request.</p></section>", request)
+    problem = ""
+    if not values["name"] or not EMAIL_RE.fullmatch(values["email"]):
+        problem = "Please give your name and a valid email address."
+    elif not WHATSAPP_RE.fullmatch(values["whatsapp"]) or not 10 <= len(re.sub(r"\D", "", values["whatsapp"])) <= 15:
+        problem = "Please give a WhatsApp number we can reach, with the country code (for example +91 98765 43210)."
+    elif values["kind"] == "build" and len(values["idea"]) < 15:
+        problem = "Please describe the app you want in a sentence or two."
+    elif values["kind"] == "fix" and len(values["fix_what"]) < 15:
+        problem = "Please tell us what should be fixed or changed, in a sentence or two."
+    if problem:
+        return _build_request_form(request, values, f"<div class='alert'>{_escape(problem)}</div>")
+    digits = re.sub(r"\D", "", values["whatsapp"])
+    shown = {**values, "kind": "Build a new app" if values["kind"] == "build" else "Fix or change an existing app"}
+    for key, opts in BUILD_REQUEST_SELECTS.items():
+        shown[key] = dict(opts).get(values[key], "") if values[key] else ""
+    answers = "\n".join(f"{label}: {shown[key]}" for key, label in BUILD_REQUEST_LABELS if str(shown.get(key, "")).strip())
+    case_line = f"\nFrom a case: {_base_url()}/admin (incident {values['case']})" if values["case"] else ""
+    message = (f"Name: {values['name']}\nEmail: {values['email']}\nWhatsApp: {values['whatsapp']} (https://wa.me/{digits})\n"
+               f"Signed in: {'yes' if session else 'no'}{case_line}\n\n{answers}")
+    subject = "Custom job: " + ("build a new app" if values["kind"] == "build" else "fix or change an app")
+    ticket = portal_db.create_support_ticket(values["name"], values["email"], subject, message)
+    ref = ticket.get("ticket_ref") or f"TICK-{ticket['id'][:8].upper()}"
+    notifications.notify_admins(f"[{ref}] {subject} from {values['name']} (reply within 1-2 hours)",
+                                f"A new custom job request. The page promises a reply within 1 to 2 hours on WhatsApp or email.\n\n"
+                                f"{message}\n\nPrices on the page: a whole app Rs 2,000 + Rs 600 a month; a fix or feature from Rs 200 "
+                                f"(confirm the price before starting). The customer pays hosting and domain.\n\n"
+                                f"Tickets: {_base_url()}/admin#support-tickets", "founder_request")
+    notifications.notify_customer(values["email"], f"[{ref}] We got your request",
+                                  f"Hi {values['name']},\n\nThanks for sending us your {('app idea' if values['kind'] == 'build' else 'fix request')}. "
+                                  f"The founders will get back to you within 1 to 2 hours on WhatsApp ({values['whatsapp']}) or at this "
+                                  f"email. We agree on the price with you before any work starts.\n\nYour reference: #{ref}\n\n"
+                                  f"What you sent us:\n{answers}\n\n— Agent Daemon", "ticket_received")
+    LOG.info("custom job request %s (%s)", ref, values["kind"])
+    return _response("<section class='card form-card' style='text-align:center'><div class='eyebrow'>Request #" + _escape(ref) + "</div>"
+                     "<h1>Sent to the founders</h1><p class='muted'>The founders will get back to you within <b>1 to 2 hours</b> on "
+                     f"WhatsApp (<b>{_escape(values['whatsapp'])}</b>) or at <b>{_escape(values['email'])}</b>. A copy of your request "
+                     "is in your email.</p><div class='actions' style='justify-content:center;margin-top:24px'>"
+                     "<a class='button primary' href='/'>Back to home</a></div></section>", request)
 
 
 def _page_case_action(request, project_id, incident_id, action):
@@ -3776,19 +3892,6 @@ def _page_case_action(request, project_id, incident_id, action):
             fx_store.update_bug(bug["id"], status="open", closed_at=None, stop_reason="")
         portal_db.reopen_incident_with_reply(incident_id, project_id, "Let the Lead engineer guide it")
         return _redirect(back + "?case=guided#case-" + incident_id)
-    if action == "founders":
-        fx_store.set_flag(f"founder_request:{incident_id}", "1")
-        reason = "Sent to the founders. They will reply to you by email."
-        if bug:
-            fx_store.update_bug(bug["id"], status="needs_human", stop_reason=reason, closed_at=fx_store.now())
-        portal_db.set_incident_stage(incident_id, "needs_human", reason)
-        email = portal_db.get_user_email(request.session["user_id"]) or ""
-        notifications.notify_admins("Founder build request from a case",
-                                    f"{email} asked the founders to handle a case in {project.get('name', '')}.\n"
-                                    f"{_base_url()}/projects/{project_id}/incidents/{incident_id}\n\nReply to them by email. "
-                                    "Plan members: Rs 200, tips welcome.", "founder_request")
-        portal_db.audit(project_id, "founder_request", {"incident_id": incident_id})
-        return _redirect(back + "?case=founders#case-" + incident_id)
     if action == "rerun":
         target = row.get("case_id") or incident_id
         if bug:
@@ -3910,7 +4013,6 @@ CASE_FLASH = {
     "auto_on": ("green", "Auto-start is on: problems the agent finds by itself are worked on right away."),
     "approved": ("green", "OK. The engineer is fixing it now and proves the fix before it reaches your branch."),
     "guided": ("green", "OK. The Lead engineer is looking at both tries and will tell the engineer exactly what to change."),
-    "founders": ("green", "Sent to the founders. They will reply to you by email."),
     "autofix_on": ("green", "Fix without asking is on: the agent fixes problems it finds without waiting for your OK (it still proves every fix)."),
     "autofix_off": ("amber", "Fix without asking is off: the agent tells you what broke and waits for Yes, fix it."),
     "auto_off": ("amber", "Auto-start is off: problems the agent finds by itself wait (paused) until you press Start. Your own reports always start."),
@@ -4704,7 +4806,7 @@ def _dispatch(request: Request) -> Response:
     match = re.fullmatch(r"/projects/([0-9a-f-]{36})/site-url", request.path)
     if match:
         return _page_site_url(request, match.group(1))
-    match = re.fullmatch(r"/projects/([0-9a-f-]{36})/incidents/([0-9a-f-]{36})/(pause|resume|merged|undo|escalate|keepgoing|rerun|approve|founders|guide)", request.path)
+    match = re.fullmatch(r"/projects/([0-9a-f-]{36})/incidents/([0-9a-f-]{36})/(pause|resume|merged|undo|escalate|keepgoing|rerun|approve|guide)", request.path)
     if match:
         return _page_case_action(request, match.group(1), match.group(2), match.group(3))
     match = re.fullmatch(r"/projects/([0-9a-f-]{36})/host-ready", request.path)
@@ -4762,7 +4864,7 @@ def application(environ, start_response):
     try:
         request = Request(environ)
         if (request.method == "POST" and not request.session and not request.path.startswith("/webhooks/github/")
-                and request.path not in ("/login", "/signup", "/contact", "/support", "/webhooks/razorpay", "/ingest", "/heartbeat",
+                and request.path not in ("/login", "/signup", "/contact", "/support", "/build-request", "/webhooks/razorpay", "/ingest", "/heartbeat",
                                          "/api/visitor/track", "/api/chat/send", "/api/chat/save-contact")):
             response = _redirect("/login")
         else:

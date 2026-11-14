@@ -1,7 +1,7 @@
 """The 'How the agent fixes a problem' section of /how-it-works: an interactive, animated explanation of the engineer.
 
 A five-step pipeline you can click through (or let it play), with a terminal that replays a real-looking case step by step, the
-Engineer -> Lead engineer -> founders ladder with what each run may cost, and the two decisions that matter to an owner: is it a code problem,
+Engineer -> Lead engineer ladder with what each run may cost, and the two decisions that matter to an owner: is it a code problem,
 and is the agent sure. No libraries; one inline script (allowed on this page); respects prefers-reduced-motion.
 """
 from __future__ import annotations
@@ -31,10 +31,10 @@ STEPS = [
       ("ok", "install ✓   build ✓   tests ✓   start ✓   browser journey ✓"), ("ok", "safety rules ✓   our own sandbox run ✓")]),
     ("⇪", "4. The Lead engineer only if needed", "Engineer → Lead engineer",
      "Most cases end with the Engineer. If it cannot finish, on Pro the Lead engineer reads everything already found and writes it "
-     "exact instructions, only after asking you. Too big for the AI? Send it to the founders. Nothing found so far is thrown away.",
+     "exact instructions, only after asking you. Nothing found so far is thrown away.",
      [("ok", "the Engineer finished the case: the Lead engineer was not needed"),
       ("dim", "(otherwise, on Pro: \"Let the Lead engineer guide it\", after you say yes)"),
-      ("dim", "(Basic, or a very big job: \"Send it to the founders\")")]),
+      ("dim", "(Basic: tell the agent more and press Run again)")]),
     ("🚀", "5. Sure or not sure", "Push, or ask you",
      "In Auto mode a fix the agent is sure about (all checks green, low risk, nothing left for you) goes to your branch after your "
      "GitHub tests pass and, for anything on the screen, a real Chrome on GitHub shows it working at phone and desktop size. Then your "
@@ -134,17 +134,15 @@ Click a step, or watch it replay a real case.</p>
 <div class='eng-cap'></div><div class='eng-ctl'><button type='button' class='button eng-play'>❚❚ Pause</button>
 <span class='muted'>A replay of a typical case. Your own cases show every real step on the case page.</span></div></div></div>
 <script type='application/json' id='eng-data'>{json.dumps(data).replace('</', '<' + chr(92) + '/')}</script>
-<h3 style='margin-top:34px'>Engineer → Lead engineer → founders</h3>
+<h3 style='margin-top:34px'>Engineer → Lead engineer</h3>
 <div class='eng-ladder'>
 <article class='eng-tier most' style='--tc:#62e6a4'><span class='badge'>Most cases end here</span><h4>Engineer</h4>
 <p>The first engineer on every case. Fast and low-cost, with the whole code base and every tool.</p><span class='cost'>{E(cap('haiku'))}</span></article>
 <div class='eng-arrow'>→</div>
 <article class='eng-tier' style='--tc:#b06cff'><span class='badge'>Pro · asks you first</span><h4>Lead engineer</h4>
 <p>When the Engineer could not finish, it reads everything found so far and writes the Engineer exact instructions.</p><span class='cost'>{E(cap('sonnet'))}</span></article>
-<div class='eng-arrow'>→</div>
-<article class='eng-tier' style='--tc:#ff4f6a'><span class='badge'>Big jobs</span><h4>The founders</h4>
-<p>Too big for the AI? Send it to the founders: ₹200 per feature for plan members.</p><span class='cost'><a href='/build-request'>Ask the founders</a></span></article></div>
-<p class='muted'>Basic includes the Engineer bar; Pro adds the Lead engineer bar. Bars refill every month; see <a href='/usage'>Usage</a>.</p>
+</div>
+<p class='muted'>Basic includes the Engineer bar; Pro adds the Lead engineer bar. Bars refill every month; see <a href='/usage'>Usage</a>. Want a whole app built instead? That is a separate custom job: <a href='/build-request'>send your idea</a>.</p>
 <h3 style='margin-top:30px'>Is it a code problem?</h3>
 <div class='eng-split'>
 <article class='eng-out yes'><h4>✅ Yes: fixed and proven</h4><p>The engineer fixes the cause, runs your build and tests, and our own check

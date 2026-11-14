@@ -177,7 +177,7 @@ WHY_STRONGER = ("Every problem starts with the Engineer, which is fast and low-c
                 "medium fixes and, when the Engineer gets stuck, writes it exact instructions. It always asks you first and shows how "
                 "much of your Lead bar it will use.")
 FAILED_FIX = ("If a fix does not pass the checks, nothing is pushed to your repository. The Engineer tries again with the new error; "
-              "on Pro the Lead engineer can step in. Very big jobs (a new feature, a whole page) are offered to the founders instead.")
+              "on Pro the Lead engineer can step in. If it still cannot be fixed, the case says so and you can tell the agent more.")
 HUMAN_NEEDED = ("When the cause is outside your code (a missing key on your host, a database or sign-in setting, a service that is "
                 "down) the agent says so right away and gives you simple step-by-step instructions. It stops and asks for a person when "
                 "it reaches the limit for one case or when more work is unlikely to help, and you get a report of everything it "

@@ -1,6 +1,6 @@
 """v6 diagnose first: a problem the agent catches by itself is only diagnosed (what broke, why, the proposed fix, what it will
-use of the bars). Nothing changes until the owner presses "Yes, fix it"; "That's not it" makes it look again; big jobs go to the
-founders. The owner's own requests skip the question."""
+use of the bars). Nothing changes until the owner presses "Yes, fix it"; "That's not it" makes it look again. Normal cases never go
+to the founders. The owner's own requests skip the question."""
 import json
 
 import portal_db
@@ -58,7 +58,7 @@ def test_a_problem_outside_the_code_becomes_steps_for_the_owner(tmp_path, monkey
     assert not prs and "OPENROUTER_API_KEY" in portal_db.get_incident_row(inc)["live_result"]
 
 
-def test_basic_stops_guessing_after_two_misses_and_offers_the_founders(tmp_path, monkeypatch):
+def test_basic_stops_guessing_after_two_misses_and_asks_the_owner_for_more(tmp_path, monkeypatch):
     engine, transports, prs, pid = _engine(tmp_path, monkeypatch, {"haiku": [reply(call("report_diagnosis", **DIAG)),
                                                                               reply(call("report_diagnosis", **DIAG))]})
     _asking(engine, pid)
@@ -75,7 +75,8 @@ def test_basic_stops_guessing_after_two_misses_and_offers_the_founders(tmp_path,
         store.set_flag(f"diagnosis_rejected:{inc}", "1")
         portal_db.reopen_incident_with_reply(inc, pid, f"THAT'S NOT IT ({i + 1}): the totals are fine, the coupon box is broken")
     assert engine.handle_incident(H.claim()) == "awaiting_approval"
-    assert store.get_flag(f"founder_offer:{inc}") == "1" and "founders" in portal_db.get_incident_row(inc)["stage_detail"]
+    detail = portal_db.get_incident_row(inc)["stage_detail"]
+    assert not store.get_flag(f"founder_offer:{inc}") and "Tell the agent more" in detail and "founder" not in detail.lower()
 
 
 # ---- the case page -----------------------------------------------------------------------------------------------------------
@@ -84,17 +85,15 @@ def test_the_case_card_shows_the_diagnosis_and_the_owners_buttons(tmp_path, monk
     engine, transports, prs, pid = _engine(tmp_path, monkeypatch, {})
     inc = H.make_incident(pid)
     store.set_flag(f"diagnosis:{inc}", json.dumps({**DIAG, "est_engineer_pct": 7, "est_lead_pct": 14}))
-    html = incident_board.diagnosis_box_html({"id": inc}, pid, "tok")
+    html = incident_board.diagnosis_box_html({"id": inc, "stage": "awaiting_approval"}, pid, "tok")
     for text in ("What broke:", "Why:", "The fix:", "Yes, fix it", "Proper fix", "Quick fix", "That's not it",
                  "about 7% of your Engineer bar", "14% of your Lead engineer bar", "rejects_diagnosis"):
         assert text in html, text
-    assert "Send it to the founders" not in html
-    store.set_flag(f"founder_offer:{inc}", "1")
-    assert "Send it to the founders" in incident_board.diagnosis_box_html({"id": inc}, pid, "tok")
+    assert "founders" not in html.lower()
     assert incident_board.diagnosis_box_html({"id": "nothing"}, pid, "tok") == ""
 
 
-def test_yes_fix_it_and_thats_not_it_and_the_founders_buttons_work(web_env, monkeypatch):
+def test_yes_fix_it_and_thats_not_it_buttons_work(web_env, monkeypatch):
     import notifications
     from tests.test_web_app import _request
     from tests.test_v3_web import _setup
@@ -110,8 +109,8 @@ def test_yes_fix_it_and_thats_not_it_and_the_founders_buttons_work(web_env, monk
     _request(f"/projects/{pid}/incidents/{inc}/reply", method="POST", cookie=cookie,
              form={"csrf": csrf, "text": "No, the coupon box is broken", "rejects_diagnosis": "1"})
     assert store.get_flag(f"diagnosis_rejected:{inc}") == "1"
-    status, headers, _ = _request(f"/projects/{pid}/incidents/{inc}/founders", method="POST", cookie=cookie, form={"csrf": csrf})
-    assert "case=founders" in dict(headers)["Location"] and sent and store.get_flag(f"founder_request:{inc}") == "1"
+    status, _, _ = _request(f"/projects/{pid}/incidents/{inc}/founders", method="POST", cookie=cookie, form={"csrf": csrf})
+    assert status.startswith("404") and not sent and not store.get_flag(f"founder_request:{inc}")   # no "send to founders" button
     status, _, _ = _request(f"/projects/{pid}/incidents/{inc}/approve", method="POST", cookie=cookie, form={})
     assert status.startswith("403")                                              # CSRF checked
     _request(f"/projects/{pid}/fix-without-asking", method="POST", cookie=cookie, form={"csrf": csrf, "autofix": "on"})

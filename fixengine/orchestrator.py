@@ -358,7 +358,7 @@ class Engine:
         for tier in tiers:
           if tier == "sonnet" and start != "sonnet":
               # v6: the Lead engineer does not redo the work. It reads the Engineer's tries and writes exact instructions, after
-              # asking the owner (Pro). Basic offers the founders. An explicit "let a stronger AI look" still runs the Lead.
+              # asking the owner (Pro). Basic asks the owner for more. An explicit "let a stronger AI look" still runs the Lead.
               return self._lead_guides(claimed, project, bug, event, root, files, profile, message, traceback_text, commits, ctx, reason)
           for run_no in range(int(acfg.get("continuations", 2)) + 1):
             bug = store.get_bug(bug["id"])
@@ -465,8 +465,10 @@ class Engine:
         plan = plans.user_plan(user_id)
         attempts = store.list_attempts(bug["id"])
         if plan != "pro" or store.get_flag(f"guide_used:{bug['id']}") == "1":
-            store.set_flag(f"founder_offer:{incident_id}", "1")
-            why = (reason.rstrip(". ") + ". You can send it to the founders, or tell the agent more and press Run again.")
+            why = reason.rstrip(". ") + ". Tell the agent more (a screenshot helps) and press Run again."
+            if plan != "pro":
+                why += " On Pro, the Lead engineer can guide the Engineer through it."
+            why += self._founders_if_worst_case(incident_id)          # nothing stronger is left for this case
             return self._finish_review(claimed, project, bug, attempts, event, why)
         if store.get_flag(f"guide_approved:{incident_id}") != "1":
             size = float(plans.bar_sizes(plan).get("sonnet") or 0)
@@ -486,7 +488,6 @@ class Engine:
         store.set_flag(f"guide_offer:{incident_id}", "")
         gate = self.guard.check(user_id, "sonnet")
         if not gate.ok:
-            store.set_flag(f"founder_offer:{incident_id}", "1")
             return self._finish_review(claimed, project, bug, attempts, event, gate.message)
         _stage(incident_id, "thinking", "The lead engineer is reading the engineer's two tries and writing it exact instructions", "sonnet")
         tries = "\n\n".join(f"TRY {i + 1} ({a['tier']}, {a['result']}): what happened: {str(a['error_summary'])[:1200]}\n"
@@ -532,18 +533,32 @@ class Engine:
             return self._ask_client(claimed, project, bug, payload)
         if kind == "model_fault":
             return self._fault_wait(claimed, bug, payload, 300)
-        store.set_flag(f"founder_offer:{incident_id}", "1")
         return self._finish_review(claimed, project, store.get_bug(bug["id"]), store.list_attempts(bug["id"]), event,
-                                   "The engineer could not finish even with the lead engineer's instructions. You can send it to "
-                                   "the founders, or tell the agent more and press Run again.")
+                                   "The engineer could not finish even with the lead engineer's instructions. Tell the agent more "
+                                   "(a screenshot helps) and press Run again." + self._founders_if_worst_case(incident_id))
+
+    def _founders_if_worst_case(self, incident_id: str) -> str:
+        """The founders are two college students: they are offered ONLY for the biggest jobs that failed after everything was tried
+        (the diagnosis said "big", and the Engineer, plus the Lead engineer on Pro, could not finish). A few cases a month at most.
+        Sets founder_offer:{incident} (the case card then shows a link to the request form) and returns a sentence for the owner."""
+        try:
+            size = str(json.loads(store.get_flag(f"diagnosis:{incident_id}", "") or "{}").get("size") or "")
+        except ValueError:
+            size = ""
+        if size != "big":
+            return ""
+        store.set_flag(f"founder_offer:{incident_id}", "1")
+        return (" This is a very big job. If you want, you can ask the founders to take it on as a paid custom job "
+                "(see the link on the case).")
 
     # ---- v6: diagnose first ---------------------------------------------------------------------------------------------------
     # A problem the agent caught by itself (live error, red push check, site audit) is first only DIAGNOSED: what broke, why, and
-    # the fix it proposes. The owner answers on the case card: "Yes, fix it" (quick or proper), "That's not it" (with words,
-    # screenshots, voice), or sends a big job to the founders. The owner's own requests ("Tell the agent") are already approval.
+    # the fix it proposes. The owner answers on the case card: "Yes, fix it" (quick or proper) or "That's not it" (with words,
+    # screenshots, voice). The owner's own requests ("Tell the agent") are already approval. The founders are offered only in the
+    # worst case (_founders_if_worst_case).
     # Flags (shared with the web app): diagnosis:{incident}, fix_approved:{incident}, diagnosis_rejected:{incident},
     # founder_request:{incident}, founder_offer:{incident}, autofix:{project}; approved:{bug} remembers the owner's yes.
-    EST_INR = {"small": (8.0, 0.0), "medium": (17.0, 9.0), "big": (0.0, 0.0)}      # (Engineer, Lead on Pro) for a typical fix
+    EST_INR = {"small": (8.0, 0.0), "medium": (17.0, 9.0), "big": (30.0, 12.0)}    # (Engineer, Lead on Pro) for a typical fix
 
     def _diagnose_cap(self, project, tier: str) -> float:
         caps = (self.cfg.get("agent") or {}).get("diagnose_max_inr", {"haiku": 6.0, "sonnet": 14.0})
@@ -587,10 +602,9 @@ class Engine:
         import plans
         plan = plans.user_plan(user_id)
         if rnd >= 2 and plan != "pro":
-            # The owner said "that's not it" twice. Basic has no Lead engineer: stop guessing and offer the founders.
-            store.set_flag(f"founder_offer:{incident_id}", "1")
-            reason = ("The engineer could not pin this down after two tries. You can send it to the founders, or tell the agent more "
-                      "and press Run again.")
+            # The owner said "that's not it" twice. Basic has no Lead engineer: stop guessing and ask the owner for more.
+            reason = ("The engineer could not pin this down after two tries. Tell the agent more (what you click, what you see, a "
+                      "screenshot) and press Run again. On Pro, the Lead engineer takes a look at this point.")
             store.update_bug(bug["id"], status="awaiting_client", stop_reason=reason)
             _stage(incident_id, "awaiting_approval", reason)
             store.park_incident(incident_id, project_id, waiting_for_choice=True)
@@ -631,8 +645,6 @@ class Engine:
                   "est_lead_pct": round(100 * est_lead / sizes["sonnet"]) if sizes.get("sonnet") else 0}
         store.set_flag(f"diagnosis:{incident_id}", json.dumps(record)[:8000])
         store.set_flag(f"diagnosis_round:{incident_id}", str(rnd + 1))
-        if size == "big":
-            store.set_flag(f"founder_offer:{incident_id}", "1")
         store.update_bug(bug["id"], status="awaiting_client")
         _stage(incident_id, "awaiting_approval", str(d.get("what_broke", ""))[:240])
         store.park_incident(incident_id, project_id, waiting_for_choice=True)
