@@ -87,7 +87,11 @@ class Engine:
         _stage(incident_id, "downloading", f"{project.get('repo_owner', '')}/{project.get('repo_name', '')} · {project.get('branch', '')}")
         try:
             with self.repo_provider(project) as root:
-                return self._work(claimed, project, event, Path(root))
+                sandbox.set_check_context(project, root)      # v6: the GitHub runner checks THIS case's repository
+                try:
+                    return self._work(claimed, project, event, Path(root))
+                finally:
+                    sandbox.set_check_context(None)
         except Exception as exc:
             safe = str(exc)[:200] if isinstance(exc, (RuntimeError, ValueError)) else exc.__class__.__name__
             log.warning("Fix engine deferred incident %s (%s)", incident_id, safe)
@@ -639,6 +643,39 @@ class Engine:
         except Exception:
             log.debug("could not email the diagnosis")
         return "awaiting_approval"
+
+    def _workflow_upgrades(self, project) -> dict:
+        """Workflow files our code (never the AI) adds to a fix branch: in GitHub mode the current check workflow, and an
+        out-of-date copy of our old test workflow is replaced (Bible-Well's never ran its JavaScript tests, 13 Nov 2026)."""
+        out = {}
+        try:
+            from . import github_checks
+            import monitoring_installer
+            base_root = getattr(sandbox.CHECK_CONTEXT, "base_root", None)
+            if isinstance(self.runner, sandbox.GitHubRunner) and base_root:
+                out[github_checks.WORKFLOW_PATH] = github_checks.workflow_source(sandbox.detect_profiles(base_root))
+            reader = getattr(self.gh, "read_files", None)
+            if reader:
+                have = (reader(project, [monitoring_installer.WORKFLOW_PATH]).get("files") or {}).get(monitoring_installer.WORKFLOW_PATH)
+                if have and monitoring_installer.WORKFLOW_VERSION_LINE not in have:
+                    out[monitoring_installer.WORKFLOW_PATH] = monitoring_installer.WORKFLOW_SOURCE
+        except Exception:
+            log.debug("workflow upgrades skipped")
+        return out
+
+    def _github_ran_nothing(self, project, state) -> bool:
+        """True when our check workflow's facts for the fix commit show that no build and no test ran (green proves nothing)."""
+        if not hasattr(self.gh, "check_bundle"):
+            return False
+        try:
+            from . import github_checks
+            got = self.gh.check_bundle(project, state["head_sha"])
+        except Exception:
+            return False
+        if got.get("state") == "done" and github_checks.nothing_ran(got.get("facts")):
+            state["checks_ran_nothing"] = True
+            return True
+        return False
 
     def _run_cap(self, project, tier: str) -> float | None:
         """v6: one run may spend at most the lower of its own cap and what is left in the owner's bar for this model."""
@@ -1500,6 +1537,7 @@ class Engine:
         _stage(incident_id, "pushing", f"sending the fix to a test branch on GitHub (round {round_no} of {MAX_GITHUB_ROUNDS})", win["tier"])
         visual = self._browser_wanted(win)
         browser_note = ""
+        extra_workflows = self._workflow_upgrades(project)        # v6: our check workflow (GitHub mode) and old copies upgraded
         try:
             pushed = None
             for _turn in range(2):
@@ -1507,6 +1545,7 @@ class Engine:
                 if conflicts:
                     return self._owner_changed_same_lines(claimed, project, bug, conflicts)
                 files, message = dict(win["new_files"]), title
+                files.update(extra_workflows)
                 if visual:
                     files[browser_check.WORKFLOW_PATH] = browser_check.WORKFLOW_SOURCE
                     message = browser_check.commit_message(title, browser_check.pages_for(win, _evidence_of(claimed)))
@@ -1517,9 +1556,10 @@ class Engine:
                 except git_ops.BranchMoved:
                     continue                      # the owner pushed this very second: read the branch again and merge again
                 except Exception:
-                    if not visual:
+                    if not visual and not extra_workflows:
                         raise
                     visual = False                # usually: the token may not write workflow files. The fix itself still goes.
+                    extra_workflows = {}
                     browser_note = "the browser check could not be added (the GitHub token needs the 'workflow' permission)"
                     pushed = self.gh.push_fix_branch(project, bug_id=bug["id"], new_files=win["new_files"], title=title,
                                                      **self._expect(self.gh.push_fix_branch, win))
@@ -1735,6 +1775,18 @@ class Engine:
                 self._push_to_branch(claimed, project, bug, state)
             else:
                 self._needs_review(claimed, project, bug, state, "No GitHub test ran and the sandbox could not prove the fix by itself.")
+            return
+        if status == "success" and self._github_ran_nothing(project, state):
+            status = "no_checks"
+            age = max(age, GITHUB_NO_CHECKS_GRACE)
+        if status == "no_checks" and state.get("checks_ran_nothing"):
+            state["no_github_tests"] = True
+            store.save_gh_state(bug["id"], state)
+            if state.get("level") in validator.PROVEN_LEVELS:
+                self._push_to_branch(claimed, project, bug, state)
+            else:
+                self._needs_review(claimed, project, bug, state, "GitHub's checks ran no build and no test, and the sandbox could "
+                                                                 "not prove the fix by itself.")
             return
         if status == "success":
             if self._browser_gate(claimed, project, bug, state):

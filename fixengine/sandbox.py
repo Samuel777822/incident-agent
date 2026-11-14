@@ -470,8 +470,8 @@ def with_new_tests(profile, root: Path, test_paths, *, only: bool = False):
 
 def run_profile(runner, root: Path, profile) -> "SandboxResult":
     """Run one Profile, or every stack of a StackSet, each in its own fresh sandbox, and merge the results."""
-    if not isinstance(profile, StackSet):
-        return runner.run(root, profile)
+    if not isinstance(profile, StackSet) or isinstance(runner, GitHubRunner):
+        return runner.run(root, profile)          # GitHub: every stack in one workflow run (one push, one wait)
     results = []
     for part in profile.parts:
         res = runner.run(root, part)
@@ -811,8 +811,108 @@ class RemoteRunner(_BaseRunner):
         return SandboxResult.from_dict(resp.json())
 
 
+# ---- v6: GitHub Actions as the sandbox (FIXENGINE_SANDBOX_MODE=github) -----------------------------------------------------------
+import threading as _threading
+
+CHECK_CONTEXT = _threading.local()     # per case (per worker thread): .project, .base_root (the untouched snapshot)
+
+
+def set_check_context(project: dict | None, base_root=None, base_sha: str = "") -> None:
+    """base_sha: check on top of this exact commit (the push guard checks a pushed commit) instead of the branch's head."""
+    CHECK_CONTEXT.project = project
+    CHECK_CONTEXT.base_root = Path(base_root) if base_root else None
+    CHECK_CONTEXT.base_sha = base_sha or ""
+
+
+def _tree_files(root: Path) -> dict:
+    out = {}
+    for name in _walk_names(root):
+        if name.startswith(".github/workflows/agent-daemon-check"):
+            continue
+        try:
+            data = (root / name).read_bytes()
+        except OSError:
+            continue
+        if len(data) <= 1_000_000:
+            out[name] = data
+    return out
+
+
+def _github_labels(res: "SandboxResult", profile) -> "SandboxResult":
+    """The workflow names its stacks s0-node, s1-python, ...: give the phases the same names the other runners use
+    ('JavaScript/TypeScript: build', or just 'build' for a single stack) so stack_summary and the dashboard read them the same way."""
+    if isinstance(profile, StackSet):
+        names = {f"s{i}-{p.language}": stack_label(p) for i, p in enumerate(profile.parts)}
+    else:
+        names = {f"s0-{getattr(profile, 'language', 'none')}": ""}
+    for ph in res.phases:
+        key, sep, step = ph.name.partition(": ")
+        if sep and key in names:
+            ph.name = f"{names[key]}: {step}" if names[key] else step
+    for key, label in names.items():
+        res.output = res.output.replace(f"[{key} ", f"[{label or 'check'} ")
+    return res
+
+
+class GitHubRunner(_BaseRunner):
+    """Install / build / test on GitHub's machines (see fixengine/github_checks.py). Commits the working copy's differences from
+    the case's snapshot (plus the generated workflow) to agent-daemon/check-<id>, waits for the run, reads results.json and
+    deletes the branch. Same contract as the other runners: a SandboxResult; GitHub problems are a system_fault."""
+
+    def run(self, repo_dir: Path, profile) -> SandboxResult:
+        from . import git_ops, github_checks
+        project = getattr(CHECK_CONTEXT, "project", None)
+        base_root = getattr(CHECK_CONTEXT, "base_root", None)
+        if not project:
+            return SandboxResult(system_fault=True, error="GitHub checks need the case's project (no check context)")
+        mine = _tree_files(Path(repo_dir))
+        base = _tree_files(base_root) if base_root and Path(base_root).resolve() != Path(repo_dir).resolve() else mine
+        files, deleted = {}, []
+        for name, data in mine.items():
+            if base.get(name) != data:
+                try:
+                    files[name] = data.decode("utf-8")
+                except UnicodeDecodeError:
+                    continue                    # binary files are not changed by the engineer
+        deleted = [name for name in base if name not in mine]
+        files[github_checks.WORKFLOW_PATH] = github_checks.workflow_source(profile)
+        branch = github_checks.CHECK_BRANCH_PREFIX + uuid.uuid4().hex[:10]
+        wait = int(self.cfg["sandbox"].get("github_timeout_seconds", 900))
+        try:
+            pushed = git_ops.push_check_commit(project, files=files, deleted=deleted, branch=branch,
+                                               message="agent-daemon: check run (temporary branch, deleted afterwards)",
+                                               base_sha=getattr(CHECK_CONTEXT, "base_sha", ""))
+        except Exception as exc:
+            return SandboxResult(system_fault=True, error=f"could not push the check branch to GitHub ({type(exc).__name__}). "
+                                 "The GitHub token needs the 'workflow' permission and Actions must be on.")
+        try:
+            started = time.time()
+            got = {"state": "missing"}
+            while time.time() - started < wait:
+                time.sleep(int(self.cfg["sandbox"].get("github_poll_seconds", 6)))
+                try:
+                    got = git_ops.check_bundle(project, pushed["head_sha"])
+                except Exception:
+                    got = {"state": "pending"}
+                if got.get("state") == "done":
+                    break
+                if got.get("state") == "missing" and time.time() - started > 120:
+                    return SandboxResult(system_fault=True, error="GitHub did not start the check (are Actions switched on for this "
+                                         "repository?)")
+            if got.get("state") != "done":
+                return SandboxResult(system_fault=True, error=f"GitHub did not finish the check within {wait // 60} minutes")
+            if not got.get("facts"):
+                return SandboxResult(system_fault=True, error="GitHub ran the check but its results could not be read")
+            from . import github_checks as gc
+            return _github_labels(gc.to_result(got["facts"]), profile)
+        finally:
+            git_ops.delete_branch(project, branch)
+
+
 def make_runner(cfg: dict, exec_fn=None):
     mode = os.getenv("FIXENGINE_SANDBOX_MODE") or cfg["sandbox"]["mode"]
+    if mode == "github":
+        return GitHubRunner(cfg, exec_fn)
     if mode == "remote":
         return RemoteRunner(cfg, exec_fn)
     if mode == "local_unsafe":

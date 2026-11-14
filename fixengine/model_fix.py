@@ -481,6 +481,7 @@ def run(claimed: dict, event: dict, *, repo_provider=None, runner=None, pr_opene
         sandbox_passed = False
         if runner is not None:
             work = Path(tempfile.mkdtemp(prefix="fx-model-"))
+            own_context = False
             try:
                 patched = work / "repo"
                 shutil.copytree(root, patched, ignore=shutil.ignore_patterns(".git"))
@@ -488,6 +489,9 @@ def run(claimed: dict, event: dict, *, repo_provider=None, runner=None, pr_opene
                     (patched / rel).write_text(text, encoding="utf-8")
                 scan = repo_context.scan_repo(root, max_files=int(cfg["sandbox"]["max_repo_files"]))
                 profile = sandbox.detect_profiles(root, scan["files"])
+                own_context = getattr(sandbox.CHECK_CONTEXT, "project", None) is None
+                if own_context:
+                    sandbox.set_check_context(project, root)        # v6 GitHub mode: checks run in this project's repository
                 after = sandbox.run_profile(runner, patched, profile)
                 if after.system_fault:
                     runner = None
@@ -500,6 +504,8 @@ def run(claimed: dict, event: dict, *, repo_provider=None, runner=None, pr_opene
                     validation = ("The sandbox check already failed before this change for another reason; this change does not make it worse."
                                   if ok else "The sandbox check fails with this change.")
             finally:
+                if own_context:
+                    sandbox.set_check_context(None)
                 shutil.rmtree(work, ignore_errors=True)
         if runner is None:
             ok, notes = static_validate(files, new_files)

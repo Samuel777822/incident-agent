@@ -112,7 +112,9 @@ DEFAULTS: dict = {
     },
     "ask_timeout_minutes": 30,
     "sandbox": {
-        "mode": "docker",             # docker | remote | local_unsafe (tests only)
+        "mode": "docker",             # docker | remote | github (v6: GitHub Actions) | local_unsafe (tests only)
+        "github_timeout_seconds": 900,
+        "github_poll_seconds": 6,
         "timeout_seconds": 120,
         "install_timeout_seconds": 240,
         "memory": "1g",

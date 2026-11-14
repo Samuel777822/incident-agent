@@ -61,6 +61,8 @@ def sandbox_ready(cfg: dict | None = None) -> tuple[bool, str]:
     """Is there somewhere safe to run customer code? Never fake it: no sandbox means no check."""
     cfg = cfg or fx_config.load()
     mode = os.getenv("FIXENGINE_SANDBOX_MODE") or cfg["sandbox"]["mode"]
+    if mode == "github":
+        return True, ""                   # v6: GitHub's own machines run the checks (the project's token must allow workflows)
     if mode == "remote":
         ok = bool(os.getenv("FIXENGINE_SANDBOX_URL", "").strip() and os.getenv("FIXENGINE_SANDBOX_SECRET", "").strip())
         return ok, "" if ok else "FIXENGINE_SANDBOX_URL / FIXENGINE_SANDBOX_SECRET are not set"
@@ -293,7 +295,11 @@ def run_check(check: dict, *, runner=None, snapshot=None, cfg: dict | None = Non
             labels = ", ".join(s["label"] for s in stacks)
             portal_db.set_push_check_stage(check["id"], "testing", labels)
             set_commit_status(project, check["sha"], "pending", f"Testing {labels} in the Agent Daemon sandbox")
-            result = sandbox.run_profile(runner, root, profile)
+            sandbox.set_check_context(project, root, base_sha=check["sha"])     # v6 GitHub mode: check exactly this commit
+            try:
+                result = sandbox.run_profile(runner, root, profile)
+            finally:
+                sandbox.set_check_context(None)
     except RemediationError as exc:
         portal_db.retry_push_check(check["id"], 300, str(exc)[:200])
         return "waiting"

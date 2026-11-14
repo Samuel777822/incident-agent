@@ -611,7 +611,9 @@ WORKFLOW_PATH = ".github/workflows/agent-daemon-tests.yml"
 # Works for Python, JavaScript/TypeScript and mixed repos: each part runs only when its files exist.
 # Python: syntax check always, pytest only when tests exist (exit code 5 = none collected).
 # JS/TS: npm install, then the project's own build and test scripts (the npm default "no test specified" script is skipped).
-WORKFLOW_SOURCE = """name: tests
+WORKFLOW_VERSION_LINE = "# agent-daemon-tests v2"
+WORKFLOW_SOURCE = """# agent-daemon-tests v2
+name: tests
 on:
   pull_request:
   push:

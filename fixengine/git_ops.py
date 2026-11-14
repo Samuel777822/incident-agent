@@ -482,3 +482,59 @@ def merged_fix_info(project: dict, pr_number: int) -> dict:
         parents = [p.get("sha") for p in merge.get("parents") or []]
         files = portal_remediation._api(client, "GET", f"{api}/pulls/{int(pr_number)}/files?per_page=100")
     return {"merged": True, "base_sha": parents[0] if parents else "", "paths": [f.get("filename") for f in files if f.get("filename")]}
+
+
+# ---- v6: GitHub Actions as the test sandbox -------------------------------------------------------------------------------------
+def push_check_commit(project: dict, *, files: dict, deleted: list, branch: str, message: str, base_sha: str = "") -> dict:
+    """Commit a working copy (changed files + deletions) on top of the tracked branch's head to OUR check branch (force-moved).
+    Used only to let GitHub run the checks; the owner's branch is never touched. {"branch", "head_sha", "base_sha"}."""
+    owner, repo, base = _validate(project)
+    if not branch.startswith("agent-daemon/"):
+        raise RemediationError("check branches must live under agent-daemon/")
+    token = _tok(project)
+    api = _api_root(project)
+    call = portal_remediation._api
+    with httpx.Client(headers=_headers(token), timeout=httpx.Timeout(60, connect=8), follow_redirects=False) as client:
+        if not base_sha:                  # the push guard passes the pushed commit; a case checks on top of the branch head
+            ref = call(client, "GET", f"{api}/git/ref/heads/{quote(base, safe='/')}")
+            base_sha = str(ref.get("object", {}).get("sha", ""))
+        commit = call(client, "GET", f"{api}/git/commits/{quote(base_sha, safe='')}")
+        entries = []
+        for path, content in files.items():
+            blob = call(client, "POST", f"{api}/git/blobs", {"content": content, "encoding": "utf-8"})
+            entries.append({"path": path, "mode": "100644", "type": "blob", "sha": blob.get("sha")})
+        entries += [{"path": path, "mode": "100644", "type": "blob", "sha": None} for path in deleted]
+        tree = call(client, "POST", f"{api}/git/trees", {"base_tree": commit.get("tree", {}).get("sha"), "tree": entries})
+        made = call(client, "POST", f"{api}/git/commits", {"message": message, "tree": tree.get("sha"), "parents": [base_sha]})
+        head_sha = str(made.get("sha", ""))
+        try:
+            call(client, "POST", f"{api}/git/refs", {"ref": f"refs/heads/{branch}", "sha": head_sha})
+        except RemediationError:
+            call(client, "PATCH", f"{api}/git/refs/heads/{quote(branch, safe='/')}", {"sha": head_sha, "force": True})
+    return {"branch": branch, "head_sha": head_sha, "base_sha": base_sha}
+
+
+def check_bundle(project: dict, sha: str) -> dict:
+    """The agent-daemon check run of one commit: {"state": "pending" | "done" | "missing", "facts": dict or None, "url", "conclusion"}."""
+    from . import github_checks
+    token = _tok(project)
+    api = _api_root(project)
+    call = portal_remediation._api
+    with httpx.Client(headers=_headers(token), timeout=httpx.Timeout(60, connect=8), follow_redirects=False) as client:
+        runs = call(client, "GET", f"{api}/actions/runs?head_sha={quote(sha, safe='')}&per_page=30").get("workflow_runs") or []
+        mine = [r for r in runs if r.get("name") == github_checks.WORKFLOW_NAME]
+        if not mine:
+            return {"state": "missing", "facts": None, "url": "", "conclusion": ""}
+        run = sorted(mine, key=lambda r: str(r.get("created_at") or ""))[-1]
+        if run.get("status") != "completed":
+            return {"state": "pending", "facts": None, "url": run.get("html_url", ""), "conclusion": ""}
+        arts = call(client, "GET", f"{api}/actions/runs/{int(run.get('id'))}/artifacts").get("artifacts") or []
+        art = next((a for a in arts if a.get("name") == github_checks.ARTIFACT and not a.get("expired")), None)
+        facts = None
+        if art:
+            resp = client.get(str(art.get("archive_download_url")))
+            if resp.status_code in (301, 302, 303, 307, 308) and resp.headers.get("location"):
+                resp = httpx.get(resp.headers["location"], timeout=60)        # a signed storage link: no token is sent there
+            if resp.status_code == 200 and len(resp.content) <= 5_000_000:
+                facts = github_checks.read_facts(resp.content)
+        return {"state": "done", "facts": facts, "url": run.get("html_url", ""), "conclusion": str(run.get("conclusion") or "")}
