@@ -2055,11 +2055,13 @@ def _admin_action(request):
             portal_db.admin_revoke_access(user_id)
             return done("access_revoked")
         kind, _, days = form.get("grant", "").partition(":")
-        if kind not in ("trial", "paid") or not days.isdigit() or not 1 <= int(days) <= 3650:
+        if kind not in ("trial", "paid", "basic", "pro") or not days.isdigit() or not 1 <= int(days) <= 3650:
             return done("bad_request")
-        until = portal_db.admin_grant_access(user_id, int(days), kind, actor)
-        notifications.notify_customer(email, "Your Agent Daemon access is active",
-                                      f"Access is active until {_fmt_time(until)}.\n{_base_url()}/dashboard", "access_granted")
+        plan = kind if kind in ("basic", "pro") else None          # v6: the admins can give Basic or Pro (e.g. a hackathon pilot)
+        until = portal_db.admin_grant_access(user_id, int(days), "trial" if kind == "trial" else "paid", actor, plan=plan)
+        what = {"basic": "Basic plan", "pro": "Pro plan"}.get(kind, "Access")
+        notifications.notify_customer(email, f"Your Agent Daemon {what if plan else 'access'} is active",
+                                      f"{what} is active until {_fmt_time(until)}.\n{_base_url()}/dashboard", "access_granted")
         return done("access_granted")
     if action == "send_test_email":
         results = notifications.send_test_to_admins()
@@ -2227,7 +2229,8 @@ def _admin_view(request):
             action = (f"<form method='post' action='/admin' class='inline'><input type='hidden' name='csrf' value='{csrf}'>"
                       f"<input type='hidden' name='user_id' value='{_escape(user['id'])}'>"
                       "<select name='grant' aria-label='Access to grant'><option value='trial:1'>Free trial · 1 day</option>"
-                      "<option value='paid:30'>Paid · 30 days</option><option value='paid:365'>Paid · 365 days</option></select>"
+                      "<option value='basic:30'>Basic · 30 days</option><option value='pro:30'>Pro · 30 days</option>"
+                      "<option value='basic:365'>Basic · 365 days</option><option value='pro:365'>Pro · 365 days</option></select>"
                       "<button class='button primary' name='action' value='grant' type='submit'>Grant access</button></form>")
         u_name = user.get('name') or ""
         u_phone = user.get('phone') or ""

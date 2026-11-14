@@ -832,3 +832,16 @@ def test_payment_intake_details_saved_and_emailed_to_admins(web_env):
     assert "GitHub" in admin_page
     assert "Bob Labs" in admin_page
     assert "888877776666" in admin_page
+
+
+def test_admins_can_give_basic_or_pro_for_a_hackathon_pilot(web_env):
+    import plans
+    user_id, *_ = make_session("team@example.com")
+    _, csrf, cookie = make_session("admin1@example.com")
+    _, _, page = _request("/admin", cookie=cookie)
+    assert "value='basic:30'" in page and "value='pro:30'" in page and "value='trial:1'" in page
+    assert location(post("/admin", cookie, csrf, action="grant", user_id=user_id, grant="pro:30")[1]).endswith("access_granted")
+    assert plans.user_plan(user_id) == "pro"
+    post("/admin", cookie, csrf, action="grant", user_id=user_id, grant="basic:30")
+    assert plans.user_plan(user_id) == "basic"
+    assert location(post("/admin", cookie, csrf, action="grant", user_id=user_id, grant="gold:30")[1]).endswith("bad_request")
