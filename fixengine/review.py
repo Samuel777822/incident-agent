@@ -42,5 +42,5 @@ def build_report(bug: dict, attempts: list[dict], decisions: list[dict], *, proj
         lines.append("Reproduce the error locally from the traceback; the agent could not produce a usable diagnosis.")
     spent = sum(float(a.get("cost_inr") or 0) for a in attempts)
     lines += ["", f"_Cost of this investigation: Rs {spent:.2f} across {len(attempts)} tries. "
-                  "Review does not use up your High or Extra tries._"]
+                  "A review like this is not charged to your bars._"]
     return "\n".join(lines)[:30000]

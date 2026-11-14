@@ -810,7 +810,7 @@ def _arch_section() -> str:
             "<div style='text-align:center;margin-bottom:18px'><div class='section-tag'>THE ARCHITECTURE</div>"
             "<h2 class='section-headline'>How Agent Daemon looks after your code</h2>"
             "<p class='section-sub' style='margin:auto;max-width:760px'>Connect a GitHub repository once. Every push is tested in a sandbox; "
-            "when something breaks, an AI engineer reads your code, fixes the cause and proves it, starting with the low-cost Normal mode. "
+            "when something breaks, an AI engineer reads your code, fixes the cause and proves it, starting with the low-cost Engineer. "
             "Not a code problem? You get simple step-by-step instructions. Press play, or tap any box.</p></div>"
             f"<style>{css}</style>{diagram}<script>{script}</script>"
             "<p style='text-align:center;margin-top:14px'><a class='button' href='/how-it-works'>Read how it works, step by step</a></p></section>")
@@ -914,7 +914,7 @@ def render_homepage_html() -> str:
         </div>
 
         <div style="margin-top:auto;padding-top:12px;border-top:1px solid #2d1830;font-size:11.5px;color:#a99dbb;display:flex;justify-content:space-between">
-          <span>Mode: <b>Normal</b> · 28 tries left</span>
+          <span>Engineer bar: <b>82%</b> left</span>
           <span style="color:#ff8a7a">1 broken push</span>
         </div>
       </div>
@@ -1111,7 +1111,7 @@ def render_homepage_html() -> str:
       </div>
       <h3 style="font-size:18px;margin:0 0 10px;color:var(--text);font-family:var(--serif)">The agent fixes it</h3>
       <p style="color:var(--muted);font-size:14px;line-height:1.6;margin:0">
-        An AI engineer reads your whole code, reproduces the problem, fixes it and runs your checks. It starts with the low-cost Normal mode and calls a stronger one only if needed. Not a code problem? You get simple step-by-step instructions instead. Watch every step live on your dashboard.
+        An AI engineer reads your whole code, reproduces the problem, fixes it and runs your checks. It starts with the low-cost Engineer and asks before the Lead engineer steps in. Not a code problem? You get simple step-by-step instructions instead. Watch every step live on your dashboard.
       </p>
     </div>
 
@@ -1159,7 +1159,7 @@ def render_homepage_html() -> str:
       <span class="feature-num">03</span>
       <div class="feature-icon-box">{ICON_CPU}</div>
       <h3>An engineer, not a guesser</h3>
-      <p>Reads your whole code base, runs your build and tests, opens your live site and checks git history before it changes anything. Low-cost Normal first; stronger only when needed.</p>
+      <p>Reads your whole code base, runs your build and tests, opens your live site and checks git history before it changes anything. The low-cost Engineer first; the Lead engineer only when needed, after asking.</p>
     </div>
 
     <!-- 04 -->

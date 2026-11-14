@@ -1,7 +1,7 @@
 """The 'How the agent fixes a problem' section of /how-it-works: an interactive, animated explanation of the engineer.
 
 A five-step pipeline you can click through (or let it play), with a terminal that replays a real-looking case step by step, the
-Normal -> High -> Extra ladder with what each run may cost, and the two decisions that matter to an owner: is it a code problem,
+Engineer -> Lead engineer -> founders ladder with what each run may cost, and the two decisions that matter to an owner: is it a code problem,
 and is the agent sure. No libraries; one inline script (allowed on this page); respects prefers-reduced-motion.
 """
 from __future__ import annotations
@@ -12,27 +12,29 @@ import json
 E = lambda v: html.escape(str(v if v is not None else ""), quote=True)
 
 STEPS = [
-    ("📖", "1. Normal goes first", "Reads everything",
-     "Every case starts with the low-cost Normal engineer. It reads your whole code base, the error or your request, your live site "
+    ("📖", "1. The Engineer goes first", "Reads everything",
+     "Every case starts with the low-cost Engineer. It reads your whole code base, the error or your request, your live site "
      "and your recent commits, before it changes anything.",
      [("cmd", "case: \"Isaiah 1 is not loading\""), ("out", "reading the whole code base · 34 files"),
       ("cmd", "open_live_page /isaiah/1"), ("bad", "GET bible-api.com/isaiah 1  →  404 Not Found"),
       ("cmd", "recent_commits src/App.jsx"), ("out", "a1b2c3d  'rename chapter helper'  (2 days ago)")]),
     ("🧭", "2. Is it a code problem?", "Decides first",
      "If the cause is outside your code (a key missing on your host, a database or sign-in setting, a service that is down) it stops "
-     "right away and writes you simple numbered steps. No money is spent on a stronger AI.",
+     "right away and writes you simple numbered steps. For a problem it caught by itself it first shows you what broke, why, the fix "
+     "it proposes and how much of your bar it will use, and waits for \"Yes, fix it\".",
      [("cmd", "is this a code problem?"), ("out", "the URL is built with a space: \"isaiah\" + \" \" + \"1\""),
       ("ok", "yes: src/App.jsx, line 212 (introduced by a1b2c3d)"), ("dim", "(not code? → \"Needs you\": step-by-step instructions)")]),
     ("🛠", "3. Fix and prove", "Edits, then runs your checks",
-     "It edits as much as the fix needs, runs install, build, tests and start-up in the sandbox, then our own check runs again on the "
+     "It edits as much as the fix needs and runs install, build and tests on GitHub's own machines, then the check runs again on the "
      "final files. Big judgement calls (deleting a feature, a placeholder) are shown to you before they go live.",
      [("cmd", "edit src/App.jsx   book + \" \" + ch   →   book + \"/\" + ch"), ("cmd", "run_checks"),
       ("ok", "install ✓   build ✓   tests ✓   start ✓   browser journey ✓"), ("ok", "safety rules ✓   our own sandbox run ✓")]),
-    ("⇪", "4. Stronger only if needed", "Normal → High → Extra",
-     "Most cases end with Normal. Only if it cannot finish does High take over, starting from everything already found. Extra is the "
-     "last step, and only after asking you. A run that reaches its limit simply continues: nothing is thrown away.",
-     [("ok", "Normal finished the case: no stronger model was needed"), ("dim", "(otherwise: High continues with the findings and edits)"),
-      ("dim", "(Extra: only after you press \"Yes, go ahead\")")]),
+    ("⇪", "4. The Lead engineer only if needed", "Engineer → Lead engineer",
+     "Most cases end with the Engineer. If it cannot finish, on Pro the Lead engineer reads everything already found and writes it "
+     "exact instructions, only after asking you. Too big for the AI? Send it to the founders. Nothing found so far is thrown away.",
+     [("ok", "the Engineer finished the case: the Lead engineer was not needed"),
+      ("dim", "(otherwise, on Pro: \"Let the Lead engineer guide it\", after you say yes)"),
+      ("dim", "(Basic, or a very big job: \"Send it to the founders\")")]),
     ("🚀", "5. Sure or not sure", "Push, or ask you",
      "In Auto mode a fix the agent is sure about (all checks green, low risk, nothing left for you) goes to your branch after your "
      "GitHub tests pass and, for anything on the screen, a real Chrome on GitHub shows it working at phone and desktop size. Then your "
@@ -132,17 +134,17 @@ Click a step, or watch it replay a real case.</p>
 <div class='eng-cap'></div><div class='eng-ctl'><button type='button' class='button eng-play'>❚❚ Pause</button>
 <span class='muted'>A replay of a typical case. Your own cases show every real step on the case page.</span></div></div></div>
 <script type='application/json' id='eng-data'>{json.dumps(data).replace('</', '<' + chr(92) + '/')}</script>
-<h3 style='margin-top:34px'>Normal → High → Extra</h3>
+<h3 style='margin-top:34px'>Engineer → Lead engineer → founders</h3>
 <div class='eng-ladder'>
-<article class='eng-tier most' style='--tc:#62e6a4'><span class='badge'>Most cases end here</span><h4>Normal</h4>
+<article class='eng-tier most' style='--tc:#62e6a4'><span class='badge'>Most cases end here</span><h4>Engineer</h4>
 <p>The first engineer on every case. Fast and low-cost, with the whole code base and every tool.</p><span class='cost'>{E(cap('haiku'))}</span></article>
 <div class='eng-arrow'>→</div>
-<article class='eng-tier' style='--tc:#b06cff'><span class='badge'>Only if needed</span><h4>High</h4>
-<p>Takes over when Normal could not finish, starting from everything Normal found and changed.</p><span class='cost'>{E(cap('sonnet'))}</span></article>
+<article class='eng-tier' style='--tc:#b06cff'><span class='badge'>Pro · asks you first</span><h4>Lead engineer</h4>
+<p>When the Engineer could not finish, it reads everything found so far and writes the Engineer exact instructions.</p><span class='cost'>{E(cap('sonnet'))}</span></article>
 <div class='eng-arrow'>→</div>
-<article class='eng-tier' style='--tc:#ff4f6a'><span class='badge'>Asks you first</span><h4>Extra</h4>
-<p>The strongest engineer, for the hardest cases. Never used without your OK.</p><span class='cost'>{E(cap('opus'))}</span></article></div>
-<p class='muted'>Your plan includes {quotas.get('normal', 30)} Normal, {quotas.get('high', 6)} High and {quotas.get('extra', 3)} Extra tries a month.</p>
+<article class='eng-tier' style='--tc:#ff4f6a'><span class='badge'>Big jobs</span><h4>The founders</h4>
+<p>Too big for the AI? Send it to the founders: ₹200 per feature for plan members.</p><span class='cost'><a href='/build-request'>Ask the founders</a></span></article></div>
+<p class='muted'>Basic includes the Engineer bar; Pro adds the Lead engineer bar. Bars refill every month; see <a href='/usage'>Usage</a>.</p>
 <h3 style='margin-top:30px'>Is it a code problem?</h3>
 <div class='eng-split'>
 <article class='eng-out yes'><h4>✅ Yes: fixed and proven</h4><p>The engineer fixes the cause, runs your build and tests, and our own check

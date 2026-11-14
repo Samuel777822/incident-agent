@@ -1415,8 +1415,8 @@ def _page_help(request: Request) -> Response:
   <p class="muted"><b>Why a stronger AI?</b> @@WHY_STRONGER@@</p>
   <p class="muted"><b>When a fix fails:</b> @@FAILED_FIX@@</p>
   <p class="muted"><b>When a person is needed:</b> @@HUMAN_NEEDED@@</p>
-  <p class="muted">Your dashboard shows which mode is working on each bug and how many tries you have left. On the Usage page choose
-  <b>Auto</b> (the agent decides), <b>Ask me</b> (you are asked at warning points) or <b>Economy</b> (never High or Extra).
+  <p class="muted">Your dashboard shows which engineer is working on each case and how much of your bars is left. On the Usage page choose
+  <b>Auto</b> (the agent decides), <b>Ask me</b> (you are asked at warning points) or <b>Economy</b> (never the Lead engineer).
   The full picture, with a small calculator, is on <a href="/how-it-works#router">How it works</a>.</p>
 </section>
 
@@ -1966,7 +1966,7 @@ def _page_login(request):
 _ADMIN_MESSAGES = {
     "trial_approved": ("green", "Trial approved. The customer has access for 1 day, starting now."),
     "trial_rejected": ("amber", "Trial request rejected."),
-    "payment_confirmed": ("green", "Payment confirmed. What the customer paid for (plan days, a project slot or a tries pack) is active now."),
+    "payment_confirmed": ("green", "Payment confirmed. What the customer paid for (plan days, a project slot or a top-up) is active now."),
     "payment_rejected": ("amber", "Payment rejected."),
     "access_granted": ("green", "Access granted."),
     "access_revoked": ("amber", "Access revoked. The customer's projects are paused until access is granted again."),
@@ -2534,9 +2534,9 @@ def _page_usage(request):
     if request.method != "GET" or request.path != "/usage":
         return _response("Method not allowed", request, "405 Method Not Allowed")
     asked = (request.query.get("asked") or [""])[0]
-    msg = {"granted": "Good news: extra tries were added to your account for this month.",
+    msg = {"granted": "Good news: more was added to your bar for this month.",
            "held": "Thanks, your request was sent to our team. We usually answer within a few hours; you will get an email. "
-                   "If you need tries right away, a pack can be bought below."}.get(asked, "")
+                   "If you need more right away, a ₹99 top-up can be bought on Plan & billing."}.get(asked, "")
     return _response(fx_ui.usage_page(fx_api.usage_view(user_id), _csrf(request), msg), request)
 
 
@@ -4838,7 +4838,7 @@ def _timeline_html(incident_id: str) -> str:
         steps = []
     if not steps:
         return ""
-    names = {"haiku": "Normal", "sonnet": "High", "opus": "Extra"}
+    names = {"haiku": "Engineer", "sonnet": "Lead engineer", "opus": "Lead engineer"}
     rows = "".join(f"<li class='{'' if s.get('ok', True) else 'bad'}'><span class='muted'>{_escape(names.get(s.get('tier'), s.get('tier', '')))}</span> "
                    f"{_escape(s.get('what', ''))}</li>" for s in steps[-80:])
     return ("<article class='card'><h2>What the engineer did</h2><p class='muted'>Every step of its work on your code, newest last.</p>"

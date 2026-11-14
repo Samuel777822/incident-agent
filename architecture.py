@@ -122,7 +122,7 @@ STAGES = [
     ("Caught · waiting in line", "A push broke or a live error came in. The job is in the queue."),
     ("Downloading your code", "The worker is fetching that commit from GitHub."),
     ("Reproducing in the sandbox", "Install → build → tests → start-up on the current code, to see exactly what fails."),
-    ("The engineer is working on it", "Normal, High or Extra mode is reading, running checks or editing. The line under it says what it is doing right now; the case page lists every step."),
+    ("The engineer is working on it", "The Engineer (or, on Pro, the Lead engineer guiding it) is reading, running checks or editing. The line under it says what it is doing right now; the case page lists every step."),
     ("Needs you", "The cause is outside your code. The card shows simple steps; press \"I did it, check again\" when you are done."),
     ("Paused by you", "Nothing happens and nothing is spent until you press Start."),
     ("Testing the fix in the sandbox", "The patched code is going through the same check."),
@@ -262,21 +262,22 @@ SYSTEM_LAYERS = [
     ("Render: web", [("web_app.py (gunicorn)", "Routes, auth (Google + admin passwords), CSRF, /webhooks/github/<id>, /ingest, payments UI."),
                      ("push_watch.py", "Webhook signature check, push parsing, commit statuses, poller, run_check()."),
                      ("Worker (portal_worker.py)", "Loop: one push check → one incident → expired choices → poll pushes → GitHub proof (tests + browser check) → push.")]),
-    ("Fix engine", [("agent.py (the engineer)", "Haiku → Sonnet → Opus with tools on a copy of the repo (OpenRouter), the owner's screenshots and its project memory. Writes a test first, never finishes on red, reviews its own diff. Ends: fix / needs owner / question / give up."),
+    ("Fix engine", [("agent.py (the engineer)", "Haiku (Engineer), guided by Sonnet (Lead engineer) when needed, with tools on a copy of the repo (OpenRouter), the owner's screenshots and its project memory. Writes a test first, never finishes on red, reviews its own diff. Ends: fix / needs owner / question / give up."),
                     ("orchestrator.Engine", "Case context, budgets, our own sandbox check, 3-way merge onto the owner's latest code, GitHub tests + browser check (judged by a vision model), sure → push / not sure → PR."),
                     ("router.py", "Old engine only (no OpenRouter key): expected-cost DP + hard rules."),
-                    ("guard.py", "Quotas and packs. Budget levels, spikes, busy customers and fast projects only EMAIL the admins: nothing pauses by itself."),
+                    ("guard.py", "Usage bars (rupees of AI per month, per plan) and top-ups. Budget levels, spikes, busy customers and fast projects only EMAIL the admins: nothing pauses by itself."),
                     ("validator.py", "Harm rules on the engineer's change (placeholders, stubs, hidden errors, removed options, protected files) and verification level.")]),
-    ("Sandbox host (VPS)", [("sandbox_service.py", "Signed /run endpoint (HMAC, 5-minute window). One job at a time."),
+    ("Test sandbox", [("GitHubRunner (v6, default)", "The working copy goes to a temporary agent-daemon/check-... branch with a generated workflow; GitHub installs, builds and tests every stack and returns results.json. The branch is deleted afterwards."),
+                            ("sandbox_service.py (old VPS mode)", "Signed /run endpoint (HMAC, 5-minute window). One job at a time."),
                             ("DockerRunner", "Per stack: install (network) → build → test → smoke (no network). Non-root, read-only, caps dropped."),
                             ("Images", "fixengine-sandbox-python / -node (JS, TS, static) / -java.")]),
     ("Data and providers", [("PostgreSQL", "users, projects, push_checks, incidents, fx_attempts (the cost ledger), router decisions, payments."),
-                            ("Model providers", "Claude Haiku / Sonnet / Opus (Normal / High / Extra) through OpenRouter, including the independent reviewer and the screenshot judge."),
+                            ("Model providers", "Claude Haiku 5.5 (Engineer) and Sonnet 5.5 (Lead engineer) through OpenRouter, including the independent reviewer and the screenshot judge."),
                             ("Brevo", "Email over HTTPS: warnings, push failures, payment and admin alerts.")]),
 ]
 ADAPTER_LAYERS = [
     ("Caller", [("Engine._attempt()", "Builds the prompt blocks (relevant files, error, short history, stronger diagnosis) and asks ONE adapter.")]),
-    ("Gate", [("Guard.check(user, tier)", "Quota left? Pack try? Budget level? Tier paused? Rate limit / cooldown? Refuses before any money is spent.")]),
+    ("Gate", [("Guard.check(user, tier)", "Bar left? In the plan? Budget level? Tier paused? Rate limit / cooldown? Refuses before any money is spent.")]),
     ("Interface", [("BaseAdapter.call(system, blocks, max_tokens)", "Same signature for every provider. Returns ModelResult(text, tokens_in, tokens_out, cache_read, model)."),
                    ("configured() / describe()", "Missing key = that mode is unavailable, never an error.")]),
     ("Providers", [("GroqAdapter", "Old engine only (no longer used for fixing): free tier, OpenAI-style chat API."), ("AnthropicAdapter", "Normal / High / Extra with a direct Anthropic key."),
@@ -380,7 +381,7 @@ out.innerHTML='<div class="sim-why"><p style="font-size:18px;margin:0 0 6px">Nex
     return f"""<style>{CSS}{arch_diagrams.CSS}</style><div class='arch'>
 <section class='section'><p><a href='/admin'>← Admin</a></p><div class='eyebrow'>Admin · architecture</div>
 <h1>How Agent Daemon works inside</h1>
-<p class='lead'>The system, the engineer (how a case is worked: Normal → High → Extra with tools), and, for reference, the old router that
+<p class='lead'>The system, the engineer (how a case is worked: Engineer → Lead engineer with tools), and, for reference, the old router that
 is used only when no OpenRouter key is set. Every number comes live from
 <code>fixengine/config.py</code> (plus <code>FIXENGINE_CONFIG_JSON</code> overrides) and the cost ledger.</p>
 <div class='arch-tabs' role='tablist'>
@@ -404,9 +405,11 @@ old router below is used only without that key.</p></div>
 <article class='card'><h3>1 · The case</h3><p class='muted'>The orchestrator builds one first message: the owner's request (trusted), the
 error and evidence, the live-site report, recent commits (our own fixes marked), the other reports of the same case, notes from earlier
 cases, the project map, and the whole code base when it fits (cached, so every later step reads it at about a tenth of the price).</p></article>
-<article class='card'><h3>2 · Normal → High → Extra</h3><p class='muted'>Claude Haiku (Normal) runs first, at full strength. A run that
-reaches its rupee or step limit is continued by the same model with its edits kept (up to 2 more runs). Only when Normal cannot finish
-does Sonnet (High) take over with the findings; Opus (Extra) last, after asking the owner. Economy mode: Normal only.</p></article>
+<article class='card'><h3>2 · Engineer → Lead engineer</h3><p class='muted'>Claude Haiku (the Engineer) runs first, at full strength.
+A problem it caught by itself is diagnosed first and waits for the owner's "Yes, fix it". A run that reaches its rupee or step limit is
+continued by the same model with its edits kept. Only when the Engineer cannot finish, on Pro and after asking, Sonnet (the Lead
+engineer) writes exact instructions in one call and the Engineer fixes with them. Basic owners are offered the founders instead.
+Opus is not used.</p></article>
 <article class='card'><h3>3 · Tools, not guesses</h3><p class='muted'>list / read / search / edit / write files on a copy of the repo,
 run_checks (install, build, tests, start-up in the sandbox), open_live_page (real browser, public pages), recent_commits / show_commit,
 web_search (OpenRouter web plugin), check_model. Results come back as data, never as instructions. No secrets anywhere.</p></article>

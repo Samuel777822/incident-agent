@@ -13,6 +13,27 @@ queue and the dashboard honestly says "Waiting for the test sandbox". Everything
 
 Time needed: about 1.5 hours the first time.
 
+## Upgrading to v6 (14 November 2026): no sandbox server any more
+
+v6 tests fixes on **GitHub's own machines** (GitHub Actions in the customer's repository), so the sandbox server below is no longer
+needed. Do these in order:
+
+1. **Deploy the new code** (push to `main`; Render deploys the portal and the worker by itself).
+2. **Render environment, on the shared group** `incident-agent-core` (or on both the portal and the worker):
+   * `FIXENGINE_SANDBOX_MODE` = `github` (was `remote`). `FIXENGINE_SANDBOX_URL` / `FIXENGINE_SANDBOX_SECRET` can stay; they are only
+     used if you switch back to `remote`.
+   * Optional: `PLAN_PRICE_MONTHLY_INR` (200), `PLAN_PRICE_YEARLY_INR` (1500), `PLAN_PRICE_PRO_INR` (500) change prices without code.
+3. **Render environment, on the worker only:** `WORKER_CASE_THREADS` = `4` (cases worked on at the same time; 1 turns it off).
+   `WORKER_LEASE_SECONDS` is optional; leave it unset.
+4. **Customer GitHub tokens:** nothing changes. The connect page has always asked for a classic token with `repo` **and** `workflow`.
+   A token without `workflow` cannot add the check workflow: the case says "the GitHub token needs the 'workflow' permission" and
+   the owner updates the token on the project page. GitHub Actions must be on for the repository (it is by default).
+5. **GitHub Actions minutes:** checks run in the customer's repository on the customer's free Actions minutes (public repositories:
+   free; private: 2,000 minutes a month on GitHub Free). A check takes about one minute.
+6. **The sandbox server:** once a few real cases have gone through on `github`, you can stop paying for it.
+7. Run the tests on your laptop: `python -m pytest -q` (see RUN_TESTS.md). Known old failures: the static-site checker (3 tests,
+   needs Linux), one dangerous-patch case and one monitor-install case on Windows.
+
 ---
 
 ## Step 1. Put the new code on GitHub (10 minutes)
@@ -56,7 +77,7 @@ Open dashboard.render.com → your portal service → **Environment**. If you us
 | `PORTAL_BASE_URL` | `https://incident-agent-portal.onrender.com` (or your domain, see step 5) | **must be right**: GitHub sends push webhooks here, and every monitor installed into customer apps sends its 30-second check-ins and error reports here |
 | `PUSH_CHECKS_ENABLED` | `1` | push guard on |
 | `PUSH_POLL_SECONDS` | `180` | how often the worker looks for pushes the webhook missed |
-| `FIXENGINE_SANDBOX_MODE` | `remote` | the sandbox is the separate server |
+| `FIXENGINE_SANDBOX_MODE` | `github` (v6) | fixes and pushes are tested on GitHub Actions in the customer's repo (`remote` = the old sandbox server) |
 | `FIXENGINE_SANDBOX_URL` | `https://sandbox.agentdaemon.xyz` (after step 3) | |
 | `FIXENGINE_SANDBOX_SECRET` | a long random string (same one as on the sandbox server) | signs every request to the sandbox |
 | `FIXENGINE_ENABLED` | `1` once step 3 works (keep `0` until then) | turns on automatic fixing |

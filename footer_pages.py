@@ -174,7 +174,7 @@ def features_page_html() -> str:
   <article class="card">
     <div class="feat-ico" aria-hidden="true">&#8721;</div>
     <h3>An AI engineer, cheapest first</h3>
-    <p class="muted">The low-cost Normal engineer reads your whole code, reproduces the problem and fixes it. Only when it cannot finish does a stronger engineer take over, starting from what it found. <a href="/how-it-works#router">See how it works</a>.</p>
+    <p class="muted">The low-cost Engineer reads your whole code, reproduces the problem and fixes it. Only when it cannot finish, on Pro and after asking you, does the Lead engineer guide it, starting from what it found. <a href="/how-it-works#router">See how it works</a>.</p>
   </article>
   <article class="card hover-float">
     <div class="feat-ico">👁</div>
@@ -279,8 +279,23 @@ def changelog_page_html() -> str:
 
   <article class="card" style="margin-bottom:20px">
     <div style="display:flex;justify-content:space-between;align-items:center;flex-wrap:wrap;gap:10px;margin-bottom:12px">
-      <h3 style="margin:0;color:var(--silver)">v5 &mdash; An engineer that shows its work</h3>
+      <h3 style="margin:0;color:var(--silver)">v6 &mdash; Engineer and Lead engineer</h3>
       <span class="pill green">Latest release &middot; Nov 2026</span>
+    </div>
+    <ul style="color:#d1c4df;font-size:14px;line-height:1.7;padding-left:18px">
+      <li><b>Diagnose first:</b> for a problem the agent finds by itself, you first see what broke, why, the fix it proposes and how much of your bar it will use. Nothing changes until you press &ldquo;Yes, fix it&rdquo;.</li>
+      <li><b>Engineer and Lead engineer:</b> the Engineer works every case; on Pro the Lead engineer guides it when it gets stuck, always after asking you.</li>
+      <li><b>New plans:</b> Basic &#8377;200 and Pro &#8377;500 a month, with usage bars that show what is left and &#8377;99 top-ups.</li>
+      <li><b>Tested on GitHub:</b> fixes and pushes are installed, built and tested on GitHub&rsquo;s own machines in about a minute.</li>
+      <li><b>Faster at deadlines:</b> several cases are worked on at the same time.</li>
+      <li><b>Ask the founders:</b> too big for the AI? <a href="/build-request">Send it to the founders</a>.</li>
+    </ul>
+  </article>
+
+  <article class="card" style="margin-bottom:20px">
+    <div style="display:flex;justify-content:space-between;align-items:center;flex-wrap:wrap;gap:10px;margin-bottom:12px">
+      <h3 style="margin:0;color:var(--silver)">v5 &mdash; An engineer that shows its work</h3>
+      <span class="pill">Nov 2026</span>
     </div>
     <ul style="color:#d1c4df;font-size:14px;line-height:1.7;padding-left:18px">
       <li><b>Real browser check:</b> a fix that changes what people see is opened in Chrome on GitHub at phone and desktop size, and the screenshots are checked against the problem before it goes live.</li>
@@ -419,7 +434,7 @@ def faq_page_html() -> str:
   <details class="accordion-item">
     <summary class="accordion-summary">How many projects can I connect?</summary>
     <div class="accordion-body">
-      <p>Every plan includes one project. Each extra project is a one-time &#8377;{plans.PROJECT_SLOT_PRICE}. Your monthly tries are shared by all your projects.</p>
+      <p>Every plan includes one project. Each extra project is a one-time &#8377;{plans.PROJECT_SLOT_PRICE}. Your monthly usage bars are shared by all your projects.</p>
     </div>
   </details>
 
@@ -433,7 +448,7 @@ def faq_page_html() -> str:
   <details class="accordion-item">
     <summary class="accordion-summary">Why does the agent sometimes use a stronger AI?</summary>
     <div class="accordion-body">
-      <p>{plans.MODE_SUMMARY} {plans.WHY_STRONGER} If you prefer, choose <b>Economy</b> on the Usage page and the agent never uses High or Extra.</p>
+      <p>{plans.MODE_SUMMARY} {plans.WHY_STRONGER} If you prefer, choose <b>Economy</b> on the Usage page and the agent never uses the Lead engineer.</p>
     </div>
   </details>
 

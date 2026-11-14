@@ -1,3 +1,36 @@
+# CHANGES: v6 "Engineer and Lead engineer" (14 November 2026)
+
+Why: the AI bill ran out faster than the plans paid for it, the sandbox server cost Rs 500-600 a month, ran one job at a time and
+filled its disk, and a hackathon deadline could leave cases waiting in line for hours. v6 makes every run cheaper, asks before
+spending, works on several cases at once, and tests on GitHub's machines instead of our own server.
+
+* **Two AI engineers, no Opus.** Haiku 5.5 is the *Engineer* (every fix starts here), Sonnet 5.5 is the *Lead engineer*. Customers see
+  only those two names.
+* **Cheaper runs.** Automatic prompt caching on every Claude request (the conversation is re-read at a tenth of the price), old tool
+  output trimmed once when the conversation nears the model's budget (Haiku stays under 100K tokens), smaller tool results for Haiku,
+  and each run's spend cap follows what is left in the owner's bar.
+* **Plans and usage bars.** Basic Rs 200 / 30 days (Engineer bar), Pro Rs 500 / 30 days (Engineer + Lead engineer bars), Basic yearly
+  Rs 1,500, trial with a small Engineer bar. Rs 99 top-ups add to one bar (Lead top-ups on Pro only). Bars are rupees of AI per calendar
+  month measured from the real cost of every run, shown as a percentage and "about N small fixes left". Old packs are no longer sold
+  but keep their value.
+* **Diagnose first.** A problem the agent catches by itself is first only diagnosed (read-only: what broke, why, where, the proposed fix,
+  how much of the bar it will use). The case card asks "Yes, fix it" (quick or proper fix), "That's not it" (words, screenshots,
+  voice) or "Send it to the founders". The owner's own requests and "Fix without asking" skip the question.
+* **The Lead engineer guides, the Engineer fixes.** When the Engineer cannot finish, Pro owners are asked first; then one Sonnet call
+  writes exact instructions and Haiku fixes with them. Basic owners are offered the founders instead.
+* **Ask the founders to build it.** A new page: Rs 200 per feature for plan members, a whole app Rs 2,000 + Rs 600 a month.
+* **Several cases at once.** The worker runs `WORKER_CASE_THREADS` cases in parallel (default 4). Each case is claimed with a lease
+  that is renewed while it runs, so a crashed worker's cases come back quickly and a running case is never taken twice.
+* **GitHub Actions is the test sandbox** (`FIXENGINE_SANDBOX_MODE=github`). The engineer's working copy is committed to a temporary
+  `agent-daemon/check-...` branch together with a generated workflow (`.github/workflows/agent-daemon-check.yml`, first line
+  `# agent-daemon-check v3`) that installs, builds, lints and tests every stack on GitHub's machines and uploads `results.json`. Our
+  servers never run customer code; the branch is deleted afterwards. Measured on Bible-Well: 52 seconds from push to results. Read-only
+  permissions, no secrets, runs only on Agent Daemon's own branches. Lint is shown but never fails a check. The push guard checks the
+  exact pushed commit the same way.
+* **"Nothing ran" is never green.** A green GitHub status whose results show no build and no test ran does not count as proof. Our
+  old test workflow (`agent-daemon-tests.yml`) now has a version line; an out-of-date copy (Bible-Well's never ran its JavaScript
+  tests) is replaced on the next fix branch.
+
 # CHANGES: v3.1 "The on-call engineer" (release of 10 November 2026)
 
 Why: the "Tell the agent what's broken" box crashed on PostgreSQL ("Something went wrong on our side"), one broken API became

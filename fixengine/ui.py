@@ -15,10 +15,10 @@ import plans
 E = lambda v: html.escape(str(v if v is not None else ""), quote=True)
 
 MODE_HELP = {
-    "auto": ("Auto", "The Normal engineer works every case first. Only if it cannot finish does High take over; Extra only after "
-                     "asking you. If you do not answer a question in 30 minutes, the agent continues with the cheaper option."),
+    "auto": ("Auto", "The Engineer works every case first. Only if it cannot finish, on Pro, does the Lead engineer guide it, "
+                     "always after asking you. If you do not answer a question in 30 minutes, the agent continues with the cheaper option."),
     "ask": ("Ask me", "The agent pauses and asks you at every warning point, and waits as long as it takes."),
-    "economy": ("Economy", "Only the Normal engineer works on your cases; High and Extra are never used. What Normal cannot finish goes to human review."),
+    "economy": ("Economy", "Only the Engineer works on your cases; the Lead engineer is never used. What the Engineer cannot finish goes to human review."),
 }
 STATUS_TEXT = {
     "open": "Working on it", "awaiting_choice": "Waiting for your decision", "pr_opened": "Fix proposed",

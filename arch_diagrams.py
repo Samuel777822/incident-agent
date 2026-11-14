@@ -3,7 +3,7 @@
   general_diagram()          every process and how it connects: connect -> public-repo check -> install monitor ->
                              heartbeat -> error detection -> sandbox -> understand -> the engineer -> fix -> tests -> PR,
                              plus the push guard and the first scan. Shown to everyone (/how-it-works) and to admins.
-  model_diagram(cfg)         the engineer: case -> Normal / High / Extra -> guard -> tools -> sandbox / browser / GitHub ->
+  model_diagram(cfg)         the engineer: case -> Engineer / Lead engineer -> guard -> tools -> sandbox / browser / GitHub ->
                              harm rules -> sure (push) or not sure (pull request), and "never a silent stop". Admins only.
 
 Each diagram is drawn twice: a wide layout for desktops/tablets and a tall one for phones (CSS picks one). Arrows show the
@@ -137,8 +137,8 @@ G_NODES = {
                 "container. Your code only ever runs there."),
     "diagnose": ("magenta", "🔍", "Understand", "all your code", "The engineer reads your whole code base, the error, the live "
                  "site and your recent commits, and decides first whether this is a code problem at all."),
-    "router": ("magenta", "🧠", "The engineer", "Normal → High → Extra", "Normal (low cost) works every case first; a stronger engineer "
-               "takes over only if it cannot finish. A retired AI model in YOUR app is fixed without AI at all."),
+    "router": ("magenta", "🧠", "The engineer", "Engineer → Lead engineer", "The Engineer (low cost) works every case first; on Pro the "
+               "Lead engineer guides it, after asking you, only if it cannot finish. A retired AI model in YOUR app is fixed without AI at all."),
     "fix": ("green", "🩹", "Fix", "checked by safety rules", "Any size the fix needs. Never placeholder keys, fake clients, hidden errors, "
             "removed features, tests, CI, lock or secret files."),
     "tests": ("green", "✅", "Tests", "same check must pass", "Your tests (or build / lint / parse checks) run on the patched code. "
@@ -269,10 +269,10 @@ def _model_desktop(cfg: dict) -> str:
                       "Everything the engineer starts with: the whole code base (when it fits), the error or your request, the live "
                       "site, recent commits (its own earlier fixes marked), the other reports of the same case and what earlier runs found.",
                       ("Whole code base", "Error / your request", "Live site + commits", "Earlier findings")))
-    body.append(_node(p, "routerm", 268, 190, 214, 236, "violet", "🧭", "Who works on it", "Normal → High → Extra",
-                      "Normal (Claude Haiku) works every case first. A run that reaches its limit is continued with its edits kept. "
-                      "Only if Normal cannot finish does High (Sonnet) take over with what was found; Extra (Opus) last, after asking you.",
-                      ("Normal first", "Continue, keep edits", "High if needed", "Extra: asks you")))
+    body.append(_node(p, "routerm", 268, 190, 214, 236, "violet", "🧭", "Who works on it", "Engineer → Lead engineer",
+                      "The Engineer (Claude Haiku) works every case first. A run that reaches its limit is continued with its edits kept. "
+                      "Only if it cannot finish, on Pro and after asking you, the Lead engineer (Sonnet) writes it exact instructions.",
+                      ("Engineer first", "Continue, keep edits", "Lead guides (Pro)", "Asks you first")))
     body.append(_edge(p, "M222,308 L264,308", "violet", "case", 243, 298))
     body.append("<g class='dn' tabindex='0' role='button' data-k='guard' data-title='Guard' data-text='Before any money is spent: tries "
                 "left this month, the run limit, the case limit (then it asks you Keep going), the global budget, paused modes (explained, "
@@ -308,8 +308,8 @@ def _model_desktop(cfg: dict) -> str:
     body.append(_edge(p, "M1163,428 L1163,760 L120,760 L120,430", "green", "", 0, 0))
     body.append(f"<rect x='330' y='742' width='610' height='36' rx='18' fill='#0d1f17' stroke='{C['green']}' stroke-width='2' filter='url(#{p}-glow)'/>"
                 "<text class='t' x='635' y='766' text-anchor='middle' style='font-size:14px'>✅ Sure → GitHub tests → push → live check · Not sure → pull request</text>")
-    factors = [("🧠", "Normal", om.get("haiku", "Claude Haiku") + f" · {cap('haiku')}"), ("🧠", "High", om.get("sonnet", "Claude Sonnet") + f" · {cap('sonnet')}"),
-               ("🧠", "Extra", om.get("opus", "Claude Opus") + f" · {cap('opus')}"), ("🧾", "Not a code problem", "step-by-step for you"),
+    factors = [("🧠", "Engineer", om.get("haiku", "Claude Haiku") + f" · {cap('haiku')}"), ("🧠", "Lead engineer", om.get("sonnet", "Claude Sonnet") + f" · {cap('sonnet')}"),
+               ("🧑", "The founders", "big jobs · ₹200 a feature"), ("🧾", "Not a code problem", "step-by-step for you"),
                ("❓", "Missing info", "one question to you"), ("↩", "Went live", "Undo this fix")]
     body.append(f"<rect x='20' y='800' width='1234' height='70' rx='16' fill='#120a1b' stroke='{C['magenta']}' stroke-opacity='.6'/>")
     for i, (ico, t, sub) in enumerate(factors):
@@ -326,8 +326,8 @@ def _model_desktop(cfg: dict) -> str:
 def _model_mobile(cfg: dict) -> str:
     steps = [("lane", "Every case"),
              ("node", "pipeline", "magenta", "⚙", "The case", "code · error · live site", "The whole code base, your request and the evidence."),
-             ("node", "routerm", "violet", "🧭", "Who works on it", "Normal → High → Extra", "Normal first; continues on its limit; stronger only if needed."),
-             ("node", "guard", "amber", "🛡", "Guard", "tries · run and case limits", "Refuses before money is spent; asks you to Keep going."),
+             ("node", "routerm", "violet", "🧭", "Who works on it", "Engineer → Lead engineer", "The Engineer first; continues on its limit; the Lead engineer guides only if needed."),
+             ("node", "guard", "amber", "🛡", "Guard", "bars · run and case limits", "Refuses before money is spent; asks you to Keep going."),
              ("node", "ad", "violet", "🛠", "The engineer's tools", "read · edit · run · live · web", "It works like a developer on a copy of your code."),
              ("node", "pv", "cyan", "☁", "Where they act", "sandbox · browser · GitHub", "No secrets anywhere; results come back as data."),
              ("note", "fallback", "amber", "⚠", "Never a silent stop", "continue · next model · ask you", "Limits and outages never end a case silently.", "on a limit"),
@@ -343,5 +343,5 @@ def model_diagram(cfg: dict) -> str:
     return (f"<div class='dg-wrap' data-order='{','.join(M_ORDER)}'><div class='arch-controls'><button class='button primary dg-play' "
             f"type='button'>▶ Play the flow</button><span class='dg-narr arch-narr' aria-live='polite'></span></div><div class='dg'><div class='dg-desk'>{_model_desktop(cfg)}</div>"
             f"<div class='dg-mobile'>{_model_mobile(cfg)}</div></div>"
-            "<div class='dg-detail' aria-live='polite'><h3>Tap any box</h3><p>The case goes to the Normal engineer first, through the "
+            "<div class='dg-detail' aria-live='polite'><h3>Tap any box</h3><p>The case goes to the Engineer first, through the "
             "guard; the engineer uses its tools, the harm rules check the result. Yellow dashed lines: never a silent stop.</p></div></div>")

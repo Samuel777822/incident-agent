@@ -48,9 +48,11 @@ envVarGroups:
         value: "400"
       - key: FIXENGINE_CREDITS_INR
         value: "500"
-      # Render cannot run Docker, so fixes are tested on a separate small server running sandbox_service.py (see FIXENGINE.md).
+      # v6: fixes and pushes are installed, built and tested on GitHub's own machines (GitHub Actions, in the customer's repo,
+      # on temporary agent-daemon/check-... branches). No sandbox server is needed. "remote" (sandbox_service.py on a VPS) still
+      # works: set FIXENGINE_SANDBOX_MODE=remote plus the URL and secret below.
       - key: FIXENGINE_SANDBOX_MODE
-        value: remote
+        value: github
       - key: FIXENGINE_SANDBOX_URL
         sync: false
       - key: FIXENGINE_SANDBOX_SECRET
@@ -119,6 +121,8 @@ services:
       - fromGroup: incident-agent-core
       - key: WORKER_POLL_SECONDS
         value: "5"
+      - key: WORKER_CASE_THREADS          # v6: cases worked on at the same time
+        value: "4"
       - key: WORKER_MIN_OCCURRENCES
         value: "1"
       - key: WORKER_MIN_AGE_SECONDS
