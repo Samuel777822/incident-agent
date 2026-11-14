@@ -8,6 +8,7 @@ HTTPS reverse proxy and set the secrets documented in README.md.
 from __future__ import annotations
 
 import base64
+import gzip
 import hashlib
 import logging
 import hmac
@@ -4860,6 +4861,30 @@ def _dispatch(request: Request) -> Response:
     return _response("<h1>Page not found</h1><p class='muted'>That route does not exist.</p>", request, "404 Not Found")
 
 
+_COMPRESSIBLE = ("text/", "application/json", "application/javascript", "image/svg+xml")
+
+
+def _save_bandwidth(environ, response: Response) -> Response:
+    """Render's free plan allows 5 GB a month of data sent out (it ran out on 14 Nov 2026). Two savings, same pages:
+    * live panels send a short hash of what they show; when it has not changed the answer is "204, nothing new" (no body);
+    * every text answer over 1 KB is gzip-compressed when the browser accepts it (about 5x smaller)."""
+    headers = response.headers
+    ctype = next((v for k, v in headers if k.lower() == "content-type"), "")
+    if (environ.get("HTTP_X_LIVE_HASH") is not None and environ.get("REQUEST_METHOD") == "GET"
+            and response.status.startswith("200") and ctype.startswith("text/html")):
+        digest = hashlib.sha1(response.body).hexdigest()[:20]
+        headers = [h for h in headers if h[0].lower() != "x-live-hash"] + [("X-Live-Hash", digest)]
+        if environ.get("HTTP_X_LIVE_HASH") == digest:
+            return Response(b"", "204 No Content", [h for h in headers if h[0].lower() not in ("content-type", "content-length")])
+        response.headers = headers
+    if (len(response.body) > 1024 and "gzip" in str(environ.get("HTTP_ACCEPT_ENCODING", "")).lower()
+            and ctype.startswith(_COMPRESSIBLE) and not any(k.lower() == "content-encoding" for k, _ in response.headers)):
+        response.body = gzip.compress(response.body, compresslevel=6)
+        response.headers = [h for h in response.headers if h[0].lower() not in ("content-length", "vary")] + [
+            ("Content-Encoding", "gzip"), ("Vary", "Accept-Encoding"), ("Content-Length", str(len(response.body)))]
+    return response
+
+
 def application(environ, start_response):
     try:
         request = Request(environ)
@@ -4883,6 +4908,10 @@ def application(environ, start_response):
             ("X-Frame-Options", "DENY"),
             ("Permissions-Policy", "camera=(), microphone=(self), geolocation=()"),     # the Speak button needs the microphone
         ])
+    try:
+        response = _save_bandwidth(environ, response)
+    except Exception:
+        LOG.exception("bandwidth saving skipped")
     start_response(response.status, response.headers)
     return [response.body]
 

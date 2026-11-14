@@ -17,7 +17,7 @@ import media_input
 import re
 from datetime import datetime, timedelta, timezone
 
-LIVE_JS_VERSION = "3"
+LIVE_JS_VERSION = "4"
 
 _TONES = {"green", "amber", "red", "blue", "muted"}
 _DIAGNOSING = {"diagnosing", "queued", "processing"}
@@ -496,7 +496,8 @@ def render_board_section(project_id: str, incidents: list, mode: str, csrf: str 
 
 
 LIVE_JS = """(function () {
-  // Any element with data-live="<url>" re-fetches its HTML every 5 seconds (15 s after a failed fetch).
+  // Any element with data-live="<url>" asks for its HTML every 5 seconds (15 s after a failed fetch). It sends the hash of what
+  // it shows (X-Live-Hash); when nothing changed the server answers 204 with no body, so an open tab costs almost no bandwidth.
   var boxes = document.querySelectorAll('[data-live]');
   var dot = document.getElementById('live-dot');
   function setDot(ok) {
@@ -506,7 +507,7 @@ LIVE_JS = """(function () {
   }
   function watch(box) {
     var url = box.getAttribute('data-live');
-    var last = null, failures = 0, timer = null;
+    var last = null, failures = 0, timer = null, hash = '';
     function openIds() {
       var ids = {}, nodes = box.querySelectorAll('details[data-id][open]');
       for (var i = 0; i < nodes.length; i++) { ids[nodes[i].getAttribute('data-id')] = true; }
@@ -532,11 +533,13 @@ LIVE_JS = """(function () {
     }
     function tick() {
       if (document.hidden) { schedule(); return; }
-      fetch(url, { credentials: 'same-origin', cache: 'no-store' })
+      fetch(url, { credentials: 'same-origin', cache: 'no-store', headers: { 'X-Live-Hash': hash } })
         .then(function (r) {
           if (r.status === 401) { window.location.href = '/login'; return null; }
+          if (r.status === 204) { failures = 0; setDot(true); return null; }      // nothing changed
           if (!r.ok) { throw new Error('bad status'); }
-          return r.text();
+          var h = r.headers.get('X-Live-Hash');
+          return r.text().then(function (t) { if (!typing()) { hash = h || ''; } return t; });
         })
         .then(function (text) {
           if (text === null) { return; }
