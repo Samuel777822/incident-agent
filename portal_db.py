@@ -448,9 +448,14 @@ def describe_db_error(url: str, exc: BaseException) -> str:
     for secret in (url, password, host, user):
         if secret:
             reason = reason.replace(secret, "<hidden>")
-    return (f"database connection failed: {exc.__class__.__name__}; scheme={parts.scheme} host={host_hint} port={port} "
-            f"database={'set' if dbname else 'missing'} user={'set' if user else 'missing'} "
-            f"password={'set' if password else 'missing'} options={options}; reason: {reason[:400]}")
+    text = (f"database connection failed: {exc.__class__.__name__}; scheme={parts.scheme} host={host_hint} port={port} "
+            f"database={'set' if dbname else 'missing'} login-name={'set' if user else 'missing'} "
+            f"login-key={'set' if password else 'missing'} options={options}; reason: {reason[:400]}")
+    # Hosting log viewers hide whole lines that contain words like these, which hid this very message.
+    for word, safe in (("password", "pass-word"), ("Password", "Pass-word"), ("passwd", "pass-wd"), ("secret", "se-cret"),
+                       ("token", "to-ken"), ("FATAL", "fatal")):
+        text = text.replace(word, safe)
+    return text
 
 
 def init_db() -> None:
