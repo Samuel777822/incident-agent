@@ -138,3 +138,14 @@ def test_a_removal_error_is_counted_and_does_not_stop_the_worker(tmp_path, monke
         raise PermissionError("denied")
     monkeypatch.setattr(temp_cleanup.shutil, "rmtree", refuse)
     assert temp_cleanup.sweep()["errors"] == 1
+
+
+def test_a_database_error_names_the_reason_but_never_the_secrets():
+    import portal_db
+    url = "postgresql://appuser:S3cretPw@db.internal.example.net:6543/agentdb?sslmode=require"
+    exc = RuntimeError('connection to "db.internal.example.net" port 6543 failed: password authentication failed for user "appuser" (S3cretPw)')
+    text = portal_db.describe_db_error(url, exc)
+    assert "password authentication failed" in text and "port=6543" in text and "options=sslmode" in text
+    for secret in ("S3cretPw", "appuser", "db.internal.example.net"):
+        assert secret not in text
+    assert "no dots" in portal_db.describe_db_error("postgres://u:p@dpg-abc123/db", RuntimeError("timeout"))

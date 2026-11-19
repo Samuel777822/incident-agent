@@ -430,8 +430,35 @@ def _execute(conn, sql: str, params=()):
     return conn.execute(pg_sql(sql), params)
 
 
+def describe_db_error(url: str, exc: BaseException) -> str:
+    """Why the database refused, without the password or the full address (deploy logs are shared with the hosting team)."""
+    from urllib.parse import urlsplit, parse_qs
+    try:
+        parts = urlsplit(url)
+        host = parts.hostname or ""
+        port = parts.port or 5432
+        dbname = parts.path.lstrip("/")
+        user = parts.username or ""
+        password = parts.password or ""
+        options = ",".join(sorted(parse_qs(parts.query))) or "none"
+    except ValueError:
+        return f"DATABASE_URL could not be read as a URL ({exc.__class__.__name__})"
+    host_hint = (host[:4] + "..." + host.rsplit(".", 1)[-1]) if "." in host else (host[:4] + "... (no dots: an internal name)")
+    reason = " ".join(str(exc).split())
+    for secret in (url, password, host, user):
+        if secret:
+            reason = reason.replace(secret, "<hidden>")
+    return (f"database connection failed: {exc.__class__.__name__}; scheme={parts.scheme} host={host_hint} port={port} "
+            f"database={'set' if dbname else 'missing'} user={'set' if user else 'missing'} "
+            f"password={'set' if password else 'missing'} options={options}; reason: {reason[:400]}")
+
+
 def init_db() -> None:
-    conn = get_connection()
+    try:
+        conn = get_connection()
+    except Exception as exc:
+        print("[db-check] " + describe_db_error(_database_url(), exc), flush=True)
+        raise
     try:
         for statement in SCHEMA.split(";"):
             if statement.strip():
