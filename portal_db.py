@@ -458,7 +458,32 @@ def describe_db_error(url: str, exc: BaseException) -> str:
     return text
 
 
+SCHEMA_LOCK_KEY = 7321904401          # any fixed number; every process that sets up the schema uses the same one
+
+
 def init_db() -> None:
+    """Create or upgrade the schema. On PostgreSQL the web app and the worker start at the same moment; without a lock their
+    CREATE/ALTER statements interleave and PostgreSQL kills one of them (deadlock detected). A session-level advisory lock on
+    its own connection makes them take turns; closing that connection always releases the lock, even after an error."""
+    url = _database_url()
+    if not url.startswith(("postgres://", "postgresql://")):
+        _init_db_locked()
+        return
+    try:
+        import psycopg
+        lock_conn = psycopg.connect(url, autocommit=True, connect_timeout=10)
+    except Exception as exc:
+        print("[db-check] " + describe_db_error(url, exc), flush=True)
+        raise
+    try:
+        lock_conn.execute("SET lock_timeout = '180s'")
+        lock_conn.execute("SELECT pg_advisory_lock(%s)", (SCHEMA_LOCK_KEY,))
+        _init_db_locked()
+    finally:
+        lock_conn.close()
+
+
+def _init_db_locked() -> None:
     try:
         conn = get_connection()
     except Exception as exc:

@@ -150,3 +150,53 @@ def test_a_database_error_names_the_reason_but_never_the_secrets():
     for secret in ("S3cretPw", "appuser", "db.internal.example.net"):
         assert secret not in text
     assert "no dots" in portal_db.describe_db_error("postgres://u:p@dpg-abc123/db", RuntimeError("timeout"))
+
+
+def test_schema_setup_takes_turns_on_postgresql(monkeypatch):
+    """The web app and the worker both run init_db at start; on PostgreSQL they must hold the same advisory lock."""
+    import sys
+    import types
+    import portal_db
+    events = []
+
+    class FakeConn:
+        def execute(self, sql, params=()):
+            events.append(("execute", sql, params))
+
+        def close(self):
+            events.append(("close",))
+
+    fake = types.SimpleNamespace(connect=lambda url, **kw: events.append(("connect", kw.get("autocommit"))) or FakeConn())
+    monkeypatch.setitem(sys.modules, "psycopg", fake)
+    monkeypatch.setenv("DATABASE_URL", "postgresql://u:p@db.example.net/app")
+    monkeypatch.setattr(portal_db, "_init_db_locked", lambda: events.append(("schema",)))
+    portal_db.init_db()
+    kinds = [e[0] for e in events]
+    assert kinds == ["connect", "execute", "execute", "schema", "close"]
+    assert events[0][1] is True
+    assert events[2][1].startswith("SELECT pg_advisory_lock") and events[2][2] == (portal_db.SCHEMA_LOCK_KEY,)
+
+
+def test_the_lock_is_released_when_schema_setup_fails(monkeypatch):
+    import sys
+    import types
+    import pytest
+    import portal_db
+    closed = []
+
+    class FakeConn:
+        def execute(self, sql, params=()):
+            pass
+
+        def close(self):
+            closed.append(True)
+
+    monkeypatch.setitem(sys.modules, "psycopg", types.SimpleNamespace(connect=lambda url, **kw: FakeConn()))
+    monkeypatch.setenv("DATABASE_URL", "postgresql://u:p@db.example.net/app")
+
+    def boom():
+        raise RuntimeError("deadlock detected")
+    monkeypatch.setattr(portal_db, "_init_db_locked", boom)
+    with pytest.raises(RuntimeError):
+        portal_db.init_db()
+    assert closed == [True]
