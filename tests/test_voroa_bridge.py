@@ -200,3 +200,79 @@ def test_the_lock_is_released_when_schema_setup_fails(monkeypatch):
     with pytest.raises(RuntimeError):
         portal_db.init_db()
     assert closed == [True]
+
+
+class _RecordingPg:
+    """A stand-in PostgreSQL connection that records statements and commits, and reports every column as present."""
+
+    def __init__(self, columns):
+        self.columns = columns
+        self.log = []
+
+    def execute(self, sql, params=()):
+        self.log.append(("sql", sql.strip()))
+        rows = [{"table_name": t, "column_name": c} for t, c in self.columns] if "information_schema.columns" in sql else []
+        return types_namespace(fetchall=lambda: rows, fetchone=lambda: None)
+
+    def commit(self):
+        self.log.append(("commit",))
+
+    def rollback(self):
+        self.log.append(("rollback",))
+
+    def close(self):
+        pass
+
+
+def types_namespace(**kw):
+    import types
+    return types.SimpleNamespace(**kw)
+
+
+def _all_additions():
+    """Every (table, column) the migration list can add, read from a fresh SQLite schema."""
+    import re
+    import inspect
+    import portal_db
+    source = inspect.getsource(portal_db._init_db_locked)
+    return set(re.findall(r'\("(\w+)", "(\w+)", "', source))
+
+
+def test_schema_setup_never_alters_a_column_that_exists_and_commits_each_statement(monkeypatch):
+    """The deadlock on Voroa: setup held exclusive locks on many tables in one transaction while the worker read them."""
+    import portal_db
+    import fixengine.store
+    conn = _RecordingPg(_all_additions())
+    monkeypatch.setattr(portal_db, "get_connection", lambda: conn)
+    monkeypatch.setattr(portal_db, "_ensure_one_open_incident_index", lambda c: None)
+    monkeypatch.setattr(fixengine.store, "ensure_schema", lambda c: None)
+    portal_db._init_db_locked()
+    statements = [entry[1] for entry in conn.log if entry[0] == "sql"]
+    assert not [s for s in statements if s.upper().startswith("ALTER")]
+    for before, after in zip(conn.log, conn.log[1:]):      # never two statements in one transaction
+        if before[0] == "sql" and not before[1].startswith("SELECT"):
+            assert after == ("commit",), before[1][:60]
+
+
+def test_schema_setup_adds_only_the_missing_column(monkeypatch):
+    import portal_db
+    import fixengine.store
+    present = _all_additions() - {("projects", "auto_start")}
+    conn = _RecordingPg(present)
+    monkeypatch.setattr(portal_db, "get_connection", lambda: conn)
+    monkeypatch.setattr(portal_db, "_ensure_one_open_incident_index", lambda c: None)
+    monkeypatch.setattr(fixengine.store, "ensure_schema", lambda c: None)
+    portal_db._init_db_locked()
+    alters = [e[1] for e in conn.log if e[0] == "sql" and e[1].upper().startswith("ALTER")]
+    assert alters == ["ALTER TABLE projects ADD COLUMN IF NOT EXISTS auto_start INTEGER NOT NULL DEFAULT 1"]
+
+
+def test_sqlite_schema_setup_still_upgrades_an_old_database(tmp_path, monkeypatch):
+    import sqlite3
+    import portal_db
+    monkeypatch.delenv("DATABASE_URL", raising=False)
+    monkeypatch.setenv("PORTAL_DB_PATH", str(tmp_path / "old.db"))
+    portal_db.init_db()
+    portal_db.init_db()                                     # a second start changes nothing and does not fail
+    columns = {row[1] for row in sqlite3.connect(str(tmp_path / "old.db")).execute("PRAGMA table_info(projects)")}
+    assert "auto_start" in columns and "gate_state" in columns

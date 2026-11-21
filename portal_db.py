@@ -490,9 +490,12 @@ def _init_db_locked() -> None:
         print("[db-check] " + describe_db_error(_database_url(), exc), flush=True)
         raise
     try:
+        # Each statement commits on its own, so setup never holds a lock on one table while it waits for another.
+        # Holding several at once is what deadlocked against the running worker's normal queries.
         for statement in SCHEMA.split(";"):
             if statement.strip():
                 _execute(conn, statement)
+                conn.commit()
         # Safe, repeatable migrations for databases created by older versions.
         additions = [
             ("users", "name", "TEXT NOT NULL DEFAULT ''"),
@@ -555,14 +558,16 @@ def _init_db_locked() -> None:
             # v4: the owner decides which cases the agent works on
             ("projects", "auto_start", "INTEGER NOT NULL DEFAULT 1"),
         ]
+        # ALTER TABLE takes an exclusive lock even when the column already exists, so only missing columns are altered.
+        existing = _existing_columns(conn)
         for table, column, ddl in additions:
+            if (table, column) in existing:
+                continue
             if isinstance(conn, sqlite3.Connection):
-                columns = {row[1] for row in conn.execute(f"PRAGMA table_info({table})").fetchall()}
-                if column not in columns:
-                    conn.execute(f"ALTER TABLE {table} ADD COLUMN {column} {ddl}")
+                conn.execute(f"ALTER TABLE {table} ADD COLUMN {column} {ddl}")
             else:
                 _execute(conn, f"ALTER TABLE {table} ADD COLUMN IF NOT EXISTS {column} {ddl}")
-        conn.commit()
+            conn.commit()
         try:
             from fixengine import store as _fx_store  # auto-fix engine tables (ledger, quotas, router log)
             _fx_store.ensure_schema(conn)
@@ -578,6 +583,17 @@ def _init_db_locked() -> None:
         _ensure_one_open_incident_index(conn)
     finally:
         conn.close()
+
+
+def _existing_columns(conn) -> set[tuple[str, str]]:
+    """(table, column) pairs already in the database. Reading the catalog takes no lock on the tables themselves."""
+    if isinstance(conn, sqlite3.Connection):
+        tables = [row[0] for row in conn.execute("SELECT name FROM sqlite_master WHERE type='table'").fetchall()]
+        return {(table, row[1]) for table in tables for row in conn.execute(f"PRAGMA table_info({table})").fetchall()}
+    rows = _execute(conn, "SELECT table_name, column_name FROM information_schema.columns "
+                          "WHERE table_schema = current_schema()").fetchall()
+    conn.commit()
+    return {(row["table_name"], row["column_name"]) for row in rows}
 
 
 OPEN_SQL = "status NOT IN ('resolved','reverted','merged')"
@@ -600,7 +616,9 @@ def _ensure_one_open_incident_index(conn) -> None:
                          (keep, "Merged into the newer incident with the same error", r["id"]))
                 _execute(conn, "UPDATE incident_jobs SET status='done',locked_until=NULL WHERE incident_id=?", (r["id"],))
             _execute(conn, "UPDATE incidents SET merged_count=merged_count+? WHERE id=?", (len(rows) - 1, keep))
+        conn.commit()                   # release the merge's row locks before the index statements lock the table
         _execute(conn, f"CREATE UNIQUE INDEX IF NOT EXISTS idx_incidents_one_open ON incidents(project_id, signature) WHERE {OPEN_SQL}")
+        conn.commit()
         _execute(conn, "CREATE INDEX IF NOT EXISTS idx_incidents_case ON incidents(project_id, case_id)")
         conn.commit()
     except Exception:
