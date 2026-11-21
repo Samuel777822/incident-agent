@@ -60,7 +60,7 @@ SCHEMA = [
 def ensure_schema(conn) -> None:
     for statement in SCHEMA:
         _execute(conn, statement)
-    conn.commit()
+        conn.commit()                   # one table lock at a time, so setup cannot deadlock with the running worker
 
 
 def _now_dt() -> datetime:
