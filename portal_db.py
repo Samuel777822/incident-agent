@@ -7,12 +7,14 @@ hosted deployments. Set DATABASE_URL to a PostgreSQL URL in production.
 from __future__ import annotations
 
 import hashlib
+import hmac
 import json
 import os
+import re
+import secrets
 import sqlite3
 import uuid
 from datetime import datetime, timedelta, timezone
-import re
 
 import plans
 
@@ -255,6 +257,44 @@ CREATE TABLE IF NOT EXISTS support_messages (
 );
 CREATE INDEX IF NOT EXISTS idx_support_messages_time ON support_messages(created_at DESC);
 CREATE INDEX IF NOT EXISTS idx_support_messages_status ON support_messages(status, created_at DESC);
+
+CREATE TABLE IF NOT EXISTS ticket_security_settings (
+  key TEXT PRIMARY KEY,
+  value TEXT NOT NULL,
+  updated_at TEXT NOT NULL,
+  updated_by TEXT NOT NULL DEFAULT ''
+);
+
+CREATE TABLE IF NOT EXISTS ticket_email_otps (
+  id TEXT PRIMARY KEY,
+  email TEXT NOT NULL,
+  otp_hash TEXT NOT NULL,
+  attempts INTEGER NOT NULL DEFAULT 0,
+  expires_at TEXT NOT NULL,
+  used_at TEXT NOT NULL DEFAULT '',
+  ip_address TEXT NOT NULL DEFAULT '',
+  created_at TEXT NOT NULL
+);
+CREATE INDEX IF NOT EXISTS idx_ticket_otps_email ON ticket_email_otps(email, expires_at);
+
+CREATE TABLE IF NOT EXISTS ticket_rate_limits (
+  id TEXT PRIMARY KEY,
+  key_type TEXT NOT NULL,
+  key_value TEXT NOT NULL,
+  action TEXT NOT NULL,
+  created_at TEXT NOT NULL
+);
+CREATE INDEX IF NOT EXISTS idx_ticket_rate_limits_key ON ticket_rate_limits(key_type, key_value, action, created_at);
+
+CREATE TABLE IF NOT EXISTS ticket_security_events (
+  id TEXT PRIMARY KEY,
+  event_type TEXT NOT NULL,
+  ip_address TEXT NOT NULL DEFAULT '',
+  email TEXT NOT NULL DEFAULT '',
+  details TEXT NOT NULL DEFAULT '',
+  created_at TEXT NOT NULL
+);
+CREATE INDEX IF NOT EXISTS idx_ticket_security_events_time ON ticket_security_events(created_at DESC);
 CREATE TABLE IF NOT EXISTS reviews (
   id TEXT PRIMARY KEY,
   user_id TEXT NOT NULL,
@@ -557,6 +597,8 @@ def _init_db_locked() -> None:
             ("incidents", "live_result", "TEXT NOT NULL DEFAULT ''"),
             # v4: the owner decides which cases the agent works on
             ("projects", "auto_start", "INTEGER NOT NULL DEFAULT 1"),
+            # Support ticketing security: spam tracking
+            ("support_messages", "is_spam", "INTEGER NOT NULL DEFAULT 0"),
         ]
         # ALTER TABLE takes an exclusive lock even when the column already exists, so only missing columns are altered.
         existing = _existing_columns(conn)
@@ -2072,7 +2114,332 @@ def update_conversation_visitor_details(conversation_id: str, name: str, email: 
         conn.close()
 
 
-def create_support_ticket(name: str, email: str, subject: str, message: str, assigned_to: str = "") -> dict:
+def is_support_tickets_enabled() -> bool:
+    """Emergency server-side kill switch takes absolute precedence over admin dashboard settings.
+    If SUPPORT_TICKETS_ENABLED is explicitly set to false/0/no/off/disabled in the environment,
+    no public tickets can be submitted under any circumstance.
+    If SUPPORT_TICKETS_ENABLED is true, public_tickets_enabled database setting is checked.
+    Defaults to False during lockdown."""
+    env_val = os.getenv("SUPPORT_TICKETS_ENABLED")
+    if env_val is not None:
+        if env_val.strip().lower() in ("0", "false", "no", "off", "disabled"):
+            return False
+        if env_val.strip().lower() in ("1", "true", "yes", "on"):
+            return get_ticket_security_setting("public_tickets_enabled", "false").lower() in ("1", "true", "yes", "on")
+    return get_ticket_security_setting("public_tickets_enabled", "false").lower() in ("1", "true", "yes", "on")
+
+
+def get_ticket_security_setting(key: str, default: str = "") -> str:
+    conn = get_connection()
+    try:
+        row = _execute(conn, "SELECT value FROM ticket_security_settings WHERE key = ?", (key,)).fetchone()
+        return str(row["value"]) if row else default
+    except Exception:
+        return default
+    finally:
+        conn.close()
+
+
+def set_ticket_security_setting(key: str, value: str, actor: str = "") -> None:
+    conn = get_connection()
+    try:
+        now = _now()
+        _execute(conn, """INSERT INTO ticket_security_settings(key, value, updated_at, updated_by)
+                       VALUES(?, ?, ?, ?)
+                       ON CONFLICT(key) DO UPDATE SET value = excluded.value, updated_at = excluded.updated_at, updated_by = excluded.updated_by""",
+                 (key, str(value), now, actor or "System"))
+        conn.commit()
+        record_ticket_security_event("settings_changed", "", "", f"Setting '{key}' changed to '{value}' by {actor or 'System'}")
+    finally:
+        conn.close()
+
+
+def record_ticket_security_event(event_type: str, ip: str = "", email: str = "", details: str = "") -> None:
+    conn = get_connection()
+    try:
+        _execute(conn, """INSERT INTO ticket_security_events(id, event_type, ip_address, email, details, created_at)
+                       VALUES(?, ?, ?, ?, ?, ?)""",
+                 (_id(), event_type, ip or "", email or "", details or "", _now()))
+        conn.commit()
+    except Exception as e:
+        pass
+    finally:
+        conn.close()
+
+
+def get_ticket_security_stats() -> dict:
+    conn = get_connection()
+    try:
+        # Total blocked count
+        blocked_row = _execute(conn, "SELECT COUNT(*) as n FROM ticket_security_events WHERE event_type LIKE 'blocked_%'").fetchone()
+        blocked_count = int(blocked_row["n"] if blocked_row else 0)
+
+        # OTP issued count
+        otp_row = _execute(conn, "SELECT COUNT(*) as n FROM ticket_email_otps").fetchone()
+        otp_count = int(otp_row["n"] if otp_row else 0)
+
+        # Spam count
+        spam_row = _execute(conn, "SELECT COUNT(*) as n FROM support_messages WHERE status = 'spam' OR is_spam = 1").fetchone()
+        spam_count = int(spam_row["n"] if spam_row else 0)
+
+        # Recent blocked events (last 20)
+        recent_rows = _execute(conn, """SELECT * FROM ticket_security_events 
+                                       WHERE event_type LIKE 'blocked_%' OR event_type = 'settings_changed'
+                                       ORDER BY created_at DESC LIMIT 20""").fetchall()
+        recent_blocked = [dict(r) for r in recent_rows]
+
+        # Suspicious IPs (top 5 with most blocked events)
+        ip_rows = _execute(conn, """SELECT ip_address, COUNT(*) as cnt 
+                                   FROM ticket_security_events 
+                                   WHERE ip_address != '' AND ip_address != 'unknown' AND event_type LIKE 'blocked_%'
+                                   GROUP BY ip_address ORDER BY cnt DESC LIMIT 5""").fetchall()
+        suspicious_ips = [dict(r) for r in ip_rows]
+
+        return {
+            "blocked_count": blocked_count,
+            "otp_count": otp_count,
+            "spam_count": spam_count,
+            "recent_blocked": recent_blocked,
+            "suspicious_ips": suspicious_ips,
+        }
+    except Exception:
+        return {"blocked_count": 0, "otp_count": 0, "spam_count": 0, "recent_blocked": [], "suspicious_ips": []}
+    finally:
+        conn.close()
+
+
+def check_rate_limit(key_type: str, key_value: str, action: str, max_count: int, window_seconds: int) -> bool:
+    """Persistent rate limiting using ticket_rate_limits table.
+    Returns True if allowed (and logs the hit), False if limit exceeded."""
+    if get_ticket_security_setting("rate_limiting_enabled", "true").lower() in ("0", "false", "no", "off"):
+        return True
+    conn = get_connection()
+    try:
+        now_dt = datetime.now(timezone.utc)
+        cutoff = (now_dt - timedelta(seconds=window_seconds)).isoformat(timespec="seconds")
+        now_str = now_dt.isoformat(timespec="seconds")
+        _execute(conn, "DELETE FROM ticket_rate_limits WHERE key_type = ? AND key_value = ? AND action = ? AND created_at < ?",
+                 (key_type, key_value, action, cutoff))
+        row = _execute(conn, """SELECT COUNT(*) as cnt FROM ticket_rate_limits 
+                                WHERE key_type = ? AND key_value = ? AND action = ? AND created_at >= ?""",
+                       (key_type, key_value, action, cutoff)).fetchone()
+        cnt = int(row["cnt"] if row else 0)
+        if cnt >= max_count:
+            return False
+        _execute(conn, "INSERT INTO ticket_rate_limits(id, key_type, key_value, action, created_at) VALUES (?, ?, ?, ?, ?)",
+                 (_id(), key_type, key_value, action, now_str))
+        conn.commit()
+        return True
+    finally:
+        conn.close()
+
+
+def is_duplicate_ticket(email: str, message: str, window_seconds: int = 600) -> bool:
+    """Checks if identical message from the same email was submitted recently."""
+    email_clean = email.strip().lower()
+    msg_clean = message.strip()
+    if not msg_clean:
+        return False
+    conn = get_connection()
+    try:
+        cutoff = (datetime.now(timezone.utc) - timedelta(seconds=window_seconds)).isoformat(timespec="seconds")
+        row = _execute(conn, """SELECT id FROM support_messages 
+                                WHERE email = ? AND message = ? AND created_at >= ? LIMIT 1""",
+                       (email_clean, msg_clean, cutoff)).fetchone()
+        return bool(row)
+    finally:
+        conn.close()
+
+
+def create_ticket_otp(email: str, ip: str = "") -> tuple[str, bool, str]:
+    """Generates a 6-digit OTP, stores hashed value in ticket_email_otps with 5-minute expiry,
+    and invalidates previous unused OTPs for this email.
+    Enforces rate limit: max 3 requests per email per 15 min, max 5 per IP per hour.
+    Returns (raw_otp, success, error_message).
+    RAW OTP MUST NEVER BE RETURNED TO CLIENT OR LOGGED!"""
+    email_clean = email.strip().lower()
+    if not email_clean or "@" not in email_clean:
+        return "", False, "Invalid email address."
+
+    # Check rate limits
+    if not check_rate_limit("email", email_clean, "otp_request", max_count=3, window_seconds=900):
+        record_ticket_security_event("blocked_rate_limit", ip, email_clean, "OTP rate limit exceeded for email")
+        return "", False, "Too many verification requests for this email. Please wait 15 minutes before trying again."
+    if ip and ip != "unknown" and not check_rate_limit("ip", ip, "otp_request", max_count=5, window_seconds=3600):
+        record_ticket_security_event("blocked_rate_limit", ip, email_clean, "OTP rate limit exceeded for IP")
+        return "", False, "Too many verification requests from this network. Please wait an hour before trying again."
+
+    conn = get_connection()
+    try:
+        now = _now()
+        # Invalidate previous unexpired OTPs for this email
+        _execute(conn, "UPDATE ticket_email_otps SET used_at = ? WHERE email = ? AND used_at = ''", (now, email_clean))
+
+        raw_otp = f"{secrets.randbelow(900000) + 100000}"
+        otp_hash = hmac.new(b"ad_ticket_otp_salt_v1", raw_otp.encode("utf-8"), hashlib.sha256).hexdigest()
+        expires_at = (datetime.now(timezone.utc) + timedelta(minutes=5)).isoformat(timespec="seconds")
+        otp_id = _id()
+        _execute(conn, """INSERT INTO ticket_email_otps(id, email, otp_hash, attempts, expires_at, used_at, ip_address, created_at)
+                       VALUES (?, ?, ?, 0, ?, '', ?, ?)""",
+                 (otp_id, email_clean, otp_hash, expires_at, ip, now))
+        conn.commit()
+        record_ticket_security_event("otp_issued", ip, email_clean, f"OTP issued (id: {otp_id[:8]})")
+        return raw_otp, True, ""
+    finally:
+        conn.close()
+
+
+def verify_ticket_otp(email: str, submitted_otp: str, ip: str = "") -> tuple[bool, str]:
+    """Validates 6-digit OTP for email. Single-use, max 5 attempts, 5-minute expiry.
+    Returns (is_valid, error_message)."""
+    email_clean = email.strip().lower()
+    submitted_code = (submitted_otp or "").strip()
+    if not submitted_code or len(submitted_code) != 6 or not submitted_code.isdigit():
+        return False, "Please enter a valid 6-digit verification code."
+
+    conn = get_connection()
+    try:
+        now = _now()
+        row = _execute(conn, """SELECT * FROM ticket_email_otps 
+                                WHERE email = ? AND used_at = '' 
+                                ORDER BY created_at DESC LIMIT 1""", (email_clean,)).fetchone()
+        if not row:
+            record_ticket_security_event("blocked_otp", ip, email_clean, "No active OTP found or code already used")
+            return False, "No active verification code found for this email. Please request a new code."
+
+        d = dict(row)
+        attempts = int(d.get("attempts", 0))
+        if attempts >= 5:
+            _execute(conn, "UPDATE ticket_email_otps SET used_at = ? WHERE id = ?", (now, d["id"]))
+            conn.commit()
+            record_ticket_security_event("blocked_otp", ip, email_clean, "Max OTP attempts exceeded")
+            return False, "Too many incorrect attempts. This code has been invalidated. Please request a new code."
+
+        # Check expiry
+        expires_at = str(d.get("expires_at", ""))
+        if expires_at and expires_at < now:
+            _execute(conn, "UPDATE ticket_email_otps SET used_at = ? WHERE id = ?", (now, d["id"]))
+            conn.commit()
+            record_ticket_security_event("blocked_otp", ip, email_clean, "OTP expired")
+            return False, "Verification code has expired. Codes are valid for 5 minutes. Please request a new code."
+
+        # Verify hash
+        expected_hash = str(d.get("otp_hash", ""))
+        submitted_hash = hmac.new(b"ad_ticket_otp_salt_v1", submitted_code.encode("utf-8"), hashlib.sha256).hexdigest()
+
+        if not hmac.compare_digest(submitted_hash, expected_hash):
+            _execute(conn, "UPDATE ticket_email_otps SET attempts = attempts + 1 WHERE id = ?", (d["id"],))
+            conn.commit()
+            record_ticket_security_event("blocked_otp", ip, email_clean, f"Incorrect OTP attempt ({attempts + 1}/5)")
+            remaining = 5 - (attempts + 1)
+            return False, f"Incorrect verification code. {remaining} attempt{'s' if remaining != 1 else ''} remaining."
+
+        # Success: mark OTP as used
+        _execute(conn, "UPDATE ticket_email_otps SET used_at = ? WHERE id = ?", (now, d["id"]))
+        conn.commit()
+        record_ticket_security_event("otp_verified", ip, email_clean, f"OTP successfully verified (id: {d['id'][:8]})")
+        return True, ""
+    finally:
+        conn.close()
+
+
+def admin_mark_ticket_spam(ticket_id: str, actor: str = "") -> dict | None:
+    """Marks a ticket as automated spam without sending any customer notification email."""
+    conn = get_connection()
+    try:
+        row = _execute(conn, "SELECT * FROM support_messages WHERE id = ? OR ticket_ref = ?", (ticket_id, ticket_id)).fetchone()
+        if not row:
+            return None
+        cur = dict(row)
+        now = _now()
+        _execute(conn, """UPDATE support_messages 
+                       SET status = 'spam', is_spam = 1, resolution_note = 'Marked as automated spam',
+                           closed_at = ?, closed_by = ?, updated_at = ?
+                       WHERE id = ?""",
+                 (now, actor or "Admin", now, cur["id"]))
+        conn.commit()
+        record_ticket_security_event("marked_spam", "", cur["email"], f"Ticket {cur.get('ticket_ref')} marked as spam by {actor or 'Admin'}")
+        updated = _execute(conn, "SELECT * FROM support_messages WHERE id = ?", (cur["id"],)).fetchone()
+        return dict(updated)
+    finally:
+        conn.close()
+
+
+def admin_bulk_mark_spam(ticket_ids: list[str], actor: str = "") -> int:
+    """Bulk marks multiple tickets as spam without sending any customer notification emails."""
+    if not ticket_ids:
+        return 0
+    conn = get_connection()
+    try:
+        now = _now()
+        count = 0
+        for tid in ticket_ids:
+            tid_clean = tid.strip()
+            if not tid_clean:
+                continue
+            res = _execute(conn, """UPDATE support_messages 
+                             SET status = 'spam', is_spam = 1, resolution_note = 'Marked as automated spam',
+                                 closed_at = ?, closed_by = ?, updated_at = ?
+                             WHERE (id = ? OR ticket_ref = ?) AND status != 'spam'""",
+                           (now, actor or "Admin", now, tid_clean, tid_clean))
+            count += (res.rowcount if hasattr(res, "rowcount") and res.rowcount is not None else 1)
+        conn.commit()
+        if count > 0:
+            record_ticket_security_event("bulk_marked_spam", "", "", f"{count} tickets marked as spam by {actor or 'Admin'}")
+        return count
+    finally:
+        conn.close()
+
+
+def admin_find_suspicious_tickets(limit: int = 200) -> list[dict]:
+    """Finds open/for_review tickets that are likely spam (e.g. repeated messages, spam keywords, bursts)."""
+    conn = get_connection()
+    try:
+        rows = _execute(conn, """
+            SELECT * FROM support_messages
+            WHERE status IN ('open', 'for_review')
+            ORDER BY created_at DESC LIMIT ?
+        """, (limit,)).fetchall()
+
+        all_tickets = [dict(r) for r in rows]
+        msg_counts = {}
+        email_counts = {}
+        for t in all_tickets:
+            m = str(t.get("message", "")).strip().lower()
+            e = str(t.get("email", "")).strip().lower()
+            msg_counts[m] = msg_counts.get(m, 0) + 1
+            email_counts[e] = email_counts.get(e, 0) + 1
+
+        suspicious = []
+        for t in all_tickets:
+            m = str(t.get("message", "")).strip().lower()
+            e = str(t.get("email", "")).strip().lower()
+            reasons = []
+            if msg_counts.get(m, 0) > 1:
+                reasons.append(f"Identical message submitted {msg_counts[m]} times")
+            if email_counts.get(e, 0) > 2:
+                reasons.append(f"High ticket volume from this email ({email_counts[e]} tickets)")
+
+            spam_triggers = ["viagra", "casino", "seo service", "backlink", "crypto investment", "telegram:", "whatsapp:", "http://", "https://"]
+            # Exclude legitimate custom jobs that contain wa.me from spam trigger check
+            if not str(t.get("subject", "")).startswith("Custom job:"):
+                if any(trig in m for trig in spam_triggers):
+                    reasons.append("Contains promotional or link patterns")
+
+            if reasons:
+                t["suspicion_reasons"] = reasons
+                if not t.get("ticket_ref"):
+                    t["ticket_ref"] = f"TICK-{t['id'][:8].upper()}"
+                suspicious.append(t)
+        return suspicious
+    finally:
+        conn.close()
+
+
+def create_support_ticket(name: str, email: str, subject: str, message: str, assigned_to: str = "", bypass_killswitch: bool = False) -> dict:
+    if not bypass_killswitch and not is_support_tickets_enabled():
+        record_ticket_security_event("blocked_killswitch", "", email.strip().lower(), "create_support_ticket blocked by emergency kill switch")
+        raise PermissionError("Support ticket submissions are temporarily unavailable due to scheduled security maintenance.")
     conn = get_connection()
     try:
         msg_id = _id()
@@ -2196,7 +2563,7 @@ def admin_ticket_stats() -> dict:
     conn = get_connection()
     try:
         rows = _execute(conn, "SELECT status, COUNT(*) as cnt FROM support_messages GROUP BY status").fetchall()
-        counts = {"open": 0, "for_review": 0, "closed": 0, "total": 0}
+        counts = {"open": 0, "for_review": 0, "closed": 0, "spam": 0, "total": 0}
         for r in rows:
             st = str(r["status"]).lower()
             cnt = int(r["cnt"])

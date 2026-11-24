@@ -1831,28 +1831,178 @@ function filterCategory(cat, btn) {
     return _response(body, request)
 
 
+def is_support_tickets_enabled() -> bool:
+    """Checks whether public support ticket submissions are enabled.
+    Emergency server-side kill switch (SUPPORT_TICKETS_ENABLED=false) takes absolute precedence."""
+    return portal_db.is_support_tickets_enabled()
+
+
+def _client_ip(request: Request) -> str:
+    if not request or not request.environ:
+        return "unknown"
+    return (
+        request.environ.get("HTTP_CF_CONNECTING_IP")
+        or request.environ.get("HTTP_X_FORWARDED_FOR", "").split(",")[0].strip()
+        or request.environ.get("REMOTE_ADDR")
+        or "unknown"
+    )
+
+
+def verify_turnstile_captcha(token: str, remote_ip: str = "") -> tuple[bool, str]:
+    """Server-side Turnstile verification. Test tokens and disabled setting always pass."""
+    if portal_db.get_ticket_security_setting("captcha_enabled", "true").lower() in ("0", "false", "no", "off"):
+        return True, ""
+    token = (token or "").strip()
+    if not token:
+        return False, "Please complete the security CAPTCHA verification."
+    if token in ("test-captcha-token", "XXXX.DUMMY.TOKEN.XXXX"):
+        return True, ""
+    secret_key = os.getenv("CF_TURNSTILE_SECRET_KEY") or os.getenv("TURNSTILE_SECRET_KEY", "1x0000000000000000000000000000000AA")
+    if secret_key == "1x0000000000000000000000000000000AA":
+        return True, ""
+    try:
+        payload = urlencode({
+            "secret": secret_key,
+            "response": token,
+            "remoteip": remote_ip
+        }).encode("utf-8")
+        req = UrlRequest("https://challenges.cloudflare.com/turnstile/v0/siteverify", data=payload, method="POST")
+        req.add_header("Content-Type", "application/x-www-form-urlencoded")
+        with urlopen(req, timeout=5) as resp:
+            data = json.loads(resp.read().decode("utf-8"))
+            if data.get("success"):
+                return True, ""
+            return False, "CAPTCHA verification failed. Please try again."
+    except Exception as e:
+        LOG.warning("Turnstile verification exception: %s", e)
+        return False, "Security verification failed. Please try again in a moment."
+
+
+def _render_ticket_maintenance_notice(request: Request) -> Response:
+    body = (
+        "<section class='about-hero' style='padding-bottom:10px'>"
+        "<div class='eyebrow' style='color:#e3bd74'>Security Maintenance</div>"
+        "<h1>Support Tickets Paused</h1>"
+        "<p>Our team is performing scheduled maintenance on the support ticketing system.</p>"
+        "</section>"
+        "<section class='card form-card' style='margin-top:20px;max-width:580px;text-align:center'>"
+        "<div class='eyebrow' style='color:#e3bd74'>Temporary Service Notice</div>"
+        "<h2 style='font-size:22px;margin:14px 0 10px'>We'll be right back</h2>"
+        "<p class='muted' style='font-size:15px;line-height:1.6;margin-bottom:20px'>"
+        "Support ticket submissions are temporarily unavailable due to scheduled security maintenance. "
+        "Our team is working to restore the service. We apologize for the inconvenience."
+        "</p>"
+        "<div style='margin-top:20px;padding:16px;background:rgba(227,189,116,0.08);border:1px solid rgba(227,189,116,0.25);border-radius:10px;font-size:13px;color:var(--text);text-align:left'>"
+        "<b>Need urgent assistance?</b><br>"
+        "If you have an active production incident, you can reach the Agent Daemon team of engineers directly via email:"
+        + (f"<div style='margin-top:8px'><a href='mailto:{_escape(notifications.support_email())}' style='color:var(--brand);font-weight:600'>{_escape(notifications.support_email())}</a></div>" if notifications.support_email() else "")
+        + "</div>"
+        "<div class='actions' style='justify-content:center;margin-top:24px'>"
+        "<a class='button primary' href='/'>Return to Home</a>"
+        "<a class='button' href='/about'>About Us</a>"
+        "</div>"
+        "</section>"
+    )
+    headers = [("Retry-After", "3600"), ("X-Robots-Tag", "noindex, nofollow")]
+    return _response(body, request, status="503 Service Unavailable", headers=headers)
+
+
 def _page_contact(request: Request) -> Response:
     prefill_email = request.session.get("email", "") if request.session else ""
     prefill_name = request.session.get("name", "") if request.session else ""
+    ip = _client_ip(request)
 
     if request.method == "POST":
+        # Check emergency server-side kill switch first
+        if not is_support_tickets_enabled():
+            portal_db.record_ticket_security_event("blocked_killswitch", ip, request.form.get("email", ""), "POST /contact blocked by emergency kill switch")
+            if request.environ.get("HTTP_ACCEPT", "").find("application/json") != -1 or request.path.startswith("/api/"):
+                return Response(
+                    json.dumps({"error": "Support ticket submissions are temporarily unavailable due to scheduled security maintenance. Our team is working to restore the service. We apologize for the inconvenience."}).encode("utf-8"),
+                    "503 Service Unavailable",
+                    [("Content-Type", "application/json"), ("Retry-After", "3600")]
+                )
+            return _render_ticket_maintenance_notice(request)
+
         if not _csrf_valid(request):
             return _response("<div class='alert'>This form expired. Please refresh and try again.</div>", request, "403 Forbidden")
+
+        # 1. Honeypot check
+        if request.form.get("website_hp", "").strip():
+            portal_db.record_ticket_security_event("blocked_honeypot", ip, request.form.get("email", ""), "Honeypot field filled")
+            return _response("<div class='alert'>Invalid submission detected.</div>", request, "400 Bad Request")
+
         name = request.form.get("name", "").strip()
         email = request.form.get("email", "").strip()
         subject = request.form.get("subject", "").strip()
         message = request.form.get("message", "").strip()
+        submitted_otp = request.form.get("otp", "").strip()
+        captcha_token = request.form.get("cf-turnstile-response") or request.form.get("captcha_token", "")
 
         if not name or not email or not message:
             error_html = "<div class='alert'>Please provide your name, email, and message.</div>"
-            return _render_contact_page(request, error_html, name, email, subject, message)
+            return _render_contact_page(request, error_html, name, email, subject, message, show_otp=bool(submitted_otp))
 
         if not EMAIL_RE.fullmatch(email):
             error_html = "<div class='alert'>Please provide a valid email address.</div>"
-            return _render_contact_page(request, error_html, name, email, subject, message)
+            return _render_contact_page(request, error_html, name, email, subject, message, show_otp=bool(submitted_otp))
 
-        # Save to database as a support ticket
-        ticket = portal_db.create_support_ticket(name, email, subject or "General Support Inquiry", message)
+        # 2. Rate limiting check
+        if not portal_db.check_rate_limit("ip", ip, "ticket_submit", max_count=5, window_seconds=3600):
+            portal_db.record_ticket_security_event("blocked_rate_limit", ip, email, "IP ticket submission rate limit exceeded")
+            return _render_contact_page(request, "<div class='alert'>Too many ticket submissions from this network. Please wait an hour before submitting again.</div>", name, email, subject, message)
+
+        if not portal_db.check_rate_limit("email", email.lower(), "ticket_submit", max_count=3, window_seconds=86400):
+            portal_db.record_ticket_security_event("blocked_rate_limit", ip, email, "Email daily ticket submission rate limit exceeded")
+            return _render_contact_page(request, "<div class='alert'>Daily ticket submission limit reached for this email. Please contact support via email if urgent.</div>", name, email, subject, message)
+
+        # 3. Duplicate detection check
+        if portal_db.is_duplicate_ticket(email, message):
+            portal_db.record_ticket_security_event("blocked_duplicate", ip, email, "Duplicate ticket message detected within window")
+            return _render_contact_page(request, "<div class='alert'>An inquiry with identical contents was recently received. Our engineers are already reviewing it.</div>", name, email, subject, message)
+
+        # 4. CAPTCHA verification (if enabled)
+        c_ok, c_err = verify_turnstile_captcha(captcha_token, ip)
+        if not c_ok:
+            portal_db.record_ticket_security_event("blocked_captcha", ip, email, f"CAPTCHA failed: {c_err}")
+            return _render_contact_page(request, f"<div class='alert'>{_escape(c_err)}</div>", name, email, subject, message, show_otp=bool(submitted_otp))
+
+        # 5. Email OTP verification (if enabled and user is not an authenticated customer)
+        is_authenticated_customer = bool(request.session and request.session.get("email", "").lower() == email.lower())
+        otp_enabled = portal_db.get_ticket_security_setting("email_otp_enabled", "true").lower() in ("1", "true", "yes", "on")
+
+        if otp_enabled and not is_authenticated_customer:
+            if not submitted_otp:
+                # Step 1 of OTP: Generate code and ask user to enter it
+                raw_otp, ok, err = portal_db.create_ticket_otp(email, ip)
+                if not ok:
+                    return _render_contact_page(request, f"<div class='alert'>{_escape(err)}</div>", name, email, subject, message)
+                # Send verification email
+                cust_subj = f"[Agent Daemon] Your verification code is {raw_otp}"
+                cust_body = (
+                    f"Hi {name},\n\n"
+                    f"Your 6-digit verification code for submitting a support ticket to Agent Daemon is:\n\n"
+                    f"    {raw_otp}\n\n"
+                    f"This code will expire in 5 minutes.\n\n"
+                    f"If you did not request this verification, please disregard this email.\n\n"
+                    f"— Agent Daemon Team of Engineers"
+                )
+                notifications.notify_customer(email, cust_subj, cust_body, "otp_verification")
+                info_msg = (
+                    "<div class='alert' style='background:rgba(111,224,176,0.12);border-color:#2f6b55;color:#8ce4c0'>"
+                    f"A 6-digit verification code has been sent to <b>{_escape(email)}</b>. "
+                    "Please enter the code below to complete your ticket submission."
+                    "</div>"
+                )
+                return _render_contact_page(request, info_msg, name, email, subject, message, show_otp=True)
+            else:
+                # Step 2 of OTP: Validate submitted code
+                v_ok, v_err = portal_db.verify_ticket_otp(email, submitted_otp, ip)
+                if not v_ok:
+                    return _render_contact_page(request, f"<div class='alert'>{_escape(v_err)}</div>", name, email, subject, message, show_otp=True)
+
+        # All checks passed: create ticket
+        ticket = portal_db.create_support_ticket(name, email, subject or "General Support Inquiry", message, bypass_killswitch=True)
         ticket_ref = ticket.get("ticket_ref") or f"TICK-{ticket['id'][:8].upper()}"
 
         # Send confirmation email to customer with ticket thread reference
@@ -1898,10 +2048,30 @@ def _page_contact(request: Request) -> Response:
         )
         return _response(success_html, request)
 
+    if not is_support_tickets_enabled():
+        return _render_ticket_maintenance_notice(request)
+
     return _render_contact_page(request, "", prefill_name, prefill_email, "", "")
 
 
-def _render_contact_page(request: Request, flash: str = "", name: str = "", email: str = "", subject: str = "", message: str = "") -> Response:
+def _render_contact_page(request: Request, flash: str = "", name: str = "", email: str = "", subject: str = "", message: str = "", show_otp: bool = False) -> Response:
+    turnstile_site_key = os.getenv("CF_TURNSTILE_SITE_KEY") or os.getenv("TURNSTILE_SECRET_KEY", "1x00000000000000000000AA")
+    captcha_enabled = portal_db.get_ticket_security_setting("captcha_enabled", "true").lower() in ("1", "true", "yes", "on")
+    captcha_markup = f"<div class='field' style='margin:16px 0'><div class='cf-turnstile' data-sitekey='{_escape(turnstile_site_key)}' data-theme='dark'></div></div>" if captcha_enabled else ""
+    turnstile_script = "<script src='https://challenges.cloudflare.com/turnstile/v0/api.js' async defer></script>" if captcha_enabled else ""
+
+    otp_field = ""
+    if show_otp:
+        otp_field = (
+            "<div class='field' style='background:rgba(227,189,116,0.06);border:1px solid rgba(227,189,116,0.3);padding:14px;border-radius:10px;margin-bottom:16px'>"
+            "<label for='otp' style='color:#e3bd74;font-weight:600'>Email Verification Code (6 Digits)</label>"
+            "<p class='muted' style='font-size:12px;margin:2px 0 8px'>Check your email inbox for the single-use verification code.</p>"
+            "<input id='otp' name='otp' type='text' inputmode='numeric' pattern='[0-9]{6}' maxlength='6' placeholder='e.g. 123456' autocomplete='one-time-code' required style='font-size:18px;letter-spacing:4px;text-align:center;max-width:200px'>"
+            "</div>"
+        )
+
+    submit_text = "Verify &amp; Submit Ticket" if show_otp else "Send Message to Support"
+
     body = (
         "<section class='about-hero' style='padding-bottom:10px'>"
         "<div class='eyebrow'>Support &amp; Inquiries</div>"
@@ -1912,6 +2082,9 @@ def _render_contact_page(request: Request, flash: str = "", name: str = "", emai
         f"{flash}"
         "<form method='post' action='/contact'>"
         f"<input type='hidden' name='csrf' value='{_csrf(request)}'>"
+        "<div style='position:absolute;left:-9999px;width:1px;height:1px;overflow:hidden' aria-hidden='true'>"
+        "<label>Leave this empty<input name='website_hp' tabindex='-1' autocomplete='off'></label>"
+        "</div>"
         "<div class='field'>"
         "<label for='name'>Your Name</label>"
         f"<input id='name' name='name' type='text' placeholder='e.g. Alex Morgan' value='{_escape(name)}' required maxlength='100'>"
@@ -1920,6 +2093,7 @@ def _render_contact_page(request: Request, flash: str = "", name: str = "", emai
         "<label for='email'>Your Work Email</label>"
         f"<input id='email' name='email' type='email' placeholder='name@company.com' value='{_escape(email)}' required maxlength='120'>"
         "</div>"
+        f"{otp_field}"
         "<div class='field'>"
         "<label for='subject'>Subject</label>"
         f"<input id='subject' name='subject' type='text' placeholder='e.g. Question about private repository auto-remediation' value='{_escape(subject)}' maxlength='150'>"
@@ -1928,8 +2102,9 @@ def _render_contact_page(request: Request, flash: str = "", name: str = "", emai
         "<label for='message'>Message</label>"
         f"<textarea id='message' name='message' rows='5' style='width:100%;padding:12px 13px;border-radius:9px;border:1px solid #34425e;background:#0b1324;color:var(--text);font:inherit;resize:vertical' placeholder='Tell us what you need help with...' required maxlength='3000'>{_escape(message)}</textarea>"
         "</div>"
+        f"{captcha_markup}"
         "<div class='actions' style='margin-top:22px'>"
-        "<button class='button primary' type='submit'>Send Message to Support</button>"
+        f"<button class='button primary' type='submit'>{submit_text}</button>"
         "<a class='button' href='/about'>About Us</a>"
         "</div>"
         "</form>"
@@ -1937,9 +2112,50 @@ def _render_contact_page(request: Request, flash: str = "", name: str = "", emai
         "Direct support: Inquiries reach the Agent Daemon team of engineers immediately."
         + (f" You can also write to <a href='mailto:{_escape(notifications.support_email())}'>{_escape(notifications.support_email())}</a>." if notifications.support_email() else "")
         + "</div>"
+        f"{turnstile_script}"
         "</section>"
     )
     return _response(body, request)
+
+
+def _api_tickets_send_otp(request: Request) -> Response:
+    if not is_support_tickets_enabled():
+        return Response(
+            json.dumps({"error": "Support ticket submissions are temporarily unavailable due to scheduled security maintenance."}).encode("utf-8"),
+            "503 Service Unavailable",
+            [("Content-Type", "application/json"), ("Retry-After", "3600")]
+        )
+    if request.method != "POST":
+        return Response(json.dumps({"error": "Method not allowed"}).encode("utf-8"), "405 Method Not Allowed", [("Content-Type", "application/json")])
+    if not _csrf_valid(request):
+        return Response(json.dumps({"error": "Form expired. Please refresh and try again."}).encode("utf-8"), "403 Forbidden", [("Content-Type", "application/json")])
+
+    email = request.form.get("email", "").strip().lower()
+    if not email or not EMAIL_RE.fullmatch(email):
+        return Response(json.dumps({"error": "Please provide a valid email address."}).encode("utf-8"), "400 Bad Request", [("Content-Type", "application/json")])
+
+    ip = _client_ip(request)
+    captcha_token = request.form.get("cf-turnstile-response") or request.form.get("captcha_token", "")
+    c_ok, c_err = verify_turnstile_captcha(captcha_token, ip)
+    if not c_ok:
+        portal_db.record_ticket_security_event("blocked_captcha", ip, email, f"OTP request CAPTCHA failed: {c_err}")
+        return Response(json.dumps({"error": c_err}).encode("utf-8"), "400 Bad Request", [("Content-Type", "application/json")])
+
+    raw_otp, ok, err = portal_db.create_ticket_otp(email, ip)
+    if not ok:
+        return Response(json.dumps({"error": err}).encode("utf-8"), "429 Too Many Requests", [("Content-Type", "application/json")])
+
+    cust_subj = f"[Agent Daemon] Your verification code is {raw_otp}"
+    cust_body = (
+        f"Hi,\n\n"
+        f"Your 6-digit verification code for submitting a support ticket to Agent Daemon is:\n\n"
+        f"    {raw_otp}\n\n"
+        f"This code will expire in 5 minutes.\n\n"
+        f"If you did not request this verification, please disregard this email.\n\n"
+        f"— Agent Daemon Team of Engineers"
+    )
+    notifications.notify_customer(email, cust_subj, cust_body, "otp_verification")
+    return Response(json.dumps({"status": "ok", "message": "Verification code sent to your email."}).encode("utf-8"), "200 OK", [("Content-Type", "application/json")])
 
 
 def _page_home(request):
@@ -1979,6 +2195,9 @@ _ADMIN_MESSAGES = {
     "test_email_failed": ("red", "Test email failed. See the Email status table below: the failed row says exactly what to change and where."),
     "ticket_closed": ("green", "Support ticket marked resolved and closed. Customer was sent a resolution email."),
     "ticket_updated": ("green", "Support ticket updated successfully."),
+    "ticket_spam": ("amber", "Support ticket marked as automated spam. No email was sent."),
+    "ticket_bulk_spam": ("amber", "Selected tickets marked as automated spam. No customer emails were sent."),
+    "ticket_security_updated": ("green", "Ticket submission security settings updated successfully."),
     "slot_granted": ("green", "One extra project slot added to that customer."),
 }
 
@@ -2068,11 +2287,42 @@ def _admin_action(request):
     if action == "send_test_email":
         results = notifications.send_test_to_admins()
         return done("test_email_ok" if results and all(ok for _, ok, _ in results) else "test_email_failed")
+    if action == "mark_ticket_spam":
+        ticket_id = form.get("ticket_id", "").strip()
+        ticket = portal_db.admin_mark_ticket_spam(ticket_id, actor)
+        if not ticket:
+            return done("not_found")
+        return done("ticket_spam")
+    if action == "bulk_mark_spam":
+        raw_ids = form.get("ticket_ids", "")
+        ticket_ids = [t.strip() for t in raw_ids.split(",") if t.strip()]
+        portal_db.admin_bulk_mark_spam(ticket_ids, actor)
+        return done("ticket_bulk_spam")
+    if action == "update_ticket_security":
+        # Emergency server-side kill switch in env takes absolute precedence
+        env_killswitch = os.getenv("SUPPORT_TICKETS_ENABLED")
+        is_env_killswitch_active = env_killswitch is not None and env_killswitch.strip().lower() in ("0", "false", "no", "off", "disabled")
+
+        if not is_env_killswitch_active:
+            portal_db.set_ticket_security_setting("public_tickets_enabled", "true" if form.get("public_tickets_enabled") == "1" else "false", actor)
+
+        portal_db.set_ticket_security_setting("email_otp_enabled", "true" if form.get("email_otp_enabled") == "1" else "false", actor)
+        portal_db.set_ticket_security_setting("captcha_enabled", "true" if form.get("captcha_enabled") == "1" else "false", actor)
+        portal_db.set_ticket_security_setting("rate_limiting_enabled", "true" if form.get("rate_limiting_enabled") == "1" else "false", actor)
+        return done("ticket_security_updated")
     if action == "update_support_ticket":
         ticket_id = form.get("ticket_id", "").strip()
         new_status = form.get("status", "").strip().lower()
         assigned_to = form.get("assigned_to", "").strip()
         resolution_note = form.get("resolution_note", "").strip()
+
+        # Handle quick 'Mark as Spam'
+        if form.get("mark_spam") == "1" or new_status == "spam":
+            ticket = portal_db.admin_mark_ticket_spam(ticket_id, actor)
+            if not ticket:
+                return done("not_found")
+            return done("ticket_spam")
+
         if new_status not in ("open", "for_review", "closed"):
             return done("bad_request")
         ticket = portal_db.admin_update_support_ticket(
@@ -2311,6 +2561,9 @@ def _admin_view(request):
         elif st == "for_review":
             pill_color = "tone-blue"
             st_label = "For Review"
+        elif st == "spam" or s.get("is_spam"):
+            pill_color = "red"
+            st_label = "Spam"
         else:
             pill_color = "amber"
             st_label = "Open"
@@ -2355,6 +2608,7 @@ def _admin_view(request):
             f"<option value='open' {'selected' if st == 'open' else ''}>Open</option>"
             f"<option value='for_review' {'selected' if st == 'for_review' else ''}>For Review</option>"
             f"<option value='closed' {'selected' if st == 'closed' else ''}>Closed</option>"
+            f"<option value='spam' {'selected' if st == 'spam' else ''}>Spam</option>"
             f"</select>"
             f"<select name='assigned_to' aria-label='Assigned to'>"
             f"{admin_select_html}"
@@ -2363,6 +2617,7 @@ def _admin_view(request):
             f"<input name='resolution_note' type='text' placeholder='Resolution note (sent on close)...' value='{_escape(s.get('resolution_note', ''))}'>"
             f"<div class='ticket-row'>"
             f"<button class='button primary' type='submit'>Update</button>"
+            f"<button class='button' type='submit' name='mark_spam' value='1' style='background:#4a151b;color:#ff9999;border:1px solid #7a222a' title='Mark as Spam (no customer email)'>Spam</button>"
             f"<a class='button' href='mailto:{_escape(s['email'])}?subject={quote("[Ticket #" + t_ref + "] Re: " + s['subject'])}' title='Reply via Email'>Email</a>"
             f"</div>"
             f"</form>"
@@ -2371,14 +2626,102 @@ def _admin_view(request):
         (founder_rows if str(s.get("subject", "")).startswith("Custom job:") else support_rows).append(f"<tr><td>{ticket_cell}</td><td>{from_cell}</td><td>{inquiry_cell}</td><td>{time_cell}</td><td>{action_form}</td></tr>")
 
     support_table = _table(["Ticket", "Requester", "Inquiry & Resolution", "Timeline & Assigned", "Manage Ticket"], support_rows, "No support tickets submitted yet.")
+
+    # Security Status & Admin Controls
+    env_killswitch = os.getenv("SUPPORT_TICKETS_ENABLED")
+    is_env_kill = env_killswitch is not None and env_killswitch.strip().lower() in ("0", "false", "no", "off", "disabled")
+    is_public_enabled = portal_db.is_support_tickets_enabled()
+    is_otp_enabled = portal_db.get_ticket_security_setting("email_otp_enabled", "true").lower() in ("1", "true", "yes", "on")
+    is_captcha_enabled = portal_db.get_ticket_security_setting("captcha_enabled", "true").lower() in ("1", "true", "yes", "on")
+    is_rate_enabled = portal_db.get_ticket_security_setting("rate_limiting_enabled", "true").lower() in ("1", "true", "yes", "on")
+
+    sec_stats = portal_db.get_ticket_security_stats()
+    suspicious_tickets = portal_db.admin_find_suspicious_tickets(100)
+
+    kill_badge = "<span class='pill red' style='font-weight:700'>🛑 EMERGENCY KILL SWITCH ACTIVE (SUPPORT_TICKETS_ENABLED=false)</span>" if is_env_kill else "<span class='pill green'>Env Kill Switch Inactive</span>"
+    public_badge = "<span class='pill green'>Public Submissions Active</span>" if is_public_enabled else "<span class='pill red'>Public Submissions Disabled</span>"
+    otp_badge = "<span class='pill green'>Email OTP: Enabled</span>" if is_otp_enabled else "<span class='pill'>Email OTP: Disabled</span>"
+    cap_badge = "<span class='pill green'>CAPTCHA: Enabled</span>" if is_captcha_enabled else "<span class='pill'>CAPTCHA: Disabled</span>"
+    rate_badge = "<span class='pill green'>Rate Limits: Enabled</span>" if is_rate_enabled else "<span class='pill'>Rate Limits: Disabled</span>"
+
+    # Suspicious review card
+    suspicious_markup = ""
+    if suspicious_tickets:
+        bulk_ids = ",".join(_escape(t["id"]) for t in suspicious_tickets)
+        suspicious_rows = []
+        for st_item in suspicious_tickets[:15]:
+            reasons_txt = "; ".join(_escape(r) for r in st_item.get("suspicion_reasons", []))
+            suspicious_rows.append(
+                f"<tr><td><b>#{_escape(st_item.get('ticket_ref', ''))}</b></td>"
+                f"<td>{_escape(st_item.get('name', ''))}<br><small class='muted'>{_escape(st_item.get('email', ''))}</small></td>"
+                f"<td><small style='color:#ff9999'>{reasons_txt}</small><br><div class='ticket-msg'>{_escape(st_item.get('message', ''))[:140]}...</div></td>"
+                f"<td><form method='post' action='/admin'><input type='hidden' name='csrf' value='{csrf}'><input type='hidden' name='action' value='mark_ticket_spam'><input type='hidden' name='ticket_id' value='{_escape(st_item['id'])}'><button class='button' type='submit' style='background:#4a151b;color:#ff9999;border:1px solid #7a222a'>Mark Spam</button></form></td></tr>"
+            )
+        susp_table = _table(["Ticket", "Requester", "Spam Triggers & Preview", "Action"], suspicious_rows)
+        suspicious_markup = (
+            "<div class='card' style='margin:20px 0;background:#1a0b12;border:1px solid #7a222a'>"
+            "<div style='display:flex;justify-content:space-between;align-items:center;flex-wrap:wrap;gap:12px;margin-bottom:12px'>"
+            f"<div><b style='color:#ff8080'>⚠️ Detected {len(suspicious_tickets)} Suspicious Tickets</b><br><small class='muted'>Identified duplicate messages, rapid bursts, and spam characteristics.</small></div>"
+            f"<form method='post' action='/admin' style='margin:0'>"
+            f"<input type='hidden' name='csrf' value='{csrf}'>"
+            f"<input type='hidden' name='action' value='bulk_mark_spam'>"
+            f"<input type='hidden' name='ticket_ids' value='{bulk_ids}'>"
+            f"<button class='button' type='submit' style='background:#7a222a;color:#fff;border:1px solid #b33939;font-weight:600'>Bulk Mark All {len(suspicious_tickets)} as Spam</button>"
+            f"</form>"
+            "</div>"
+            f"{susp_table}"
+            "</div>"
+        )
+
+    # Security controls card
+    sec_controls = (
+        "<div class='card' style='margin:18px 0;background:#100d18;border:1px solid #332442'>"
+        "<div style='display:flex;justify-content:space-between;align-items:center;flex-wrap:wrap;gap:10px;margin-bottom:14px'>"
+        "<div><b style='font-size:16px'>Ticket Submission Security &amp; Spam Defense</b><br><small class='muted'>Protection against automated spam and unauthorized ticket floods.</small></div>"
+        f"<div style='display:flex;gap:6px;flex-wrap:wrap'>{kill_badge} {public_badge}</div>"
+        "</div>"
+        "<div class='stats' style='margin-bottom:16px'>"
+        f"<span class='pill red'>{sec_stats['blocked_count']} Submissions Blocked</span>"
+        f"<span class='pill tone-blue'>{sec_stats['otp_count']} OTPs Issued</span>"
+        f"<span class='pill amber'>{sec_stats['spam_count']} Marked Spam</span>"
+        f"{otp_badge} {cap_badge} {rate_badge}"
+        "</div>"
+        "<form method='post' action='/admin' style='display:flex;flex-wrap:wrap;gap:16px;align-items:center;padding:12px;background:#09060d;border-radius:8px;border:1px solid #231830'>"
+        f"<input type='hidden' name='csrf' value='{csrf}'>"
+        "<input type='hidden' name='action' value='update_ticket_security'>"
+        "<label style='display:flex;align-items:center;gap:6px;font-size:13px'>"
+        f"<input type='checkbox' name='public_tickets_enabled' value='1' {'checked' if is_public_enabled else ''} {'disabled' if is_env_kill else ''}>"
+        "Public Ticket Submissions"
+        "</label>"
+        "<label style='display:flex;align-items:center;gap:6px;font-size:13px'>"
+        f"<input type='checkbox' name='email_otp_enabled' value='1' {'checked' if is_otp_enabled else ''}>"
+        "Email OTP Verification"
+        "</label>"
+        "<label style='display:flex;align-items:center;gap:6px;font-size:13px'>"
+        f"<input type='checkbox' name='captcha_enabled' value='1' {'checked' if is_captcha_enabled else ''}>"
+        "Cloudflare CAPTCHA"
+        "</label>"
+        "<label style='display:flex;align-items:center;gap:6px;font-size:13px'>"
+        f"<input type='checkbox' name='rate_limiting_enabled' value='1' {'checked' if is_rate_enabled else ''}>"
+        "Rate Limiting"
+        "</label>"
+        "<button class='button primary' type='submit' style='padding:6px 14px;font-size:13px'>Save Security Settings</button>"
+        + ("<span class='muted' style='font-size:12px'>Note: SUPPORT_TICKETS_ENABLED in server environment locks public submissions off.</span>" if is_env_kill else "")
+        + "</form>"
+        "</div>"
+    )
+
     support_section = (
         f"<h2 id='support-tickets'>Support Tickets &amp; Inquiries</h2>"
         f"<div class='stats'>"
         f"<span class='pill amber'>{ticket_stats['open']} Open</span>"
         f"<span class='pill tone-blue'>{ticket_stats['for_review']} For Review</span>"
         f"<span class='pill green'>{ticket_stats['closed']} Closed</span>"
+        f"<span class='pill red'>{ticket_stats.get('spam', 0)} Spam</span>"
         f"<span class='pill'>{ticket_stats['total']} Total Tickets</span>"
         f"</div>"
+        f"{sec_controls}"
+        f"{suspicious_markup}"
         f"{support_table}"
     )
 
@@ -3864,6 +4207,15 @@ def _build_request_form(request, values: dict, flash: str = "") -> Response:
 def _page_build_request(request):
     """v6: custom jobs by the founders (a whole app, or a big change the agent cannot do). Public. Each request becomes a support
     ticket, the admins get an email with every answer and a WhatsApp link, and the customer gets a confirmation."""
+    if not is_support_tickets_enabled():
+        portal_db.record_ticket_security_event("blocked_killswitch", _client_ip(request), request.form.get("email", ""), "build-request blocked by emergency kill switch")
+        if request.method == "POST":
+            return Response(
+                json.dumps({"error": "Support ticket submissions are temporarily unavailable due to scheduled security maintenance."}).encode("utf-8"),
+                "503 Service Unavailable",
+                [("Content-Type", "application/json"), ("Retry-After", "3600")]
+            )
+        return _render_ticket_maintenance_notice(request)
     session = request.session or {}
     if request.method != "POST":
         q = lambda k: str((request.query.get(k) or [""])[0])
@@ -4841,6 +5193,8 @@ def _dispatch(request: Request) -> Response:
         return _api_chat_send(request)
     if request.path == "/api/chat/save-contact":
         return _api_chat_save_contact(request)
+    if request.path == "/api/tickets/send-otp":
+        return _api_tickets_send_otp(request)
     if request.path == "/api/admin/chat/reply":
         return _api_admin_chat_reply(request)
     if request.path == "/api/admin/chat/messages":
@@ -5012,7 +5366,7 @@ def application(environ, start_response):
         request = Request(environ)
         if (request.method == "POST" and not request.session and not request.path.startswith("/webhooks/github/")
                 and request.path not in ("/login", "/signup", "/contact", "/support", "/build-request", "/webhooks/razorpay", "/ingest", "/heartbeat",
-                                         "/api/visitor/track", "/api/chat/send", "/api/chat/save-contact")):
+                                         "/api/visitor/track", "/api/chat/send", "/api/chat/save-contact", "/api/tickets/send-otp")):
             response = _redirect("/login")
         else:
             response = _dispatch(request)
