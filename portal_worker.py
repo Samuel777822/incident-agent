@@ -252,6 +252,19 @@ def monitor_sweep() -> int:
     return sent
 
 
+def auto_merge_enabled() -> bool:
+    """Merging into a customer's branch without a person is opt-in on this deployment branch."""
+    return os.getenv("AUTO_MERGE_ENABLED", "0").strip().lower() in ("1", "true", "yes", "on")
+
+
+def maybe_auto_merge() -> bool:
+    """Run the auto-merge pass only when it was switched on. True when the pass ran."""
+    if not auto_merge_enabled():
+        return False
+    process_auto_merges()
+    return True
+
+
 def _lease_seconds() -> int:
     """How long a claimed case belongs to this worker before another thread may take it over. Short (20 minutes), so a case
     whose worker died (a deploy, a crash) comes back quickly; while a case is really being worked on the lease is renewed
@@ -410,6 +423,7 @@ def main() -> None:
     next_monitor_sweep = 0.0
     next_visibility_sweep = 0.0
     next_site_audit = 0.0
+    next_temp_cleanup = 0.0
     while not _STOP:
         try:
             portal_db.touch_worker()
@@ -421,7 +435,7 @@ def main() -> None:
         except Exception:
             LOG.exception("Push check failed")
         try:
-            worked = (dispatch_cases() if case_threads() > 1 else process_one()) or worked
+            worked = dispatch_cases() or worked      # also with one thread: the heartbeat and the lease keep running during a long case
         except Exception:
             LOG.exception("Worker loop failed")
         try:
@@ -432,7 +446,7 @@ def main() -> None:
         now = time.monotonic()
         if now >= next_merge_poll and not _STOP:
             try:
-                process_auto_merges()
+                maybe_auto_merge()
             except Exception:
                 LOG.exception("Auto-merge check failed")
             next_merge_poll = now + max(15, int(os.getenv("AUTO_MERGE_POLL_SECONDS", "30")))
@@ -480,6 +494,10 @@ def main() -> None:
             except Exception:
                 LOG.exception("Repository visibility sweep failed")
             next_visibility_sweep = now + max(300, int(os.getenv("VISIBILITY_CHECK_SECONDS", "600")))
+        if now >= next_temp_cleanup and not _STOP:
+            import temp_cleanup
+            temp_cleanup.sweep()                     # off unless TEMP_CLEANUP_ENABLED=1; never raises
+            next_temp_cleanup = now + temp_cleanup.interval_seconds()
         if not worked and not _STOP:
             time.sleep(min(poll_seconds, 5))
     LOG.info("Portal diagnosis worker stopped")
