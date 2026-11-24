@@ -18,7 +18,11 @@ def web_env(tmp_path, monkeypatch):
     monkeypatch.delenv("DATABASE_URL", raising=False)
     monkeypatch.setenv("APP_ENV", "test")
     monkeypatch.setenv("SESSION_SECRET", "test-only-session-secret-at-least-32-chars")
+    monkeypatch.setenv("SUPPORT_TICKETS_ENABLED", "true")
     web_app.portal_db.init_db()
+    web_app.portal_db.set_ticket_security_setting("public_tickets_enabled", "true")
+    web_app.portal_db.set_ticket_security_setting("email_otp_enabled", "false")
+    web_app.portal_db.set_ticket_security_setting("captcha_enabled", "false")
 
 
 def _request(path, *, method="GET", form=None, cookie="", json_body=None, ingest_key="", headers=None, raw_body=None):
@@ -528,6 +532,11 @@ def test_indian_standard_time_formatting(web_env):
 def test_support_ticketing_lifecycle(web_env, monkeypatch):
     import notifications
     from datetime import timedelta
+
+    monkeypatch.setenv("SUPPORT_TICKETS_ENABLED", "true")
+    web_app.portal_db.set_ticket_security_setting("public_tickets_enabled", "true")
+    web_app.portal_db.set_ticket_security_setting("email_otp_enabled", "false")
+    web_app.portal_db.set_ticket_security_setting("captcha_enabled", "false")
 
     customer_emails_sent = []
     admin_emails_sent = []

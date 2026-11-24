@@ -106,6 +106,9 @@ services:
       - fromGroup: incident-agent-web-secrets
       - key: PORTAL_RUN_WORKER
         value: "0"
+      # Emergency Security Lockdown: Stop public ticket spam
+      - key: SUPPORT_TICKETS_ENABLED
+        value: "false"
 
   - type: worker
     name: incident-agent-worker
